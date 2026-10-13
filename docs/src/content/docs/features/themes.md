@@ -23,10 +23,27 @@ are in `examples/themes/pixel-room/`. `examples/themes/live-status.stheme`
 demonstrates scrolling text and fetched-data bindings; see
 [Example: a dynamic dashboard](#example-a-dynamic-dashboard).
 
-Visual authoring is provided by the separate
-[SmallTV Studio](https://github.com/giovi321/smalltv-studio) editor. This
+## Design in SmallTV Studio
+
+[SmallTV Studio](https://giovi321.github.io/smalltv-studio/) is the visual
+editor for theme clocks. It runs in the browser with nothing to install; the
+source is in its own [repository](https://github.com/giovi321/smalltv-studio).
+
+[![SmallTV Studio editing the Pixel Room theme](/smalltv-mod/assets/studio.png)](https://giovi321.github.io/smalltv-studio/)
+
+- Text, image, animation, and shape layers on a live 240×240 canvas
+- A timeline with a simulated date and time, and a preview of the clock before
+  its first NTP sync
+- Data sources and bindings, with preview values for the fields
+- Export as a `.stheme` package or as a source folder that
+  `tools/smalltv_theme.py build` turns into the same package
+- **Send to TV** installs the theme on the device over its API and can activate it
+
+Packages exported by the editor pass the firmware's validator unchanged. This
 firmware repository keeps the format, validator, packer, and offline preview
-tools so themes remain reproducible in CI without the editor application.
+tools so themes remain reproducible in CI without the editor application. The
+rest of this page documents the format for hand-written themes and the
+command-line tools.
 
 Notifications keep their existing behavior and cover the active theme. When the
 notification ends, the theme is restored with the current time and animation

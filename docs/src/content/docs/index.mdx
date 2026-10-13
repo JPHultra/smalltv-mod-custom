@@ -40,9 +40,20 @@ Plus one thing that is not a mode: on every ESP32 board the firmware carries a [
 
 ## More than the three modes
 
-A [Home Assistant screen](/smalltv-mod/features/ha/) arrives over MQTT as a JSON draw list and the device shows it as a full 240×240 screen. A [notification](/smalltv-mod/features/notify/) takes the panel for a few seconds when a script pushes one over HTTP, then puts back whatever was showing. And the [ticker](/smalltv-mod/features/ticker/) adds a portfolio summary page to its rotation once a symbol carries a quantity and a cost basis.
+A [Home Assistant screen](/smalltv-mod/features/ha/) arrives over MQTT as a JSON draw list and the device shows it as a full 240×240 screen. A [notification](/smalltv-mod/features/notify/) takes the panel for a few seconds when a script pushes one over HTTP, then puts back whatever was showing. And a [theme clock](/smalltv-mod/features/themes/) replaces the screen with a clock face of your own: background art, animated sprites, clock and date text, and live values from JSON sources, installed as a `.stheme` package with no firmware rebuild.
 
-![A Home Assistant screen pushed over MQTT, a notification overlay, and the ticker's portfolio summary](/smalltv-mod/assets/screen2.svg)
+![A Home Assistant screen pushed over MQTT, a notification overlay, and the Pixel Room theme clock](/smalltv-mod/assets/screen2.svg)
+
+## Design a clock face in SmallTV Studio
+
+[SmallTV Studio](https://giovi321.github.io/smalltv-studio/) is the visual editor for theme clocks. It runs in the browser with nothing to install. Stack layers on a 240×240 canvas, preview the clock at any simulated time, bind fields to JSON data, then export a `.stheme` package or send it to the device over WiFi.
+
+[![SmallTV Studio editing the Pixel Room theme](/smalltv-mod/assets/studio.png)](https://giovi321.github.io/smalltv-studio/)
+
+<CardGrid>
+  <LinkCard title="Open SmallTV Studio" href="https://giovi321.github.io/smalltv-studio/" description="The editor, hosted on GitHub Pages. Runs entirely in your browser." />
+  <LinkCard title="Theme clocks guide" href="/smalltv-mod/features/themes/" description="The .stheme format, installing packages, and the command-line tools." />
+</CardGrid>
 
 ## Four hardware variants
 
