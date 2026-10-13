@@ -26,7 +26,7 @@ This firmware builds four images from one codebase, covering five devices. The o
 </p>
 
 <p align="center">
-  <img src="docs/public/assets/screen2.svg" alt="Three more SmallTV screens: a Home Assistant screen pushed over MQTT, a notification overlay, and the ticker's portfolio summary" width="900" />
+  <img src="docs/public/assets/screen2.svg" alt="Three more SmallTV screens: a Home Assistant screen pushed over MQTT, a notification overlay, and the Pixel Room theme clock" width="900" />
 </p>
 
 ## Which one do I have
@@ -51,11 +51,23 @@ The screens in the photos above are each unit's **stock firmware**, not this one
 - **Claude usage meter.** An animated pixel mascot plus your 5-hour and 7-day usage as big percentages with fill bars and reset countdowns. It needs the [clawdmeter-daemon](https://github.com/giovi321/clawdmeter-daemon) running on your PC, which reads the usage and sends it over WiFi; the screen shows only an idle animation without it. When the data stops, the mascot plays an idle animation until it comes back. Running several devices, the daemon discovers them over mDNS and pushes to all of them.
 - **Plane radar.** A scope centred on your location with nearby aircraft as heading triangles, speed vectors, and callsign or altitude labels, from the free [adsb.lol](https://adsb.lol) or [adsb.fi](https://adsb.fi) APIs or a LAN webhook. Marker size, an altitude filter, and label decluttering are configurable.
 - **Home Assistant screens over MQTT.** Publish a small JSON draw list to a LAN broker and the device shows it as a full 240×240 screen. Each carousel slot gets one retained message, and the device rotates through them. Not included in the lean ESP8266 image. See [Home Assistant screens](https://giovi321.github.io/smalltv-mod/features/ha/).
-- **Custom theme clocks.** Install declarative `.stheme` packages from the Display tab: background images, animated sprites, clock/date text, scrolling text, simple and rounded shapes, and bounded JSON data fields such as `{weather.temp}`. Themes live in storage and need no firmware recompilation. Notifications remain above them. Start with [Pixel Room](examples/themes/pixel-room.stheme) or the included offline previews. Follow the [theme authoring guide](https://giovi321.github.io/smalltv-mod/features/themes/).
+- **Custom theme clocks.** Install declarative `.stheme` packages from the Display tab: background images, animated sprites, clock/date text, scrolling text, simple and rounded shapes, and bounded JSON data fields such as `{weather.temp}`. Themes live in storage and need no firmware recompilation. Notifications remain above them. Design your own in [SmallTV Studio](https://giovi321.github.io/smalltv-studio/), a browser-based editor that runs with nothing to install, or start from [Pixel Room](examples/themes/pixel-room.stheme). Follow the [theme authoring guide](https://giovi321.github.io/smalltv-mod/features/themes/).
 - **Web UI for everything.** Join WiFi (up to 4 saved networks), pick the mode or a carousel that rotates through them, manage the symbol list, set brightness, orientation, and the panel's colour balance, set an NTP timezone and a nightly dimming schedule (night brightness, 0 = screen off), and back up or restore the whole configuration as a file. First boot creates a `SmallTV-Setup` hotspot with a captive portal.
 - **WireGuard VPN, on the ESP32-C2, the SmallTV Pro and the NM-TV-154.** A built-in tunnel, so you can reach the device from outside your LAN without forwarding its plain-HTTP port to the internet. Configured in the WiFi tab: private key, peer public key, endpoint, tunnel address, allowed IPs. Three crash reboots in a row hold the tunnel down at the next boot, so a bad tunnel config cannot lock you out of the settings page. The ESP8266 boards cannot have it at all, and on the NM-TV-154, whose image is the tightest fit of the three ESP32 boards, it ships as a second image rather than in the default one. See [WireGuard VPN](https://giovi321.github.io/smalltv-mod/features/wireguard/) for the numbers.
 - **Optional password on the web UI.** Off by default, so nothing changes unless you want it to. Turn it on in the System tab and the settings page, the API, and the firmware upload all sit behind HTTP digest auth, which keeps the password off the wire on a plain-HTTP LAN. The clawdmeter push endpoint stays open, since the daemon cannot send credentials and can only change what the screen shows. There is no recovery for a forgotten password other than reflashing over a cable.
 - **Updates over WiFi.** Every board pulls the newest release from GitHub itself from the web UI's System tab, or takes a manual firmware upload from the browser. On the ESP8266 the download runs at boot (the device reboots twice). **Warning: ESP8266 devices on firmware 2.6.1 or older cannot self-update** (the updater itself was broken; it fails with "connection failed"). Update those once manually: upload `smalltv-mod-firmware.bin` from the [Releases page](https://github.com/giovi321/smalltv-mod/releases) in the System tab. From 2.7.0 on, self-update works everywhere.
+
+## Design your own clock face
+
+[SmallTV Studio](https://github.com/giovi321/smalltv-studio) is a visual editor for theme clocks. [Open it in your browser](https://giovi321.github.io/smalltv-studio/): nothing to install, and nothing leaves your machine except what you send to your own SmallTV. Stack text, image, animation, and shape layers on a 240×240 canvas, preview the clock at any simulated time, bind fields to JSON data sources, then export a `.stheme` package or send it straight to the device over WiFi. Pixel Room, Terminal Ops, and Live Status load as examples to start from.
+
+<p align="center">
+  <a href="https://giovi321.github.io/smalltv-studio/"><img src="docs/public/assets/studio.png" alt="SmallTV Studio editing the Pixel Room theme: layer list, live 240×240 canvas, and the clock layer's inspector" width="900" /></a>
+</p>
+
+<p align="center">
+  <a href="https://giovi321.github.io/smalltv-studio/"><img src="https://img.shields.io/badge/Open_SmallTV_Studio-22c55e?style=for-the-badge&logoColor=white" alt="Open SmallTV Studio"></a>
+</p>
 
 ## Get the firmware
 
@@ -127,6 +139,7 @@ Full docs live at **[giovi321.github.io/smalltv-mod](https://giovi321.github.io/
 - [Flashing](https://giovi321.github.io/smalltv-mod/getting-started/flashing/) and [first-time setup](https://giovi321.github.io/smalltv-mod/getting-started/setup/)
 - The three modes: [ticker](https://giovi321.github.io/smalltv-mod/features/ticker/), [Claude usage](https://giovi321.github.io/smalltv-mod/features/usage/), [plane radar](https://giovi321.github.io/smalltv-mod/features/radar/)
 - [WireGuard VPN](https://giovi321.github.io/smalltv-mod/features/wireguard/) for reaching the device from outside your network, and [Notifications](https://giovi321.github.io/smalltv-mod/features/notify/) for pushing an alert to the screen
+- [Theme clocks](https://giovi321.github.io/smalltv-mod/features/themes/), designed in [SmallTV Studio](https://giovi321.github.io/smalltv-studio/)
 - [Data sources](https://giovi321.github.io/smalltv-mod/reference/data-sources/), [building from source](https://giovi321.github.io/smalltv-mod/reference/building/), and [recovery](https://giovi321.github.io/smalltv-mod/reference/recovery/)
 
 ## 3D-printed case
