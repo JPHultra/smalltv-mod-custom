@@ -177,6 +177,10 @@ The PC-side usage daemon lives in its own repo: [clawdmeter-daemon](https://gith
 - Claude usage mode reimplements [clawdmeter](https://github.com/HermannBjorgvin/Clawdmeter) for this hardware; the mascot frames come from [claudepix](https://claudepix.vercel.app).
 - Libraries: [Arduino_GFX](https://github.com/moononournation/Arduino_GFX), [ArduinoJson](https://arduinojson.org/).
 
+## Disclaimer
+
+This firmware and the companion daemon are provided as-is, with no warranty of any kind. You flash and use them at your own risk, including the risk of bricking the device. You are responsible for checking that your use complies with the terms of any service it connects to, including Anthropic's terms for the Claude usage meter and the terms of the market and flight data feeds. Nothing in this repo is legal advice. This project is not affiliated with or endorsed by GeekMagic, Anthropic, or any data provider.
+
 ## License
 
 [WTFPL](LICENSE). Do What The F*ck You Want To Public License.
