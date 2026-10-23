@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <utility>
 
 namespace smalltv {
@@ -372,21 +373,30 @@ class Fields {
   std::string path_;
   std::string& error_;
 };
-// ArduinoJson retains only the last duplicate object member. Scan binding keys
-// in the raw manifest so that a manifest cannot silently replace a target.
-// The same walk records what parseTheme() needs to read the layers one at a
+// What ManifestScanner records for parseTheme() to read the layers one at a
 // time instead of as one large document: the byte range of every element of
 // the root `layers` array (of its last occurrence, matching ArduinoJson) and
 // the root keys, whose check the filtered first pass cannot do itself.
+struct ManifestLayout {
+  struct Range {
+    size_t begin, end;
+  };
+  // Root `layers` elements, or none when the root has no `layers` array.
+  bool layersFound = false;
+  std::vector<Range> layerRanges;
+  size_t layerCount = 0;
+  std::vector<std::string> rootKeys;
+};
+// ArduinoJson retains only the last duplicate object member. Scan binding keys
+// in the raw manifest so that a manifest cannot silently replace a target.
+// The same walk fills in the ManifestLayout.
 // Run only after the first JSON pass (including its eight-level nesting
 // limit). The manifest byte limit bounds string storage; at most eight
 // binding keys, 33 layer ranges and the root keys are kept.
 class ManifestScanner {
  public:
-  struct Range {
-    size_t begin, end;
-  };
-  ManifestScanner(ManifestSource& input, std::string& error) : input_(input, 0, input.size()), error_(error) {}
+  ManifestScanner(ManifestSource& input, ManifestLayout& layout, std::string& error)
+    : input_(input, 0, input.size()), layout_(layout), error_(error) {}
   bool valid() {
     const bool scanned = scanRoot();
     space();
@@ -394,11 +404,6 @@ class ManifestScanner {
     if (error_.empty()) error_ = input_.failed() ? "theme.json: could not be read" : "theme.json: expected standard JSON object syntax";
     return false;
   }
-  // Root `layers` elements, or none when the root has no `layers` array.
-  bool layersFound = false;
-  std::vector<Range> layerRanges;
-  size_t layerCount = 0;
-  std::vector<std::string> rootKeys;
  private:
   // This is a minimal, purpose-built JSON walker: it only needs to reach
   // every `bind` object's keys in source order, so it does not build any
@@ -565,9 +570,9 @@ class ManifestScanner {
   // more than allowed is enough to report "too many layers".
   bool layers() {
     if (!take('[')) return false;
-    layersFound = true;
-    layerRanges.clear();
-    layerCount = 0;
+    layout_.layersFound = true;
+    layout_.layerRanges.clear();
+    layout_.layerCount = 0;
     size_t index = 0;
     space();
     if (at(']')) {
@@ -580,8 +585,8 @@ class ManifestScanner {
       if (at('{')) {
         if (!layer(index)) return false;
       } else if (!value()) return false;
-      if (layerRanges.size() <= MaxLayers) layerRanges.push_back({begin, input_.position()});
-      ++layerCount;
+      if (layout_.layerRanges.size() <= MaxLayers) layout_.layerRanges.push_back({begin, input_.position()});
+      ++layout_.layerCount;
       ++index;
       space();
       if (!more()) return false;
@@ -605,14 +610,14 @@ class ManifestScanner {
       std::string key;
       if (!string(key) || !take(':')) return false;
       bool known = false;
-      for (const auto& old : rootKeys) if (old == key) known = true;
-      if (!known) rootKeys.push_back(key);
+      for (const auto& old : layout_.rootKeys) if (old == key) known = true;
+      if (!known) layout_.rootKeys.push_back(key);
       if (key == "layers") {
         space();
         if (at('[')) {
           if (!layers()) return false;
         } else {
-          layersFound = false;
+          layout_.layersFound = false;
           if (!value()) return false;
         }
       } else if (!value()) return false;
@@ -626,9 +631,16 @@ class ManifestScanner {
     }
   }
   ManifestReader input_;
+  ManifestLayout& layout_;
   std::string& error_;
   unsigned depth_ = 0;
 };
+// Out of line, so the scanner and its reader are on the stack only while it
+// walks; parseTheme() keeps just the layout.
+__attribute__((noinline)) static bool scanManifest(ManifestSource& json, ManifestLayout& layout, std::string& error) {
+  ManifestScanner scanner(json, layout, error);
+  return scanner.valid();
+}
 // Maps a `bind` object's key to the numeric BoundProperty it names, or false
 // if the name is not a numeric property at all (it might still be a color
 // one -- see colorProperty below).
@@ -770,7 +782,7 @@ static bool parseScroll(JsonObjectConst object, const std::string& path, std::st
   return true;
 }
 // Parses a layer's `bind` object: at most 8 entries (already enforced key-by-
-// key by DuplicateBindingScanner, but re-checked here on the parsed count),
+// key by ManifestScanner, but re-checked here on the parsed count),
 // each either a numeric mapping or a color-stop table depending on which
 // property it names.
 static bool parseBindings(JsonObjectConst object, const Theme& theme, const std::string& path, std::string& error, Layer& layer) {
@@ -829,7 +841,7 @@ bool parseTheme(const std::string& json, Theme& out, std::string& error) {
   StringManifest source(json);
   return parseTheme(source, out, error);
 }
-static bool parseLayer(JsonObjectConst o, Theme& t, std::string& error);
+__attribute__((noinline)) static bool parseLayer(JsonObjectConst o, Theme& t, std::string& error);
 // A JSON pass's failure as a diagnostic: an unreadable source, or the
 // ArduinoJson error with the absolute byte it stopped at.
 static bool jsonFailed(DeserializationError err, const ManifestReader& reader, std::string& error) {
@@ -838,16 +850,18 @@ static bool jsonFailed(DeserializationError err, const ManifestReader& reader, s
   else return false;
   return true;
 }
-// The first pass: everything except the layers, which `scan` locates for
-// parseTheme() to read one at a time. Kept out of line on purpose: its
-// documents and field checkers then leave the stack before the layers are
-// parsed, and on the ESP8266 the 4 KiB loop stack cannot hold both.
-__attribute__((noinline)) static bool parseHeader(ManifestSource& json, ManifestScanner& scan, Theme& t, std::string& error) {
-  const size_t size = json.size();
+// On the ESP8266 the loop stack is 4 KiB, and parsing JSON recurses: one
+// frame per nesting level, in ArduinoJson and in ManifestScanner alike. So
+// every recursive step runs from a small frame, and the validation, whose
+// field checkers need large frames, runs only after it has returned. Each
+// is a separate out-of-line function that parseTheme() calls in turn.
+
+// The first pass's JSON: everything except the layers, which the scanner
+// locates for parseLayers() to read one at a time.
+__attribute__((noinline)) static bool readHeader(ManifestSource& json, JsonDocument& doc, std::string& error) {
   JsonDocument filter;
   for (const char* key : {"spec", "theme", "display", "data"}) filter[key] = true;
-  JsonDocument doc;
-  ManifestReader reader(json, 0, size);
+  ManifestReader reader(json, 0, json.size());
   auto err = deserializeJson(doc, reader, DeserializationOption::Filter(filter), DeserializationOption::NestingLimit(8));
   if (jsonFailed(err, reader, error)) return false;
   for (int c; (c = reader.read()) >= 0;) {
@@ -856,18 +870,16 @@ __attribute__((noinline)) static bool parseHeader(ManifestSource& json, Manifest
       return false;
     }
   }
-  if (jsonFailed(err, reader, error)) return false;
-  // ArduinoJson has already validated syntax and nesting depth at this point;
-  // only now is it safe to re-walk the raw text for what the filtered pass
-  // cannot see (see ManifestScanner's own comment).
-  if (!scan.valid()) return false;
+  return !jsonFailed(err, reader, error);
+}
+// Validates the first pass's document and the root keys `scan` found.
+__attribute__((noinline)) static bool parseHeader(JsonObjectConst root, const ManifestLayout& scan, Theme& t, std::string& error) {
   for (const auto& key : scan.rootKeys) {
     if (key != "spec" && key != "theme" && key != "display" && key != "layers" && key != "data") {
       error = printableKey(key.data(), key.size()) + ": unknown field";
       return false;
     }
   }
-  auto root = doc.as<JsonObjectConst>();
   Fields r(root, "", error);
   int spec = 0;
   if (!r.number("spec", 1, 1, spec)) return false;
@@ -935,28 +947,30 @@ __attribute__((noinline)) static bool parseHeader(ManifestSource& json, Manifest
   if (!scan.layersFound || scan.layerCount > MaxLayers) return r.fail("layers", "expected an array of at most 32 layers");
   return true;
 }
+// One element of the root `layers` array, as its own document.
+__attribute__((noinline)) static bool readLayer(ManifestSource& json, const ManifestLayout::Range& range, JsonDocument& doc, std::string& error) {
+  ManifestReader reader(json, range.begin, range.end);
+  // The root object and the layers array are two of the eight levels. The
+  // first pass already enforces the limit on the whole document (a looser
+  // value here changes no test result); this keeps a layer's parse from
+  // depending on that.
+  auto err = deserializeJson(doc, reader, DeserializationOption::NestingLimit(6));
+  return !jsonFailed(err, reader, error);
+}
 // The second pass: each layer `scan` found, parsed on its own and its JSON
-// freed before the next. Out of line for the same reason as parseHeader():
-// the two passes then take turns on the stack instead of adding up.
-__attribute__((noinline)) static bool parseLayers(ManifestSource& json, const ManifestScanner& scan, Theme& t, std::string& error) {
+// freed before the next.
+__attribute__((noinline)) static bool parseLayers(ManifestSource& json, const ManifestLayout& scan, Theme& t, std::string& error) {
   t.layers.reserve(scan.layerRanges.size());
   for (const auto& range : scan.layerRanges) {
     JsonDocument doc;
-    ManifestReader reader(json, range.begin, range.end);
-    // The root object and the layers array are two of the eight levels. The
-    // first pass already enforces the limit on the whole document (a looser
-    // value here changes no test result); this keeps a layer's parse from
-    // depending on that.
-    auto err = deserializeJson(doc, reader, DeserializationOption::NestingLimit(6));
-    if (jsonFailed(err, reader, error)) return false;
-    if (!parseLayer(doc.as<JsonObjectConst>(), t, error)) return false;
+    if (!readLayer(json, range, doc, error) || !parseLayer(doc.as<JsonObjectConst>(), t, error)) return false;
   }
   return true;
 }
 // The manifest is never held as one document, which on the ESP8266 would
 // not fit next to a running theme (issue #30). A first pass parses
 // everything except the layers; the scanner then finds each layer's bytes,
-// and every layer is parsed on its own. This function holds only what both
+// and every layer is parsed on its own. This function holds only what the
 // passes share, so its own stack frame stays small.
 bool parseTheme(ManifestSource& json, Theme& out, std::string& error) {
   error.clear();
@@ -964,10 +978,21 @@ bool parseTheme(ManifestSource& json, Theme& out, std::string& error) {
     error = "theme.json: expected 1 to 16384 bytes";
     return false;
   }
-  ManifestScanner scan(json, error);
-  Theme t;
-  if (!parseHeader(json, scan, t, error) || !parseLayers(json, scan, t, error)) return false;
-  out = std::move(t);
+  ManifestLayout scan;
+  // On the heap: 132 bytes that every pass would otherwise carry on the
+  // stack, and the stack is the tighter limit here.
+  std::unique_ptr<Theme> t(new Theme());
+  {
+    // Freed at the end of this block, before the layers are read.
+    JsonDocument doc;
+    if (!readHeader(json, doc, error)) return false;
+    // ArduinoJson has already validated syntax and nesting depth at this
+    // point; only now is it safe to re-walk the raw text for what the
+    // filtered pass cannot see (see ManifestScanner's own comment).
+    if (!scanManifest(json, scan, error) || !parseHeader(doc.as<JsonObjectConst>(), scan, *t, error)) return false;
+  }
+  if (!parseLayers(json, scan, *t, error)) return false;
+  out = std::move(*t);
   error.clear();
   return true;
 }
@@ -976,7 +1001,7 @@ bool parseTheme(ManifestSource& json, Theme& out, std::string& error) {
 // in place in the list rather than in a local copy: a Layer is 180 bytes, too
 // many for the ESP8266's loop stack this deep in a parse. A failure leaves it
 // half-filled, which is harmless because parseTheme() then discards `t`.
-static bool parseLayer(JsonObjectConst o, Theme& t, std::string& error) {
+__attribute__((noinline)) static bool parseLayer(JsonObjectConst o, Theme& t, std::string& error) {
   std::string type;
   std::string layerPath = "layers[" + std::to_string(t.layers.size()) + "]";
   Layer& l = t.layers.emplace_back();

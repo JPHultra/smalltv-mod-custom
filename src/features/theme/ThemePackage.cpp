@@ -32,7 +32,27 @@ const Package::Entry* Package::find(const std::string& path) const {
 // animation whose frames disagree with its declared width/height. Nothing is
 // decoded beyond the index: pixel data is read later, by row(), only for the
 // rows a dirty rectangle actually needs.
+//
+// Each phase is its own out-of-line function, so only `candidate` sits under
+// the manifest parse: on the ESP8266 that parse needs most of the 4 KiB loop
+// stack, and the other phases' locals are dead by then.
 bool Package::load(Theme& theme, std::string& error) {
+  if (!readIndex(error)) return false;
+  const Entry* manifest = find("theme.json");
+  if (!manifest) {
+    error = "Missing theme.json";
+    return false;
+  }
+  // Parsed straight from the package: a copy of the manifest in RAM could
+  // by itself exceed what the ESP8266 has free next to a running theme.
+  EntryManifest json(source_, manifest->offset, manifest->length);
+  Theme candidate;
+  if (!parseTheme(json, candidate, error) || !checkAssets(candidate, error)) return false;
+  theme = std::move(candidate);
+  error.clear();
+  return true;
+}
+__attribute__((noinline)) bool Package::readIndex(std::string& error) {
   entries_.clear();
   error = "Invalid or truncated .stheme package";
   uint8_t b[12];
@@ -75,21 +95,13 @@ bool Package::load(Theme& theme, std::string& error) {
     entries_.push_back(std::move(e));
     pos += entries_.back().length;
   }
-  if (pos != size) return false;
-  const Entry* manifest = find("theme.json");
-  if (!manifest) {
-    error = "Missing theme.json";
-    return false;
-  }
-  // Parsed straight from the package: a copy of the manifest in RAM could
-  // by itself exceed what the ESP8266 has free next to a running theme.
-  EntryManifest json(source_, manifest->offset, manifest->length);
-  Theme candidate;
-  if (!parseTheme(json, candidate, error)) return false;
-  // Assets are validated against the parsed manifest only after parseTheme()
-  // succeeds, into a `candidate` that only replaces `theme` on full success --
-  // a package that fails asset validation leaves any previously loaded theme
-  // untouched.
+  return pos == size;
+}
+// Assets are validated against the parsed manifest only after parseTheme()
+// succeeds, into a `candidate` that only replaces `theme` on full success --
+// a package that fails asset validation leaves any previously loaded theme
+// untouched.
+__attribute__((noinline)) bool Package::checkAssets(Theme& candidate, std::string& error) const {
   for (size_t i = 0; i < candidate.layers.size(); ++i) {
     auto& l = candidate.layers[i];
     const std::string field = "layers[" + std::to_string(i) + "].source: ";
@@ -109,8 +121,6 @@ bool Package::load(Theme& theme, std::string& error) {
       }
     }
   }
-  theme = std::move(candidate);
-  error.clear();
   return true;
 }
 // An asset handle is simply an entry's index into `entries_`; `stride` doubles
