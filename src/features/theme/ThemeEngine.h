@@ -125,7 +125,17 @@ struct Theme {
   BlockList<Layer> layers;
   std::vector<ThemeDataSource> data;
 };
+// Random-access bytes of a manifest. parseTheme() reads it forward in small
+// pieces, several times, so a package's manifest never has to be copied into
+// RAM as a whole; on the ESP8266 that copy alone could exceed free heap.
+class ManifestSource {
+ public:
+  virtual ~ManifestSource() = default;
+  virtual size_t size() const = 0;
+  virtual bool read(size_t offset, char* out, size_t count) = 0;
+};
 bool parseTheme(const std::string& json, Theme& out, std::string& error);
+bool parseTheme(ManifestSource& json, Theme& out, std::string& error);
 std::string expandText(const std::string& value, const tm* time);
 std::string expandText(const std::string& value, const tm* time, const std::vector<ThemeValue>& values);
 std::string assetPath(const Layer& layer, uint16_t frame);

@@ -9,6 +9,18 @@ namespace smalltv {
 // Both container formats (STH1 packages, STI1 images) are little-endian.
 static uint16_t u16(const uint8_t* b) { return b[0] | (uint16_t(b[1]) << 8); }
 static uint32_t u32(const uint8_t* b) { return u16(b) | (uint32_t(u16(b + 2)) << 16); }
+// The package's theme.json entry, read in place for parseTheme().
+class EntryManifest : public ManifestSource {
+ public:
+  EntryManifest(Source& source, uint32_t offset, uint32_t length) : source_(source), offset_(offset), length_(length) {}
+  size_t size() const override { return length_; }
+  bool read(size_t offset, char* out, size_t count) override {
+    return offset <= length_ && count <= length_ - offset && source_.read(offset_ + offset, out, count);
+  }
+ private:
+  Source& source_;
+  uint32_t offset_, length_;
+};
 const Package::Entry* Package::find(const std::string& path) const {
   for (const auto& entry : entries_) if (entry.path == path) return &entry;
   return nullptr;
@@ -29,6 +41,7 @@ bool Package::load(Theme& theme, std::string& error) {
   if (size < 8 || size > MaxPackage || !source_.read(0, b, 8) || memcmp(b, "STH1", 4) || u16(b + 6)) return false;
   unsigned count = u16(b + 4);
   if (!count || count > MaxEntries) return false;
+  entries_.reserve(count);
   uint32_t pos = 8;
   for (unsigned i = 0; i < count; ++i) {
     // Each entry: uint16 path length, uint32 payload length, path bytes,
@@ -68,8 +81,9 @@ bool Package::load(Theme& theme, std::string& error) {
     error = "Missing theme.json";
     return false;
   }
-  std::string json(manifest->length, '\0');
-  if (!source_.read(manifest->offset, &json[0], json.size())) return false;
+  // Parsed straight from the package: a copy of the manifest in RAM could
+  // by itself exceed what the ESP8266 has free next to a running theme.
+  EntryManifest json(source_, manifest->offset, manifest->length);
   Theme candidate;
   if (!parseTheme(json, candidate, error)) return false;
   // Assets are validated against the parsed manifest only after parseTheme()
