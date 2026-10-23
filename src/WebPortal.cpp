@@ -123,6 +123,7 @@ static void handleStatus() {
   o["ssid"] = netSSID();
   o["ip"] = netIP();
   o["rssi"] = netRSSI();
+  if (netFailReason()[0]) o["wifiFail"] = netFailReason();
   o["heap"] = ESP.getFreeHeap();
   o["maxblk"] = platformMaxFreeBlock();     // largest contiguous block (TLS handshake needs one)
   o["contstk"] = platformFreeContStack();   // primary stack headroom (ESP8266)

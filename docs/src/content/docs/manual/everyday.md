@@ -80,7 +80,7 @@ Two things behave the way they do on purpose:
 
 Settings live in the device's own memory, so nothing is lost when it loses power. It reconnects and picks up where it was.
 
-You can save up to four WiFi networks in the WiFi tab, and at each start the device joins the strongest one it can see. Save the new network before you move and it comes up on its own at the other end. If none of the saved networks is reachable, the device falls back to the yellow SETUP MODE screen and its own hotspot, so you can always point it at a new network as in [Quick start](/smalltv-mod/manual/quick-start/).
+You can save up to four WiFi networks in the WiFi tab, and at each start the device joins the strongest one it can see. Save the new network before you move and it comes up on its own at the other end. If none of the saved networks is reachable, the device falls back to the yellow SETUP MODE screen and its own hotspot, so you can always point it at a new network as in [Quick start](/smalltv-mod/manual/quick-start/). While the hotspot is up and nobody is connected to it, it keeps retrying the saved networks every 90 seconds and restarts once one of them answers.
 
 ## Keeping it up to date
 

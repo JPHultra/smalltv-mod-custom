@@ -312,6 +312,7 @@ void setup() {
   gfxBoot(g_safeMode ? "Crashed" : "SmallTV", FW_VERSION);
 
   Serial.println("[boot] net");
+  netAllowRetry(!g_safeMode);   // a retry's reboot would clear the crash flag
   netBegin(g_settings, bootProgress);
   // Arm SNTP now that WiFi (STA) is up — but only if night mode is enabled, so a
   // ticker-only device doesn't pay the SNTP heap cost (which can starve the cash.ch
@@ -351,7 +352,7 @@ void setup() {
   Serial.println("[boot] done");
 
   if (netMode() == NET_AP) {
-    gfxApInfo(g_settings.apSsid.c_str(), g_settings.apPass.c_str(), netIP().c_str());
+    gfxApInfo(g_settings.apSsid.c_str(), g_settings.apPass.c_str(), netIP().c_str(), netFailReason());
   } else if (g_safeMode) {
     // Last boot crashed: show the crash address (persistent) and keep the web
     // server up for OTA recovery — don't enter the render path that crashed.
@@ -374,7 +375,7 @@ void loop() {
   if (g_btnInfoUntil && millis() >= g_btnInfoUntil) {
     g_btnInfoUntil = 0;
     if (netMode() == NET_AP) {
-      gfxApInfo(g_settings.apSsid.c_str(), g_settings.apPass.c_str(), netIP().c_str());
+      gfxApInfo(g_settings.apSsid.c_str(), g_settings.apPass.c_str(), netIP().c_str(), netFailReason());
     } else {
       DisplayMode* m = activeMode(g_settings);
       if (m) m->wake(g_settings);
@@ -405,8 +406,15 @@ void loop() {
 #endif
 
   if (netMode() == NET_AP) {
+    // Setup mode: AP info stays on screen, redrawn when a background retry
+    // of the saved networks fails with a new reason.
+    static uint16_t shownFail = netFailSeq();
+    if (netFailSeq() != shownFail) {
+      shownFail = netFailSeq();
+      gfxApInfo(g_settings.apSsid.c_str(), g_settings.apPass.c_str(), netIP().c_str(), netFailReason());
+    }
     delay(5);
-    return;  // setup mode: AP info stays on screen
+    return;
   }
 
 #ifdef BTN_PIN

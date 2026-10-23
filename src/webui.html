@@ -747,6 +747,7 @@ function loadStatus(){j('/api/status').then(function(s){
   kv('Firmware',s.fw+' '+s.version+(s.variant?' ('+s.variant+')':''))+kv('Mode',s.mode.toUpperCase())+
   kv('Network',s.ssid||'-')+kv('IP',s.ip||'-')+kv('mDNS','http://'+(C.hostname||'smalltv')+'.local')+
   kv('Signal',s.rssi?s.rssi+' dBm':'-')+
+  (s.wifiFail?kv('Last join failure',s.wifiFail):'')+
   kv('Free heap',s.heap+' B'+(s.maxblk?' ('+s.maxblk+' B largest block)':''))+
   kv('Uptime',fmtUp(s.uptime))+kv('Last reset',s.reset||'-')+
   ((s.wg&&s.wg.compiledIn)?kv('VPN',s.wg.held?'held':(s.wg.up?'up':(s.wg.enabled?'connecting':'off'))):'')+
