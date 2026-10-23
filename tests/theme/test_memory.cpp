@@ -70,12 +70,26 @@ struct FileSource : Source {
 // block above 1.8 KiB.
 constexpr size_t LoadPeakBudget = 5120;
 constexpr size_t LargestBlockBudget = 1024;
+// What a running theme may hold. Without a theme the device has about 9.3 KiB
+// free, and on the device a running theme costs about 0.5 KiB more than
+// counted here (its open package file and the data fetcher). This budget
+// leaves at least 5 KiB free while a theme runs, for the web server's
+// requests and for mDNS and WiFi. With 3.8 KiB free, a web request starved
+// both and crashed the device. The 5 KiB is a judgement, not a measured limit.
+constexpr size_t RunningBudget = 3840;
 
-struct Usage { size_t peak, running, theme, largest; };
-// Peak while loading; what a running theme holds (the Theme plus the
+struct NoDisplay : Display {
+  uint8_t glyphColumn(uint8_t, uint8_t) const override { return 0x7f; }
+  void row(int, int, const uint16_t*, int) override {}
+};
+
+struct Usage { size_t peak, loaded, theme, running, largest; };
+// Peak while loading; what a loaded theme holds (the Theme plus the
 // package's entry index, which ThemeMode keeps for reading assets); what the
-// Theme alone holds; and the biggest single request (the device needs that
-// much in one contiguous block).
+// Theme alone holds; what it holds while it runs (the engine's per-layer
+// state and expanded texts too, after a first frame is computed and drawn);
+// and the biggest single request (the device needs that much in one
+// contiguous block).
 static Usage load(const char* path) {
   FileSource source(path);
   assert(!source.bytes.empty());
@@ -89,10 +103,27 @@ static Usage load(const char* path) {
     bool ok = package.load(theme, error);
     if (!ok) std::cerr << path << ": " << error << "\n";
     assert(ok);
-    usage.running = live;
+    usage.loaded = live;
   }
   usage.peak = peak;
   usage.theme = live;
+  // Running, the way ThemeMode holds it: the package index for reading
+  // assets, and the engine with the theme moved into it.
+  live = 0;
+  {
+    Package package(source);
+    Theme loaded;
+    assert(package.load(loaded, error));
+    Engine engine;
+    engine.setTheme(std::move(loaded), 0);
+    tm time{};
+    time.tm_year = 126; time.tm_mon = 9; time.tm_mday = 23; time.tm_wday = 5; time.tm_yday = 295;
+    time.tm_hour = 16; time.tm_min = 15;
+    std::vector<Rect> dirty = engine.update(1000, &time);
+    NoDisplay display;
+    assert(render(engine, dirty, package, display));
+    usage.running = live;
+  }
   usage.largest = largest;
   counting = false;
   return usage;
@@ -138,11 +169,11 @@ static void testBlockList() {
     BlockList<Layer> layers;
     layers.reserve(MaxLayers);
     Layer first;
-    first.id = "first";
+    first.value = "first";
     layers.push_back(first);
     const Layer* address = &layers[0];
     for (size_t i = 1; i < MaxLayers; ++i) layers.push_back(Layer());
-    assert(&layers[0] == address && layers[0].id == "first" && layers.size() == MaxLayers);
+    assert(&layers[0] == address && layers[0].value == "first" && layers.size() == MaxLayers);
   }
   counting = false;
   if (largest > LargestBlockBudget) fprintf(stderr, "BlockList<Layer>: largest block %zu B\n", largest);
@@ -171,17 +202,18 @@ int main(int argc, char** argv) {
   bool report = argc > 1;
   for (int i = 1; i < argc; ++i) {
     Usage u = load(argv[i]);
-    printf("%-36s peak %5zu B  running %5zu B  theme %5zu B  largest block %5zu B\n",
-           argv[i], u.peak, u.running, u.theme, u.largest);
+    printf("%-36s peak %5zu B  loaded %5zu B  theme %5zu B  running %5zu B  largest block %5zu B\n",
+           argv[i], u.peak, u.loaded, u.theme, u.running, u.largest);
   }
   if (report) return 0;
   for (const char* path : examples) {
     Usage u = load(path);
-    if (u.peak > LoadPeakBudget || u.largest > LargestBlockBudget)
-      fprintf(stderr, "%s: peak %zu B (budget %zu), largest block %zu B (budget %zu)\n",
-              path, u.peak, LoadPeakBudget, u.largest, LargestBlockBudget);
+    if (u.peak > LoadPeakBudget || u.largest > LargestBlockBudget || u.running > RunningBudget)
+      fprintf(stderr, "%s: peak %zu B (budget %zu), largest block %zu B (budget %zu), running %zu B (budget %zu)\n",
+              path, u.peak, LoadPeakBudget, u.largest, LargestBlockBudget, u.running, RunningBudget);
     assert(u.peak <= LoadPeakBudget);
     assert(u.largest <= LargestBlockBudget);
+    assert(u.running <= RunningBudget);
   }
   std::cout << "theme memory tests passed\n";
 }

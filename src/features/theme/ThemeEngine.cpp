@@ -326,12 +326,15 @@ class Fields {
     }
     return true;
   }
-  bool number(const char* key, int lo, int hi, int& value, bool required = true) const {
+  // `T` may be narrower than int (Layer stores 16-bit fields); the range
+  // check happens on the int, so `lo`..`hi` must fit in `T`.
+  template <typename T>
+  bool number(const char* key, int lo, int hi, T& value, bool required = true) const {
     auto v = object_[key];
     if (v.isNull() && !required) return true;
     if (!v.is<int>() || v.as<int>() < lo || v.as<int>() > hi)
       return fail(key, "expected an integer from " + std::to_string(lo) + " to " + std::to_string(hi));
-    value = v.as<int>();
+    value = static_cast<T>(v.as<int>());
     return true;
   }
   bool text(const char* key, std::string& value, size_t max, bool required = true) const {
@@ -841,7 +844,7 @@ bool parseTheme(const std::string& json, Theme& out, std::string& error) {
   StringManifest source(json);
   return parseTheme(source, out, error);
 }
-__attribute__((noinline)) static bool parseLayer(JsonObjectConst o, Theme& t, std::string& error);
+__attribute__((noinline)) static bool parseLayer(JsonObjectConst o, Theme& t, BlockList<std::string>& ids, std::string& error);
 // A JSON pass's failure as a diagnostic: an unreadable source, or the
 // ArduinoJson error with the absolute byte it stopped at.
 static bool jsonFailed(DeserializationError err, const ManifestReader& reader, std::string& error) {
@@ -961,9 +964,13 @@ __attribute__((noinline)) static bool readLayer(ManifestSource& json, const Mani
 // freed before the next.
 __attribute__((noinline)) static bool parseLayers(ManifestSource& json, const ManifestLayout& scan, Theme& t, std::string& error) {
   t.layers.reserve(scan.layerRanges.size());
+  // The layer IDs seen so far, for the duplicate check; Layer does not keep
+  // its ID, so they exist only while the layers are parsed.
+  BlockList<std::string> ids;
+  ids.reserve(scan.layerRanges.size());
   for (const auto& range : scan.layerRanges) {
     JsonDocument doc;
-    if (!readLayer(json, range, doc, error) || !parseLayer(doc.as<JsonObjectConst>(), t, error)) return false;
+    if (!readLayer(json, range, doc, error) || !parseLayer(doc.as<JsonObjectConst>(), t, ids, error)) return false;
   }
   return true;
 }
@@ -997,19 +1004,21 @@ bool parseTheme(ManifestSource& json, Theme& out, std::string& error) {
   return true;
 }
 // Parses one element of the root `layers` array and appends it to `t`, whose
-// data sources and earlier layers it is checked against. The layer is built
-// in place in the list rather than in a local copy: a Layer is 180 bytes, too
-// many for the ESP8266's loop stack this deep in a parse. A failure leaves it
-// half-filled, which is harmless because parseTheme() then discards `t`.
-__attribute__((noinline)) static bool parseLayer(JsonObjectConst o, Theme& t, std::string& error) {
-  std::string type;
+// data sources it is checked against; `ids` holds the earlier layers' IDs.
+// The layer is built in place in the list rather than in a local copy: a
+// Layer is over 100 bytes, too many for the ESP8266's loop stack this deep in
+// a parse. A failure leaves it half-filled, which is harmless because
+// parseTheme() then discards `t`.
+__attribute__((noinline)) static bool parseLayer(JsonObjectConst o, Theme& t, BlockList<std::string>& ids, std::string& error) {
+  std::string type, id;
   std::string layerPath = "layers[" + std::to_string(t.layers.size()) + "]";
   Layer& l = t.layers.emplace_back();
   Fields f(o, layerPath, error);
   if (o.isNull()) return f.fail("", "expected an object");
-  if (!f.text("id", l.id, 48)) return false;
-  if (!validId(l.id)) return f.fail("id", "use ASCII letters, digits, '-' or '_'");
-  for (size_t i = 0; i + 1 < t.layers.size(); ++i) if (t.layers[i].id == l.id) return f.fail("id", "duplicate layer ID");
+  if (!f.text("id", id, 48)) return false;
+  if (!validId(id)) return f.fail("id", "use ASCII letters, digits, '-' or '_'");
+  for (const auto& old : ids) if (old == id) return f.fail("id", "duplicate layer ID");
+  ids.push_back(std::move(id));
   if (!f.text("type", type, 16) || !f.number("x", -240, 479, l.x) || !f.number("y", -240, 479, l.y)) return false;
   if (type == "text") {
     l.type = LayerType::Text;
@@ -1200,7 +1209,7 @@ void Engine::resolveLayer(size_t index) {
   // height, and cornerRadius, so a rectangle that shrinks (via a bound
   // dimension) never draws rounding outside its own resolved bounds.
   if (layer.type == LayerType::Shape && layer.shape == Shape::Rectangle)
-    resolved.cornerRadius = std::min(resolved.cornerRadius,
+    resolved.cornerRadius = std::min<int>(resolved.cornerRadius,
       std::max(0, std::min(resolved.width, resolved.height) / 2));
   states_[index].resolved = resolved;
 }

@@ -26,22 +26,28 @@ Rect unite(Rect a, Rect b);
 bool validId(const std::string& id);
 bool validPath(const std::string& path);
 
-enum class LayerType { Text, Image, Animation, Shape };
-enum class Shape { Rectangle, Circle, Line };
-enum class ScrollMode { Loop, Bounce };
+// Every number a layer stores fits in 16 bits: the parser limits coordinates
+// to -240..479, sizes to 240 and a scroll pause to 10,000 ms. A running theme
+// keeps every layer and its state in RAM, and on the ESP8266 the 16-bit
+// fields and 1-byte enums are what leave room for the web server and WiFi.
+using Coord = int16_t;
+
+enum class LayerType : uint8_t { Text, Image, Animation, Shape };
+enum class Shape : uint8_t { Rectangle, Circle, Line };
+enum class ScrollMode : uint8_t { Loop, Bounce };
 
 // Declared on a text layer to scroll content wider than its viewport. `width`
 // is the viewport, not the text; `gap` only matters in loop mode, where it is
 // the blank run between the end of one copy and the start of the next.
 struct Scroll {
   bool enabled = false;
-  int width = 0, speed = 0, pauseMs = 1000, gap = 24;
+  Coord width = 0, speed = 0, pauseMs = 1000, gap = 24;
   ScrollMode mode = ScrollMode::Loop;
 };
 
 // Every property a `bind` object may target. Which ones apply to which layer
 // type is enforced by `applicable()` in the .cpp, not by this enum.
-enum class BoundProperty {
+enum class BoundProperty : uint8_t {
   X, Y, Width, Height, Radius, CornerRadius, X2, Y2, Size, StrokeWidth,
   ScrollWidth, ScrollSpeed, Color, Fill, Stroke
 };
@@ -77,8 +83,8 @@ struct Binding {
 // binding with a missing/non-finite source) applies. Never persisted; the
 // parsed Theme stays immutable.
 struct ResolvedLayer {
-  int x = 0, y = 0, width = 0, height = 0, x2 = 0, y2 = 0, radius = 0, cornerRadius = 0;
-  int size = 16, strokeWidth = 1, scrollWidth = 0, scrollSpeed = 0;
+  Coord x = 0, y = 0, width = 0, height = 0, x2 = 0, y2 = 0, radius = 0, cornerRadius = 0;
+  Coord size = 16, strokeWidth = 1, scrollWidth = 0, scrollSpeed = 0;
   uint16_t color = 0xffff, fill = 0, stroke = 0;
 };
 bool parseFiniteNumber(const std::string& value, double& number);
@@ -86,13 +92,16 @@ int resolveNumericBinding(const NumericBinding& binding, double value, int lo, i
 uint16_t resolveColorBinding(const ColorBinding& binding, double value);
 
 // One parsed manifest layer. Fields that do not apply to `type`/`shape` keep
-// their defaults and are simply never read by the renderer.
+// their defaults and are simply never read by the renderer. The parser checks
+// each layer's `id` (valid, unique) but does not keep it: nothing reads it
+// once the theme is parsed, and every running layer would carry it in RAM.
 struct Layer {
-  std::string id, value, source;
+  std::string value, source;
   LayerType type = LayerType::Text;
   Shape shape = Shape::Rectangle;
-  int x = 0, y = 0, width = 0, height = 0, x2 = 0, y2 = 0, radius = 0;
-  int size = 16, anchorX = 0, anchorY = 0, strokeWidth = 1, cornerRadius = 0;
+  Coord x = 0, y = 0, width = 0, height = 0, x2 = 0, y2 = 0, radius = 0;
+  Coord size = 16, strokeWidth = 1, cornerRadius = 0;
+  uint8_t anchorX = 0, anchorY = 0;
   uint16_t color = 0xffff, fill = 0, stroke = 0;
   bool hasFill = false, hasStroke = false, loop = true;
   uint16_t frames = 1, fps = 1;
