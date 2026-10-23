@@ -1,5 +1,6 @@
 #pragma once
 // Portable, declarative V1 model. No Arduino, filesystem, or notification policy.
+#include "BlockList.h"
 #include <cstdint>
 #include <ctime>
 #include <string>
@@ -121,7 +122,7 @@ inline bool operator==(const ThemeValue& a, const ThemeValue& b) { return a.key 
 struct Theme {
   std::string id, name, author, version;
   uint16_t background = 0;
-  std::vector<Layer> layers;
+  BlockList<Layer> layers;
   std::vector<ThemeDataSource> data;
 };
 bool parseTheme(const std::string& json, Theme& out, std::string& error);
@@ -160,11 +161,11 @@ class Engine {
   void invalidate() { full_ = true; }
   std::vector<Rect> update(uint32_t now, const tm* time);
   const Theme& theme() const { return theme_; }
-  const std::vector<LayerState>& states() const { return states_; }
+  const BlockList<LayerState>& states() const { return states_; }
  private:
   void resolveLayer(size_t index);
   Theme theme_;
-  std::vector<LayerState> states_;
+  BlockList<LayerState> states_;
   std::vector<ThemeValue> values_;
   bool full_ = true, hadTime_ = false, valuesChanged_ = false;
   tm lastTime_{};
