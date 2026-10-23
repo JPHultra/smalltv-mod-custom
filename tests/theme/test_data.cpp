@@ -48,6 +48,36 @@ int main() {
   Response cancelled;cancelled.cancel=true;
   assert(!readDataBody(cancelled,12,body) && cancelled.elapsed==0);
 
+  // On the ESP8266, available() lets the network stack run when it finds
+  // nothing, and still returns that 0 if the rest of the reply and the
+  // server's close arrived meanwhile. The socket then says "not connected"
+  // with bytes waiting; they are part of the reply. Measured on a
+  // SmallTV-Ultra with Open-Meteo: 414 of 550 bytes kept, 136 left waiting.
+  struct LateRest {
+    std::string bytes;
+    size_t position=0, firstPart=0;
+    bool arrived=false;
+    uint32_t elapsed=0;
+    uint32_t now() const { return elapsed; }
+    bool cancelled() const { return false; }
+    size_t limit() const { return arrived ? bytes.size() : firstPart; }
+    int available() {
+      if(position<limit()) return int(limit()-position);
+      arrived=true;  // lands while available() yields; this call still says 0
+      return 0;
+    }
+    int read(uint8_t* dest,size_t count) {
+      size_t n=std::min(count,limit()-position);
+      memcpy(dest,bytes.data()+position,n);position+=n;return int(n);
+    }
+    bool connected() const { return !arrived; }
+    void idle() { ++elapsed;assert(elapsed<=3500); }
+  };
+  LateRest late;late.bytes=std::string(550,'x');late.firstPart=414;
+  assert(readDataBody(late,-1,body) && body==late.bytes);
+  LateRest lateSized;lateSized.bytes=std::string(550,'x');lateSized.firstPart=414;
+  assert(readDataBody(lateSized,550,body) && body==lateSized.bytes);
+
   // A slow old request must neither block animation ticks nor update a new theme.
   DataRequests requests;ThemeDataSource source;source.id="old";
   auto job=requests.start(source,0);assert(job);

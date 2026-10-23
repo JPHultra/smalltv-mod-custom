@@ -35,6 +35,10 @@ bool readDataBody(Stream& stream, int length, std::string& body) {
         continue;
       }
     } else if (!stream.connected()) {
+      // On the ESP8266, available() lets the network stack run when it finds
+      // nothing and still returns 0, even if the rest of the reply arrived
+      // with the server's close meanwhile. Those bytes are waiting: read them.
+      if (stream.available() > 0) continue;
       return length < 0 && !body.empty();
     }
     stream.idle();
