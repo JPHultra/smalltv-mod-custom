@@ -11,9 +11,99 @@ static const Settings* g_cfg = nullptr;  // for runtime failover between saved n
 static int8_t      g_curNet = -1;        // settings index of the joined network
 static uint32_t    g_downSince = 0;      // 0 = connected; else millis() the drop began
 
+// Why the last join failed. The driver reports a disconnect reason code from
+// its event task; the boot loop and the setup-mode retry turn it into a short
+// text for the setup screen and /api/status. Reason 8 (ASSOC_LEAVE) is our own
+// WiFi.disconnect() and would otherwise overwrite the real cause.
+static volatile uint16_t g_lastReason = 0;
+static volatile bool     g_assoc = false;   // associated, maybe still waiting for DHCP
+static String      g_failText;
+static uint16_t    g_failSeq = 0;           // bumped on every new failure text
+
+// Setup-mode retry: while the AP is up and nobody is on it, try the saved
+// networks again in the background (AP+STA), one at a time.
+static const uint32_t kJoinBudgetMs   = 30000;  // per network the scan can see
+static const uint32_t kUnseenBudgetMs = 8000;   // per hidden / out-of-range network
+static const uint32_t kRetryEveryMs   = 90000;  // setup mode: pause between attempts
+static uint32_t    g_retryAt = 0;           // millis() of the last attempt's end
+static uint32_t    g_attemptStart = 0;      // 0 = no setup-mode attempt running
+static bool        g_retryAllowed = true;   // off in safe mode, see netAllowRetry()
+// Whether the boot scan saw each network. A retry gets the same budget the boot
+// join gave it: a longer one would join here, reboot, fail the shorter boot
+// join again, and cycle like that forever.
+static bool        g_seen[MAX_WIFI_NETS];
+
+static void onStaDisconnected(uint16_t reason) {
+  g_assoc = false;
+  if (reason != 8) g_lastReason = reason;
+}
+
+#if defined(SMALLTV_ESP32C2) || defined(SMALLTV_ESP32)
+static void netHookEvents() {
+  static bool hooked = false;
+  if (hooked) return;
+  hooked = true;
+  WiFi.onEvent([](WiFiEvent_t e, WiFiEventInfo_t info) {
+    if (e == ARDUINO_EVENT_WIFI_STA_CONNECTED) g_assoc = true;
+    else if (e == ARDUINO_EVENT_WIFI_STA_DISCONNECTED)
+      onStaDisconnected(info.wifi_sta_disconnected.reason);
+  });
+}
+#else
+static WiFiEventHandler g_evConnected, g_evDisconnected;   // must stay alive
+static void netHookEvents() {
+  if (g_evDisconnected) return;
+  g_evConnected = WiFi.onStationModeConnected(
+      [](const WiFiEventStationModeConnected&) { g_assoc = true; });
+  g_evDisconnected = WiFi.onStationModeDisconnected(
+      [](const WiFiEventStationModeDisconnected& e) { onStaDisconnected((uint16_t)e.reason); });
+}
+#endif
+
+// Reason codes shared by the ESP8266 SDK and ESP-IDF (200+ are Espressif's own).
+// PSTR: on the ESP8266 a plain literal would sit in RAM, which is heap there.
+static const char* reasonText(uint16_t r) {
+  switch (r) {
+    case 2: case 15: case 202: case 204: return PSTR("wrong password?");
+    case 201:                           return PSTR("network not found");
+    case 210: case 211:                 return PSTR("security mode?");
+    case 203:                           return PSTR("router refused");
+    case 200:                           return PSTR("signal lost");
+    default:                            return PSTR("join failed");
+  }
+}
+
+// Call once an attempt has timed out, before WiFi.disconnect().
+static void recordFailure(const String& ssid) {
+  char why[24];
+  if (g_assoc)            strcpy_P(why, PSTR("no IP (DHCP)"));
+  else if (g_lastReason)  strcpy_P(why, reasonText(g_lastReason));
+  else                    strcpy_P(why, PSTR("timed out"));
+  char buf[64];
+  if (g_lastReason && !g_assoc)
+    snprintf_P(buf, sizeof(buf), PSTR("%s: %s (%u)"), ssid.c_str(), why, (unsigned)g_lastReason);
+  else
+    snprintf_P(buf, sizeof(buf), PSTR("%s: %s"), ssid.c_str(), why);
+  g_failText = buf;
+  g_failSeq++;
+  Serial.print(F("[net] join failed, "));
+  Serial.println(buf);
+}
+
+static void beginJoin(const WifiCred& n) {
+  g_lastReason = 0;
+  g_assoc = false;
+  WiFi.begin(n.ssid.c_str(), n.pass.c_str());
+}
+
 static void startAP(const Settings& s) {
   g_mode = NET_AP;
-  WiFi.mode(WIFI_AP);
+  // With saved networks keep the station side on, so netLoop can retry them.
+  // netLoop drives every attempt itself: the driver's own reconnect would keep
+  // the radio scanning off the AP channel between attempts, and on the ESP32
+  // could restart a join right after netLoop ended it.
+  WiFi.setAutoReconnect(false);
+  WiFi.mode(s.wifiCount ? WIFI_AP_STA : WIFI_AP);
   IPAddress apIP(192, 168, 4, 1);
   WiFi.softAPConfig(apIP, apIP, IPAddress(255, 255, 255, 0));
   if (s.apPass.length() >= 8) {
@@ -25,6 +115,7 @@ static void startAP(const Settings& s) {
   // Captive portal: answer every DNS query with our own IP.
   g_dns.setErrorReplyCode(DNSReplyCode::NoError);
   g_dns.start(53, "*", apIP);
+  g_retryAt = millis();
 }
 
 void netBegin(const Settings& s, void (*onProgress)(const char*)) {
@@ -33,6 +124,7 @@ void netBegin(const Settings& s, void (*onProgress)(const char*)) {
   WiFi.persistent(false);
   WiFi.setAutoReconnect(true);
   platformSetHostname(g_hostname.c_str());
+  netHookEvents();
 
   if (s.wifiCount == 0) {
     if (onProgress) onProgress("No WiFi saved");
@@ -78,6 +170,8 @@ void netBegin(const Settings& s, void (*onProgress)(const char*)) {
     }
   }
 
+  for (uint8_t i = 0; i < s.wifiCount; i++) g_seen[i] = seen[i];
+
   for (uint8_t k = 0; k < s.wifiCount; k++) {
     const WifiCred& n = s.wifi[order[k]];
     if (onProgress) {
@@ -85,9 +179,9 @@ void netBegin(const Settings& s, void (*onProgress)(const char*)) {
       snprintf(msg, sizeof(msg), "WiFi: %s", n.ssid.c_str());
       onProgress(msg);
     }
-    WiFi.begin(n.ssid.c_str(), n.pass.c_str());
+    beginJoin(n);
 
-    uint32_t budget = seen[order[k]] ? 15000 : 8000;
+    uint32_t budget = seen[order[k]] ? kJoinBudgetMs : kUnseenBudgetMs;
     uint32_t start = millis();
     while (WiFi.status() != WL_CONNECTED && millis() - start < budget) {
       delay(200);
@@ -95,6 +189,7 @@ void netBegin(const Settings& s, void (*onProgress)(const char*)) {
     }
 
     if (WiFi.status() == WL_CONNECTED) {
+      g_failText = "";
       g_curNet = (int8_t)order[k];
       g_mode = NET_STA;
       if (MDNS.begin(g_hostname.c_str())) {
@@ -112,6 +207,7 @@ void netBegin(const Settings& s, void (*onProgress)(const char*)) {
       if (onProgress) onProgress(WiFi.localIP().toString().c_str());
       return;
     }
+    recordFailure(n.ssid);
     WiFi.disconnect();
     delay(100);
   }
@@ -123,6 +219,31 @@ void netBegin(const Settings& s, void (*onProgress)(const char*)) {
 void netLoop() {
   if (g_mode == NET_AP) {
     g_dns.processNextRequest();
+    // Retry the saved networks in the background. Joining moves the radio to
+    // the router's channel, which drops anyone on the setup AP, so wait while
+    // a client is connected. A successful join reboots: the normal boot path
+    // then brings everything up in station mode.
+    if (!g_retryAllowed || !g_cfg || !g_cfg->wifiCount) return;
+    bool busy = WiFi.softAPgetStationNum() > 0;
+    if (g_attemptStart) {
+      if (WiFi.status() == WL_CONNECTED) {
+        Serial.println(F("[net] setup-mode retry joined, rebooting"));
+        delay(100);
+        ESP.restart();
+      }
+      uint32_t budget = g_seen[g_curNet] ? kJoinBudgetMs : kUnseenBudgetMs;
+      if (busy || millis() - g_attemptStart > budget) {
+        if (!busy) recordFailure(g_cfg->wifi[g_curNet].ssid);
+        WiFi.disconnect();
+        g_attemptStart = 0;
+        g_retryAt = millis();
+      }
+    } else if (!busy && millis() - g_retryAt > kRetryEveryMs) {
+      g_curNet = (int8_t)((g_curNet + 1) % g_cfg->wifiCount);
+      beginJoin(g_cfg->wifi[g_curNet]);
+      g_attemptStart = millis();
+      if (!g_attemptStart) g_attemptStart = 1;   // 0 means idle
+    }
     return;
   }
   // STA: keep mDNS alive, nudge reconnect if we dropped. After a long outage
@@ -139,7 +260,7 @@ void netLoop() {
     g_lastReconnect = millis();
     if (g_cfg && g_cfg->wifiCount > 1 && millis() - g_downSince > 45000) {
       g_curNet = (int8_t)((g_curNet + 1) % g_cfg->wifiCount);
-      WiFi.begin(g_cfg->wifi[g_curNet].ssid.c_str(), g_cfg->wifi[g_curNet].pass.c_str());
+      beginJoin(g_cfg->wifi[g_curNet]);
       g_downSince = millis();   // give this candidate its own window before rotating on
     } else {
       WiFi.reconnect();         // first ~45 s: keep nudging the current network
@@ -162,3 +283,7 @@ String netSSID() {
 int netRSSI() {
   return (g_mode == NET_STA) ? WiFi.RSSI() : 0;
 }
+
+void        netAllowRetry(bool on) { g_retryAllowed = on; }
+const char* netFailReason() { return g_failText.c_str(); }
+uint16_t    netFailSeq()    { return g_failSeq; }

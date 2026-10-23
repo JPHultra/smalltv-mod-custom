@@ -161,10 +161,11 @@ void gfxBoot(const char* line1, const char* line2) {
   if (line2 && line2[0]) gfxDrawCentered(line2, 130, 2, C_GRAY);
 }
 
-void gfxApInfo(const char* ssid, const char* pass, const char* ip) {
+void gfxApInfo(const char* ssid, const char* pass, const char* ip, const char* why) {
   if (!gfx) return;
   gfx->fillScreen(C_BLACK);
   gfxDrawCentered("SETUP MODE", 18, 3, C_YELLOW);
+  if (why && why[0]) gfxDrawCentered(why, 44, gfxFitSize(why, 232, 2), C_RED);
   gfxDrawCentered("Join WiFi:", 64, 2, C_GRAY);
   gfxDrawCentered(ssid, 88, gfxFitSize(ssid, 232, 3), C_WHITE);
   if (pass && pass[0]) {

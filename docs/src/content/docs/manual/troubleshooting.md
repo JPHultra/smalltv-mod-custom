@@ -66,6 +66,17 @@ This is specific to the original ESP8266 model with cash.ch tickers. Night mode'
 
 The newer ESP32-based models have more memory and are not affected by this.
 
+## It saves my WiFi, restarts, and comes back to SETUP MODE
+
+The device tried the saved network for 30 seconds and gave up. The red line under the SETUP MODE title names the network and the reason, and the System tab shows the same text as "Last join failure":
+
+- "wrong password?" means the router turned the password down. Retype it in the WiFi tab, watching for spaces and capital letters.
+- "network not found" means the network was not in range on 2.4 GHz. The device has no 5 GHz radio, and a router on channel 12, 13 or 14 can be invisible to it.
+- "security mode?" means the router asks for a security mode the device does not offer. Set the 2.4 GHz network to WPA2-PSK (AES), or to WPA2/WPA3 mixed mode without "PMF required".
+- "no IP (DHCP)" means the device joined but the router handed out no address. Check the router's DHCP pool and any MAC filter.
+
+The number in brackets is the WiFi driver's reason code, worth quoting in an issue. While the hotspot is up and nobody is connected to it, the device retries the saved networks every 90 seconds and restarts on its own once one works.
+
 ## I forgot my WiFi password and need to move the device
 
 You do not need the old password to add a new network. Open the WiFi tab, scan, tap the new network, enter its password, and save; up to four networks can be saved at once, so the old one does not need to be removed first.
