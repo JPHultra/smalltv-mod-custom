@@ -110,7 +110,7 @@ static const char* directPath(const Settings& s) {
 // Re-probed when the provider changes: the two hosts answer differently
 // (adsb.lol negotiates MFLN, adsb.fi behind Cloudflare does not).
 static void probeTls(const Settings& s) {
-#if defined(SMALLTV_ESP8266)
+#if defined(SMALLTV_FAMILY_ESP8266)
   const char* host = directHost(s);
   if (g_tlsRx && g_tlsProbedHost == host) return;
   g_tlsProbedHost = host;

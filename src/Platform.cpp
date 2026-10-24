@@ -3,7 +3,7 @@
 // feature code, same as the inline shims in Platform.h.
 #include "Platform.h"
 
-#if defined(SMALLTV_ESP32C2) || defined(SMALLTV_ESP32)
+#if defined(SMALLTV_FAMILY_ESP32)
 #include <esp_sntp.h>
 
 static void (*s_syncCb)() = nullptr;

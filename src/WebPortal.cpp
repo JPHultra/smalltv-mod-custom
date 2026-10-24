@@ -482,7 +482,7 @@ static void handleUpdateUpload() {
     return;
   }
   if (up.status == UPLOAD_FILE_START) {
-#if defined(SMALLTV_ESP8266)
+#if defined(SMALLTV_FAMILY_ESP8266)
     WiFiUDP::stopAll();   // free UDP sockets so the OTA has max contiguous flash/heap
 #endif
     uint32_t maxSpace = (ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000;
@@ -557,7 +557,7 @@ void webPortalLoop() {
   // response first.
   if (g_selfUpdate) {
     g_selfUpdate = false;
-#if defined(SMALLTV_ESP8266)
+#if defined(SMALLTV_FAMILY_ESP8266)
     // RAM-tight chip: verify there is something to install, then queue the
     // download for the next boot (otaBootUpdate in setup(), ~45 KB free) and
     // reboot. A failure there lands back in g_updateMsg via otaTakeBootResult.

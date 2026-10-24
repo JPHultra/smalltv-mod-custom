@@ -39,7 +39,7 @@ static void onStaDisconnected(uint16_t reason) {
   if (reason != 8 && reason != 36) g_lastReason = reason;
 }
 
-#if defined(SMALLTV_ESP32C2) || defined(SMALLTV_ESP32)
+#if defined(SMALLTV_FAMILY_ESP32)
 static void netHookEvents() {
   static bool hooked = false;
   if (hooked) return;

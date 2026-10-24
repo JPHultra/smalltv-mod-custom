@@ -4,12 +4,14 @@
 // (class aliases + inline shims) so the rest of the firmware stays chip-agnostic.
 // Target is chosen by a build-time macro: -D SMALLTV_ESP32C2 (ESP8684 knockoff),
 // -D SMALLTV_ESP32 (classic ESP32, NM-TV-154), or -D SMALLTV_ESP8266 (original
-// SmallTV, the default). Both ESP32 targets share the Arduino core 3.x branch.
+// SmallTV). Target.h enforces exactly one and defines the SMALLTV_FAMILY_* macros
+// used below. Both ESP32 targets share the Arduino core 3.x branch.
 #pragma once
+#include "Target.h"
 #include <Arduino.h>
 #include <time.h>
 
-#if defined(SMALLTV_ESP32C2) || defined(SMALLTV_ESP32)
+#if defined(SMALLTV_FAMILY_ESP32)
 // ================== ESP32 family (C2/ESP8684 + classic ESP32) ==================
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
