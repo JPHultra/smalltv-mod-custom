@@ -13,8 +13,9 @@ static uint32_t    g_downSince = 0;      // 0 = connected; else millis() the dro
 
 // Why the last join failed. The driver reports a disconnect reason code from
 // its event task; the boot loop and the setup-mode retry turn it into a short
-// text for the setup screen and /api/status. Reason 8 (ASSOC_LEAVE) is our own
-// WiFi.disconnect() and would otherwise overwrite the real cause.
+// text for the setup screen and /api/status. Reasons 8 (ASSOC_LEAVE) and 36
+// (STA_LEAVING, ESP-IDF 5) are our own WiFi.disconnect() or the one inside
+// WiFi.begin(), and would otherwise overwrite the real cause.
 static volatile uint16_t g_lastReason = 0;
 static volatile bool     g_assoc = false;   // associated, maybe still waiting for DHCP
 static String      g_failText;
@@ -35,7 +36,7 @@ static bool        g_seen[MAX_WIFI_NETS];
 
 static void onStaDisconnected(uint16_t reason) {
   g_assoc = false;
-  if (reason != 8) g_lastReason = reason;
+  if (reason != 8 && reason != 36) g_lastReason = reason;
 }
 
 #if defined(SMALLTV_ESP32C2) || defined(SMALLTV_ESP32)
