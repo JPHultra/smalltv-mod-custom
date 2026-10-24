@@ -81,6 +81,9 @@ static bool fetchUsage(const Settings& s) {
   HTTPClient http;
   http.setTimeout(s.httpTimeout);
   http.setReuse(false);
+  // HTTP/1.0 so the server can't reply with chunked framing: parseUsage reads the
+  // raw stream via getStream(), which neither core de-chunks (same as StockClient).
+  http.useHTTP10(true);
   if (!http.begin(*client, url)) return false;
   http.addHeader("Accept", "application/json");
 
