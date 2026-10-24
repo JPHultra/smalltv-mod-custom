@@ -46,11 +46,15 @@ class ThemeMode : public DisplayMode {
   // fetch schedule stay: the next service() call loads the theme again and
   // repaints it with the same values, and no source is fetched early.
   void release(uint32_t needFree = ParseFreeHeap, uint32_t needLargestBlock = ParseLargestBlock);
-  // DisplayMode::freeForRequest(): a settings save or import needs about 7 KB
-  // of heap, which on the ESP8266 is only free with the theme released. Freed
-  // unconditionally, keeping the data state like release(); the save's
-  // appInvalidate() repaints the theme anyway.
-  void freeForRequest() override { release(UINT32_MAX); }
+  // DisplayMode::freeForRequest(), before a settings read, save or import.
+  // A save needs about 7 KB of heap (#35's measurement on a SmallTV-Ultra)
+  // plus the same 1 KB of network slack as ParseFreeHeap, and builds a
+  // 2.4 KB settings document. On the ESP8266 with a
+  // theme running that is not free, so the theme is released; on the ESP32
+  // boards it always is, and the theme stays.
+  static constexpr uint32_t RequestFreeHeap = 8192;
+  static constexpr uint32_t RequestLargestBlock = 3072;
+  void freeForRequest() override { release(RequestFreeHeap, RequestLargestBlock); }
  private:
   void unload();
   void refreshData();
