@@ -489,9 +489,11 @@ space for settings and filesystem metadata. Settings saves use a temporary file,
 check the complete byte count, then rename over the old config.
 
 Listing, installing, selecting, and removing a theme each check a package by
-loading it. To keep only one theme in RAM at a time, the running theme is
-released first and loaded again afterwards, so it redraws once and fetches its
-data again. The manifest is read straight from the package and parsed one
+loading it. When the free heap is short of what that needs (on the ESP8266,
+not on the ESP32 boards), the running theme is released first and loaded
+again afterwards, so only one theme is in RAM at a time. It then redraws once
+and its animations restart; its fetched values stay, and no data source is
+fetched before its interval is up. The manifest is read straight from the package and parsed one
 layer at a time, and no list in the engine needs one large block of memory;
 on the ESP8266 that is what makes this fit beside the web server.
 

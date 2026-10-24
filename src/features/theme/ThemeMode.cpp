@@ -27,13 +27,11 @@ class Panel : public smalltv::Display {
     if ((y & 15) == 15) yield();
   }
 };
-// What a load needs before it starts: its peak heap (tests/theme/
-// test_memory.cpp holds the examples to 5 KB) plus about 1 KB that the
-// network code may claim meanwhile, and blocks of up to 1 KB (the same test's
-// largest-request limit) with some slack. A failed allocation mid-load
-// restarts the ESP8266, so a load that would not fit waits instead.
-constexpr uint32_t LoadFreeHeap = 6144;
-constexpr uint32_t LoadLargestBlock = 1536;
+// What a load needs before it starts: a package parse (ThemeMode.h). A failed
+// allocation mid-load restarts the ESP8266, so a load that would not fit
+// waits instead.
+constexpr uint32_t LoadFreeHeap = ThemeMode::ParseFreeHeap;
+constexpr uint32_t LoadLargestBlock = ThemeMode::ParseLargestBlock;
 const char* const WaitingForMemory = "Waiting for free memory";
 }
 void ThemeMode::begin(const Settings&) {
@@ -57,8 +55,21 @@ void ThemeMode::unload() {
   engine_.setValues({});
   engine_.setTheme(smalltv::Theme{}, millis());
   loadedId_ = "";
-  attempted_ = messageDrawn_ = false;
+  attempted_ = messageDrawn_ = keepData_ = false;
   error_ = "";
+}
+void ThemeMode::release(uint32_t needFree, uint32_t needLargestBlock) {
+  if (!package_ || (ESP.getFreeHeap() >= needFree && platformMaxFreeBlock() >= needLargestBlock)) return;
+  // A fetch in flight is dropped; its source is still due, so the reload
+  // fetches it again.
+  dataRequests_.cancel();
+  dataRequests_.take();
+  package_.reset();
+  file_.reset();
+  engine_.setValues({});
+  engine_.setTheme(smalltv::Theme{}, millis());
+  attempted_ = messageDrawn_ = false;
+  keepData_ = true;
 }
 // Collects a finished fetch (if any) and, with at most one request in flight
 // at a time, starts the next source whose interval has elapsed, round-robin
@@ -145,10 +156,13 @@ void ThemeMode::service(const Settings& s) {
       package_.reset();
       file_.reset();
     } else {
-      dataNextMs_.assign(theme.data.size(), 0);
-      dataScheduled_.assign(theme.data.size(), false);
-      dataValues_.clear();
-      dataCursor_ = 0;
+      // After a release the same package loads again, so its sources match.
+      if (!keepData_ || dataNextMs_.size() != theme.data.size()) {
+        dataNextMs_.assign(theme.data.size(), 0);
+        dataScheduled_.assign(theme.data.size(), false);
+        dataValues_.clear();
+        dataCursor_ = 0;
+      }
       engine_.setTheme(std::move(theme), millis());
       engine_.setValues(dataValues_);
       error_ = "";

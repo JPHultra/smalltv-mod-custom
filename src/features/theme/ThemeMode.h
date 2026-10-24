@@ -33,11 +33,19 @@ class ThemeMode : public DisplayMode {
     messageDrawn_ = false;
   }
   const String& error() const { return error_; }
-  // Frees the loaded theme but keeps the selection, so a web request can
-  // validate another package without two themes in RAM at once; on the
-  // ESP8266 both do not fit (issue #30). The next service() call loads the
-  // selected theme again and repaints it.
-  void release() { unload(); }
+  // What parsing a package needs: its peak heap (tests/theme/test_memory.cpp
+  // holds the examples to 5 KB) plus about 1 KB that the network code may
+  // claim meanwhile, and blocks of up to 1 KB (the same test's
+  // largest-request limit) with some slack.
+  static constexpr uint32_t ParseFreeHeap = 6144;
+  static constexpr uint32_t ParseLargestBlock = 1536;
+  // Frees the loaded theme when the heap is short of what a web request needs,
+  // so the request does not run out of memory next to it; on the ESP8266 a
+  // theme and a second package parse do not fit together (issue #30). With
+  // enough heap it does nothing. The selection, the fetched values and the
+  // fetch schedule stay: the next service() call loads the theme again and
+  // repaints it with the same values, and no source is fetched early.
+  void release(uint32_t needFree = ParseFreeHeap, uint32_t needLargestBlock = ParseLargestBlock);
  private:
   void unload();
   void refreshData();
@@ -50,6 +58,8 @@ class ThemeMode : public DisplayMode {
   std::vector<smalltv::ThemeValue> dataValues_;
   smalltv::DataRequests dataRequests_;
   size_t dataCursor_ = 0;
+  // Set by release(): the next load of the same theme keeps the data state.
+  bool keepData_ = false;
   bool attempted_ = false, messageDrawn_ = false;
 };
 extern ThemeMode g_themeMode;
