@@ -79,7 +79,7 @@ void gfxBegin(const Settings& s) {
   platformAnalogWriteInit(TFT_BL);
   gfxSetBrightness(s.brightness, s.backlightInverted);
 
-#if defined(SMALLTV_ESP32C2) || defined(SMALLTV_ESP32)
+#if defined(SMALLTV_FAMILY_ESP32)
   // Hardware SPI via the Arduino SPI library (IDF spi_master driver) on explicit
   // GPIOs. The register-level Arduino_ESP32SPI hangs in begin() on the C2, and
   // Arduino_SWSPI's fast-IO path doesn't cover the C2 — Arduino_HWSPI uses the

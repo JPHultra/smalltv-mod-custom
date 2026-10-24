@@ -12,7 +12,8 @@
 // buffers + the contiguous-heap guard in StockClient.
 // (Under BEARSSL_SSL_BASIC there is no EC engine to pin, so this is skipped —
 // used only by the small "loader" builds that don't need cash.ch.)
-#if defined(ESP8266) && !defined(BEARSSL_SSL_BASIC)
+#include "Target.h"
+#if defined(SMALLTV_FAMILY_ESP8266) && !defined(BEARSSL_SSL_BASIC)
 #include <bearssl/bearssl_ec.h>
 
 extern "C" const br_ec_impl *br_ec_get_default(void) {

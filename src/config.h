@@ -7,6 +7,7 @@
 // The board-specific pin map + panel quirks live in the board headers, selected
 // below by the build-time target macro. Everything else here is shared.
 #pragma once
+#include "Target.h"
 
 // ---------------------------------------------------------------------------
 // Firmware identity
@@ -181,7 +182,7 @@
 // label length are the whole RAM cost of the feature and the ESP8266 pays for
 // them out of the same 80 KB arena as the heap, so it gets the smaller pair:
 // 2 x 64 B of label against 4 x 112 B here.
-#if defined(SMALLTV_ESP32) || defined(SMALLTV_ESP32C2) || defined(SMALLTV_ESP32_PRO)
+#if defined(SMALLTV_FAMILY_ESP32)
 #define NOTIFY_QUEUE_DEPTH       4
 #define NOTIFY_LABEL_MAX        96
 #else
@@ -219,7 +220,7 @@
 // PubSubClient's own translation units, so it is a -D in each env's
 // build_flags in platformio.ini (2048 on the ESP32 family, 768 on ESP8266).
 // ---------------------------------------------------------------------------
-#if defined(SMALLTV_ESP32) || defined(SMALLTV_ESP32C2) || defined(SMALLTV_ESP32_PRO)
+#if defined(SMALLTV_FAMILY_ESP32)
   #define HA_MAX_SCREENS   8      // slots kept; carousel order = slot name order
   #define HA_MAX_PRIMS     48     // draw primitives kept per screen
   #define HA_TEXT_POOL     2048   // per-screen pool backing the text primitives
@@ -353,7 +354,7 @@
 // than BearSSL's fallback 4 KB buffer, so the ESP8266 cannot read a busy
 // response; adsb.lol still honours MFLN and keeps the TLS footprint tiny.
 // The ESP32 uses mbedTLS with dynamic buffers and is not affected either way.
-#if defined(SMALLTV_ESP8266)
+#if defined(SMALLTV_FAMILY_ESP8266)
   #define DEFAULT_RADAR_SRC  RADAR_SRC_ADSBLOL
 #else
   #define DEFAULT_RADAR_SRC  RADAR_SRC_ADSBFI
