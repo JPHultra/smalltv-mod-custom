@@ -27,6 +27,12 @@ class Panel : public smalltv::Display {
     if ((y & 15) == 15) yield();
   }
 };
+// What a load needs before it starts: a package parse (ThemeMode.h). A failed
+// allocation mid-load restarts the ESP8266, so a load that would not fit
+// waits instead.
+constexpr uint32_t LoadFreeHeap = ThemeMode::ParseFreeHeap;
+constexpr uint32_t LoadLargestBlock = ThemeMode::ParseLargestBlock;
+const char* const WaitingForMemory = "Waiting for free memory";
 }
 void ThemeMode::begin(const Settings&) {
   LittleFS.mkdir("/themes");
@@ -49,8 +55,21 @@ void ThemeMode::unload() {
   engine_.setValues({});
   engine_.setTheme(smalltv::Theme{}, millis());
   loadedId_ = "";
-  attempted_ = messageDrawn_ = false;
+  attempted_ = messageDrawn_ = keepData_ = false;
   error_ = "";
+}
+void ThemeMode::release(uint32_t needFree, uint32_t needLargestBlock) {
+  if (!package_ || (ESP.getFreeHeap() >= needFree && platformMaxFreeBlock() >= needLargestBlock)) return;
+  // A fetch in flight is dropped; its source is still due, so the reload
+  // fetches it again.
+  dataRequests_.cancel();
+  dataRequests_.take();
+  package_.reset();
+  file_.reset();
+  engine_.setValues({});
+  engine_.setTheme(smalltv::Theme{}, millis());
+  attempted_ = messageDrawn_ = false;
+  keepData_ = true;
 }
 // Collects a finished fetch (if any) and, with at most one request in flight
 // at a time, starts the next source whose interval has elapsed, round-robin
@@ -104,10 +123,19 @@ void ThemeMode::invalidate(const Settings& s) {
 // `loadedId_` together are the load state machine; everything past the load
 // block runs every call once a package is open.
 void ThemeMode::service(const Settings& s) {
-  if (loadedId_ != s.themeId) unload();
-  if (!attempted_) {
-    attempted_ = true;
+  if (loadedId_ != s.themeId) {
+    unload();
     loadedId_ = s.themeId;
+  }
+  // A web request, or the buffers of its reply, can briefly hold the heap a
+  // load needs; the load then waits, checked again every frame.
+  const bool loadFits = ESP.getFreeHeap() >= LoadFreeHeap && platformMaxFreeBlock() >= LoadLargestBlock;
+  if (!attempted_ && !loadFits && error_ != WaitingForMemory) {
+    error_ = WaitingForMemory;
+    messageDrawn_ = false;
+  }
+  if (!attempted_ && loadFits) {
+    attempted_ = true;
     std::string error;
     smalltv::Theme theme;
     if (!smalltv::validId(s.themeId.c_str())) error = "Select an installed theme";
@@ -128,10 +156,13 @@ void ThemeMode::service(const Settings& s) {
       package_.reset();
       file_.reset();
     } else {
-      dataNextMs_.assign(theme.data.size(), 0);
-      dataScheduled_.assign(theme.data.size(), false);
-      dataValues_.clear();
-      dataCursor_ = 0;
+      // After a release the same package loads again, so its sources match.
+      if (!keepData_ || dataNextMs_.size() != theme.data.size()) {
+        dataNextMs_.assign(theme.data.size(), 0);
+        dataScheduled_.assign(theme.data.size(), false);
+        dataValues_.clear();
+        dataCursor_ = 0;
+      }
       engine_.setTheme(std::move(theme), millis());
       engine_.setValues(dataValues_);
       error_ = "";

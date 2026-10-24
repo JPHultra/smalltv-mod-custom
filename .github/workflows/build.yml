@@ -88,6 +88,11 @@ jobs:
       - name: Build firmware (all targets)
         run: pio run -e smalltv -e smalltv_lean -e smalltv_c2 -e smalltv_esp32 -e smalltv_esp32_wg -e smalltv_esp32_8mb -e smalltv_loader
 
+      # tests/theme/run.sh also builds the memory test with -m32, so it
+      # measures with the ESP8266's 32-bit pointers and sizes.
+      - name: Install 32-bit compiler support
+        run: sudo apt-get update && sudo apt-get install -y g++-multilib
+
       - name: Test theme engine and packer
         run: |
           pip install -r tools/requirements-theme.txt

@@ -80,6 +80,11 @@ void receiveUpload() {
       uploadError = "Remove a theme first (limit 16)";
       return;
     }
+    // Receiving a package needs the receive buffers, the settings document
+    // below and the staging file at once, and then a package parse. On the
+    // ESP8266 that did not fit beside a running theme (a 16-byte allocation
+    // failed here with 160 B free), so an install always frees it.
+    g_themeMode.release(UINT32_MAX);
     LittleFS.remove(staging);
     // Preserve room for a settings rewrite plus filesystem metadata overhead,
     // so a large upload cannot leave too little space for the device to save
@@ -133,6 +138,9 @@ void finishUpload() {
     resetUpload();
     return;
   }
+  // Validation parses a second theme; free the running one first if the heap
+  // is short (issue #30).
+  g_themeMode.release();
   smalltv::Theme theme;
   std::string error;
   bool valid = false;
@@ -196,6 +204,9 @@ void listThemes() {
   doc["error"] = g_themeMode.error();
   doc["freeBytes"] = freeBytes();
   JsonArray list = doc["themes"].to<JsonArray>();
+  // Inspecting a package parses it; free the running theme first if the heap
+  // is short (issue #30). Its error is already copied into the reply above.
+  g_themeMode.release();
   File dir = LittleFS.open("/themes", "r");
   unsigned count = 0;
   for (File entry = dir.openNextFile(); entry && count < MaxThemes; entry = dir.openNextFile()) {
@@ -232,6 +243,9 @@ void selectTheme() {
   if (!auth()) return;
   String id;
   if (!requestId(id)) return;
+  // Validation parses a second theme; free the running one first if the heap
+  // is short (issue #30).
+  g_themeMode.release();
   {
     ThemeFile file;
     smalltv::Theme theme;
@@ -275,6 +289,9 @@ void deleteTheme() {
   }
   bool onScreen = settings->mode == MODE_THEME || (settings->mode == MODE_CAROUSEL && settings->carouselTheme);
   if (settings->themeId == id && onScreen) {
+    // Inspecting parses the package; free the running copy first if the heap
+    // is short (issue #30).
+    g_themeMode.release();
     ThemeFile file;
     file.open(path);
     auto info = smalltv::inspectInstalledTheme(file, id.c_str());
