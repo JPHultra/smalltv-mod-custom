@@ -112,6 +112,13 @@ jobs:
           sh tests/theme/run.sh
           node tests/theme/test_webui.js
 
+      # Mutated packages, theme manifests and imported settings through the
+      # real parsers, 32-bit with ASan and UBSan. A fixed seed and 2000 cases
+      # per target keep the step short and repeatable; see tests/fuzz/README.md
+      # for longer runs.
+      - name: Fuzz untrusted-input parsers
+        run: sh tests/fuzz/run.sh
+
       # Host-native, not board-specific: only needs ArduinoJson, which the
       # firmware build above already fetched into .pio/libdeps.
       - name: Test atomic settings storage
