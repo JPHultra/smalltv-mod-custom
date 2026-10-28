@@ -129,6 +129,68 @@ static Usage load(const char* path) {
   return usage;
 }
 
+// A package with many files, named like real animation frames. Its index
+// must not need one large block (each entry used to take about 40 bytes, so
+// a vector of 41 needed 1,640 B in one piece), nor keep every path in RAM
+// (another ~45 B each for paths like these), and every handle must still
+// read its own file.
+static void testManyEntries() {
+  const unsigned frames = 64;
+  // Paths with the same FNV-1a hash: looking either one up must still find
+  // its own file. The first two hash to 0x08cad385; the second two
+  // (0x0082b56a) are as long as each other and differ only after their
+  // first 16 characters.
+  const char* const twins[] = {"c/4a0f5.sti", "c/bec20.sti", "animations/twins/0089db.sti", "animations/twins/047828.sti"};
+  const std::string manifest = R"({"spec":1,"theme":{"id":"many","name":"Many","author":"Me","version":"1"},)"
+    R"("display":{"width":240,"height":240,"background":"#000000"},"layers":[]})";
+  FileSource source("");
+  auto u16 = [&](unsigned v) { source.bytes += char(v & 255); source.bytes += char(v >> 8); };
+  auto u32 = [&](uint32_t v) { u16(v & 0xffff); u16(v >> 16); };
+  auto image = [&](const std::string& path, unsigned pixel) {
+    u16(path.size()); u32(14); source.bytes += path;
+    source.bytes += "STI1"; u16(1); u16(1); source.bytes += std::string(4, '\0');
+    u16(pixel);  // the one pixel identifies the file
+  };
+  auto frame = [](unsigned i) {
+    char path[48];
+    snprintf(path, sizeof(path), "animations/snow-showers/%03u.png.sti", i);
+    return std::string(path);
+  };
+  source.bytes = "STH1";
+  u16(frames + 5); u16(0);
+  u16(10); u32(manifest.size()); source.bytes += "theme.json" + manifest;
+  for (unsigned i = 0; i < frames; ++i) image(frame(i), i);
+  for (unsigned t = 0; t < 4; ++t) image(twins[t], 1000 * (t + 1));
+  Theme theme;
+  std::string error;
+  live = peak = largest = 0;
+  counting = true;
+  size_t withIndex = 0;
+  {
+    Package package(source);
+    bool ok = package.load(theme, error);
+    if (!ok) std::cerr << "many entries: " << error << "\n";
+    assert(ok);
+    withIndex = live;
+    auto pixel = [&](const std::string& path) {
+      AssetHandle handle = package.resolve(path);
+      uint16_t color = 0;
+      uint8_t alpha = 0;
+      assert(handle != InvalidAsset && package.row(handle, 0, 0, 1, &color, &alpha));
+      return color;
+    };
+    for (unsigned i : {0u, 31u, 63u}) assert(pixel(frame(i)) == i);
+    for (unsigned t = 0; t < 4; ++t) assert(pixel(twins[t]) == 1000 * (t + 1));
+    assert(package.resolve("c/00000.sti") == InvalidAsset && package.resolve("animations/snow-showers/064.png.sti") == InvalidAsset);
+  }
+  const size_t perEntry = (withIndex - live) / (frames + 5);
+  counting = false;
+  if (largest > LargestBlockBudget) fprintf(stderr, "%u entries: largest block %zu B\n", frames + 5, largest);
+  assert(largest <= LargestBlockBudget);
+  if (perEntry > 24) fprintf(stderr, "package index: %zu B per entry\n", perEntry);
+  assert(perEntry <= 24);
+}
+
 // BlockList: the vector subset the engine uses, without one large block.
 static void testBlockList() {
   BlockList<int> numbers;
@@ -197,6 +259,7 @@ static void testBlockList() {
 
 int main(int argc, char** argv) {
   testBlockList();
+  testManyEntries();
   const char* examples[] = {"examples/themes/pixel-room.stheme", "examples/themes/live-status.stheme",
                             "examples/themes/terminal-ops.stheme"};
   bool report = argc > 1;

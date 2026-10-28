@@ -21,14 +21,21 @@ class Package : public Assets {
   using Assets::row;
   bool row(AssetHandle handle, int y, int x, int count, uint16_t* colors, uint8_t* alpha) override;
  private:
+  // Every animation frame is an entry, so an entry is kept small: its path
+  // is not held in RAM (that took ~45 bytes more per frame), only its FNV-1a
+  // hash and length. The path itself stays in the package, just before the
+  // payload at `offset`, and indexOf() reads it to confirm a match.
   struct Entry {
-    std::string path;
-    uint32_t offset = 0, length = 0;
+    uint32_t hash = 0, offset = 0, length = 0;
     uint16_t width = 0, height = 0;
-    uint8_t stride = 0;
+    uint8_t pathLength = 0, stride = 0;
   };
   Source& source_;
-  std::vector<Entry> entries_;
+  // In blocks: in one vector, a package with many frames needed a block of
+  // several KiB.
+  BlockList<Entry> entries_;
+  bool samePath(const Entry& entry, const std::string& path) const;
+  size_t indexOf(const std::string& path) const;
   const Entry* find(const std::string& path) const;
   bool readIndex(std::string& error);
   bool checkAssets(Theme& theme, std::string& error) const;
