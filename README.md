@@ -166,6 +166,10 @@ The six images build from one codebase. Chip differences live in `src/Platform.h
 
 The PC-side usage daemon lives in its own repo: [clawdmeter-daemon](https://github.com/giovi321/clawdmeter-daemon).
 
+## Related projects
+
+[SmallTV Pomodoro](https://github.com/davicorrea0/smalltv-pomodoro) is a separate alternative firmware for the SmallTV-ultra (ESP8266): a Pomodoro timer with a pixel-art tomato, installable clock faces, a weather forecast, a photo and GIF album, and a web panel in English, Portuguese, and Spanish. It replaces the stock firmware the same way this one does, so a device runs one or the other. The two projects are working on a shared theme format, so that a clock face designed in [SmallTV Studio](https://giovi321.github.io/smalltv-studio/) runs on both ([#31](https://github.com/giovi321/smalltv-mod/issues/31)). SmallTV Pomodoro is GPL-3.0 licensed.
+
 ## Credits and references
 
 - GeekMagic SmallTV and SmallTV-Pro, the original product and stock firmware ([GeekMagicClock/smalltv-pro](https://github.com/GeekMagicClock/smalltv-pro)).

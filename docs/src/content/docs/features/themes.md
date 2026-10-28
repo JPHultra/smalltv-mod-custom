@@ -45,6 +45,13 @@ tools so themes remain reproducible in CI without the editor application. The
 rest of this page documents the format for hand-written themes and the
 command-line tools.
 
+[SmallTV Pomodoro](https://github.com/davicorrea0/smalltv-pomodoro), a separate
+alternative firmware for the SmallTV-ultra, has its own installable clock faces.
+The two projects are working on a shared theme format, so that one `.stheme`
+package runs on both firmwares
+([#31](https://github.com/giovi321/smalltv-mod/issues/31)). Until that lands,
+packages for one firmware do not install on the other.
+
 Notifications keep their existing behavior and cover the active theme. When the
 notification ends, the theme is restored with the current time and animation
 frame. Theme mode can be selected directly or ticked as **Theme clock** under
