@@ -60,7 +60,7 @@ mosquitto_pub -h broker.local -t smalltv/smalltv/brightness/set -m 70
 mosquitto_sub -h broker.local -t smalltv/smalltv/brightness
 ```
 
-The change shows on the panel at once. Saving to flash is debounced by a few seconds, so rapid changes do not wear out the flash. If the web UI is open in a browser while brightness changes over MQTT, the open page does not live-refresh; reload it to see the new value.
+The change shows on the panel at once. The device saves it to flash 5 seconds after the last command, so dragging a slider does not wear out the flash. If that save fails, which can happen on the ESP8266 when a running theme leaves memory short, the device tries again every 30 seconds until it succeeds; the panel keeps showing the new brightness meanwhile. If the web UI is open in a browser while brightness changes over MQTT, the open page does not live-refresh; reload it to see the new value.
 
 With discovery disabled, declare the number by hand:
 
