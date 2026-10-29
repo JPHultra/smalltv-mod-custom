@@ -10,6 +10,7 @@ namespace {
 WebServerClass* server;
 Settings* settings;
 bool (*auth)();
+bool (*allowed)();   // Host/Origin guard, for the upload callback
 File upload;
 String uploadError;
 bool uploadAllowed = false, uploadEnded = false;
@@ -146,7 +147,7 @@ void receiveUpload() {
     uploadError = "";
     uploaded = 0;
     uploadEnded = false;
-    uploadAllowed = !settings->auth.enabled || !settings->auth.pass.length() || server->authenticate(settings->auth.user.c_str(), settings->auth.pass.c_str());
+    uploadAllowed = allowed() && (!settings->auth.enabled || !settings->auth.pass.length() || server->authenticate(settings->auth.user.c_str(), settings->auth.pass.c_str()));
     if (!uploadAllowed) return;
     if (!up.filename.endsWith(".stheme")) {
       uploadError = "Expected a .stheme file";
@@ -497,10 +498,13 @@ void deleteTheme() {
 // Registers the theme API routes on the shared web server; `requireAuth`
 // is the same digest-auth check every other route in the device uses, so
 // theme install/select/delete get identical protection without duplicating it.
-void themeWebBegin(WebServerClass& web, Settings& s, bool (*requireAuth)()) {
+// `requestAllowed` is the CSRF / DNS-rebinding check without the 403 reply: the
+// upload callback runs before finishUpload() and must refuse to stage the body.
+void themeWebBegin(WebServerClass& web, Settings& s, bool (*requireAuth)(), bool (*requestAllowed)()) {
   server = &web;
   settings = &s;
   auth = requireAuth;
+  allowed = requestAllowed;
   web.on("/api/themes", HTTP_GET, listThemes);
   web.on("/api/themes/install", HTTP_POST, finishUpload, receiveUpload);
   web.on("/api/themes/select", HTTP_POST, selectTheme);

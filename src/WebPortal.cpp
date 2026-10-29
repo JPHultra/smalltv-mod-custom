@@ -1,5 +1,6 @@
 #include "WebPortal.h"
 #include "Platform.h"
+#include "WebGuard.h"
 #include <ArduinoJson.h>
 #include <LittleFS.h>
 #include "webui.h"
@@ -43,6 +44,46 @@ static void scheduleReboot(uint32_t inMs) {
   g_rebootAt = millis() + inMs;
 }
 
+// ---- CSRF and DNS-rebinding guard ------------------------------------------
+// Every handler goes through requireAuth(), which calls this first (the usage
+// push calls it directly). The two upload callbacks (OTA, theme install) run
+// before their final handler, so they only ask guardAllowed() and write nothing
+// when it says no; the final handler then answers 403 through requireAuth().
+// Rules in WebGuard.h.
+//   - Host: checked on every request, but not in AP mode. There the phone's
+//     captive-portal probe arrives with whatever name it is checking
+//     (connectivitycheck.gstatic.com, captive.apple.com, ...) and must get the
+//     redirect; the network is the device's own, so nothing can rebind to it.
+//   - Origin / Sec-Fetch-Site: checked on anything that is not GET/HEAD/OPTIONS.
+//     A request carrying neither (curl, Home Assistant, n8n, the daemon) passes.
+// guardReject() returns the refusal text, or nullptr when the request may
+// proceed. It answers nothing, so it is safe inside an upload callback.
+static const char* guardReject() {
+  String host = server.hostHeader();
+  if (netMode() != NET_AP) {
+    const char* name = S->hostname.length() ? S->hostname.c_str() : DEFAULT_HOSTNAME;
+    if (!webguard::hostAllowed(host.c_str(), name)) return "Forbidden: unexpected Host header";
+  }
+  HTTPMethod m = server.method();
+  if (m != HTTP_GET && m != HTTP_HEAD && m != HTTP_OPTIONS) {
+    String origin = server.header("Origin");
+    String site   = server.header("Sec-Fetch-Site");
+    if (!webguard::originAllowed(origin.c_str(), site.c_str(), host.c_str()))
+      return "Forbidden: cross-site request";
+  }
+  return nullptr;
+}
+
+static bool guardAllowed() { return guardReject() == nullptr; }
+
+// Returns true when the request may proceed; on false it has already answered.
+static bool guardRequest() {
+  const char* why = guardReject();
+  if (!why) return true;
+  server.send(403, "text/plain", why);
+  return false;
+}
+
 // ---- optional web UI password ---------------------------------------------
 // Off by default. When on, every handler below starts with this line and every
 // page and endpoint needs the credentials. Digest, not basic, so the password
@@ -53,6 +94,7 @@ static void scheduleReboot(uint32_t inMs) {
 //     credentials and only writes the numbers on the screen.
 // Returns true when the request may proceed; on false it has already answered.
 static bool requireAuth() {
+  if (!guardRequest()) return false;
   if (!S->auth.enabled || !S->auth.pass.length()) return true;
   if (server.authenticate(S->auth.user.c_str(), S->auth.pass.c_str())) return true;
   server.requestAuthentication(HTTPAuthMethod::DIGEST_AUTH, AUTH_REALM,
@@ -398,6 +440,7 @@ static void handleSelfUpdate() {
 // Push endpoint: the daemon POSTs the usage payload here when the device can't
 // reach it (Wi-Fi client isolation). Body is the {s,sr,w,wr,st,ok} contract.
 static void handleUsagePush() {
+  if (!guardRequest()) return;
   if (!server.hasArg("plain")) { server.send(400, "text/plain", "no body"); return; }
 #if WITH_USAGE
   bool ok = usageApply(server.arg("plain"));
@@ -476,6 +519,10 @@ static void handleUpdateDone() {
 // flash and merely lose the 200 at the end.
 static void handleUpdateUpload() {
   HTTPUpload& up = server.upload();
+  if (!guardAllowed()) {
+    if (up.status != UPLOAD_FILE_START) Update.end();
+    return;
+  }
   if (S->auth.enabled && S->auth.pass.length() &&
       !server.authenticate(S->auth.user.c_str(), S->auth.pass.c_str())) {
     if (up.status != UPLOAD_FILE_START) Update.end();
@@ -517,7 +564,7 @@ void webPortalBegin(Settings& settings) {
   g_updateMsg = otaTakeBootResult();
 
 #if WITH_THEME
-  themeWebBegin(server, settings, requireAuth);
+  themeWebBegin(server, settings, requireAuth, guardAllowed);
 #endif
   server.on("/", HTTP_GET, handleRoot);
   server.on("/api/config", HTTP_GET, handleGetConfig);
@@ -546,6 +593,14 @@ void webPortalBegin(Settings& settings) {
   server.on("/hotspot-detect.html", handleNotFound);
   server.on("/connecttest.txt", handleNotFound);
   server.onNotFound(handleNotFound);
+
+  // Headers the guard reads; the server drops all others.
+#if defined(SMALLTV_FAMILY_ESP8266)
+  server.collectHeaders("Origin", "Sec-Fetch-Site");   // variadic, keeps Authorization
+#else
+  static const char* kGuardHeaders[] = {"Origin", "Sec-Fetch-Site"};
+  server.collectHeaders(kGuardHeaders, 2);
+#endif
 
   server.begin();
 }

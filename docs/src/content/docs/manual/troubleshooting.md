@@ -126,6 +126,13 @@ Rare, but if it happens: the device restarted after an internal fault, and stays
 - A failed update leaves the device running its current version; nothing is lost, and the System tab shows the reason for the failure. Usually pressing "Check for latest" and "Update now" again succeeds on a retry.
 - The download needs the device's normal internet connection; if WiFi is unstable at the time, wait and try again.
 
+## The web UI answers "Forbidden"
+
+The device refuses two kinds of request, so that a web page on the internet cannot drive it from your browser.
+
+- "unexpected Host header" means the address you typed is not one the device recognises. It accepts its IP address, its hostname (WiFi tab), and the hostname followed by `.local`, `.lan`, `.home`, `.home.arpa`, `.internal`, `.localdomain` or `.fritz.box`. Open it by IP address, or give the device the hostname your router uses for it.
+- "cross-site request" means a browser sent a change from a page that is not the device's own. Scripts, Home Assistant, n8n and curl are not affected, because they send no `Origin` header. Sending from SmallTV Studio needs `serve.py`: the editor's direct send over plain HTTP is a cross-site POST and is refused, while the relay through `serve.py` works.
+
 ## Something else
 
 Open an issue on the project's [GitHub page](https://github.com/giovi321/smalltv-mod/issues) with your board type (from the chip badge in the settings page header), the firmware version (Status tab), and what you tried.

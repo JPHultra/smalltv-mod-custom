@@ -127,6 +127,11 @@ jobs:
             tests/test_storage.cpp -o /tmp/smalltv-storage-tests
           /tmp/smalltv-storage-tests
 
+      - name: Test web request guard
+        run: |
+          c++ -std=c++11 -Wall -Wextra -Werror -g -Isrc tests/test_webguard.cpp -o /tmp/smalltv-webguard-tests
+          /tmp/smalltv-webguard-tests
+
       # One app image per target (web-UI OTA + GitHub self-update), the merged
       # factory images for first-time USB flashing of the ESP32 boards, and the
       # minimal loader used to install onto a SmallTV-ultra. Two boards get a
