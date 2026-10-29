@@ -544,9 +544,11 @@ int main(int argc, char** argv) {
     if (readFile(p + "/theme.json", data)) corpus[ManifestTarget].push_back(data);
   }
   // The bundled themes are spec 1 (STI1 only); STI2 rows and palettes are
-  // reached through the shared test files, one package each.
+  // reached through the shared test files, one package each. Only `.sti`
+  // files: the Python tests leave a __pycache__ folder there in CI.
   for (const auto& p : listDir(root + "/tests/theme/sti"))
-    if (readFile(p, data) && data.compare(0, 4, "STI2") == 0) corpus[PackageTarget].push_back(imagePackage(data));
+    if (p.size() > 4 && p.compare(p.size() - 4, 4, ".sti") == 0 && readFile(p, data) && data.compare(0, 4, "STI2") == 0)
+      corpus[PackageTarget].push_back(imagePackage(data));
   for (const auto& p : listDir(root + "/tests/fuzz/corpus/meta"))
     if (readFile(p, data)) corpus[MetaTarget].push_back(data);
   for (const auto& p : listDir(root + "/tests/fuzz/corpus/import"))
