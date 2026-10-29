@@ -24,6 +24,15 @@ A board-specific limit is accepted only where the hardware cannot support the fe
 - Report the flash and static RAM usage of each image the change affects
 - State which boards the change ran on and which were only built. An untested board is fine, an unstated one is not
 - On the ESP8266, report free heap while the feature runs alongside the stock ticker's TLS fetch
+- CI fails any image left with less than 8 KB free in its app slot
+
+## ESP8266 memory and untrusted input
+
+The ESP8266 runs a theme with about 6.5 KB of heap free, and a failed allocation reboots the device. Theme packages, settings imports and HTTP requests come from outside, so code that reads them must stay within that budget whatever the input.
+
+- No single heap block grows with the input. Store data per item in small blocks, as `BlockList` does for layers, or cap the total and reserve it exactly
+- Constant tables and long strings go in flash: `PROGMEM` or `F()` on the ESP8266
+- A loop over input-sized data, such as validating every image of a package, reads in chunks and calls `yield()`, so a large or crafted input cannot trip the watchdog. Report the time it takes on the largest input the format allows
 
 ## Code
 
