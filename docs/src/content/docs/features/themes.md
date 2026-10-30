@@ -184,7 +184,8 @@ All fields shown at the root, in `theme`, and in `display` are required.
 smaller for images with transparent areas or few colours. Firmware up to
 3.1.1 refuses a spec 2 theme; when it has STI2 images, the message there is
 "Invalid or truncated .stheme package", because that firmware checks the
-images before it reads the manifest. A spec 1 theme packs exactly as before. The
+images before it reads the manifest. A spec 1 theme packs exactly as before. Spec 2
+also lets a binding read a [built-in value](#built-in-sources). The
 canvas is always 240×240 with the origin at the top left. Coordinates and sizes
 are integer pixels. Layers draw in array order, back to front; IDs must be unique.
 Unknown fields, unsupported types, invalid values, and unknown text variables are
@@ -384,9 +385,11 @@ its asset handle across rows and dirty regions.
 `bind` is an optional object on any layer, keyed by a supported property name.
 Each key holds exactly one numeric mapping or color-stop binding, driven by a
 fetched scalar. A binding's `source` is the same declared
-`<data-source-id>.<field-id>` token accepted by text interpolation. Bindings are
+`<data-source-id>.<field-id>` token accepted by text interpolation or, in a
+`"spec": 2` theme, a [built-in source](#built-in-sources). Bindings are
 recomputed from the parsed theme and the latest fetched values whenever those
-values change; the parsed manifest itself is never mutated. Only the changed
+values change (and, for a binding on `time.*`, whenever the clock moves); the
+parsed manifest itself is never mutated. Only the changed
 region is repainted — the union of the layer's old and new visible bounds.
 
 ### Numeric mapping
@@ -397,7 +400,7 @@ region is repainted — the union of the layer's old and new visible bounds.
 
 | Field | Type | Required | Rule |
 | --- | --- | --- | --- |
-| `source` | string | yes | Must reference a declared data field |
+| `source` | string | yes | A declared data field or, in spec 2, a built-in source |
 | `input` | two finite numbers | yes | Endpoints must differ; ascending or descending is allowed |
 | `output` | two integers | yes | Both must fit the target property's safe range below |
 | `clamp` | boolean | no, default true | Clamp to the output endpoints when true |
@@ -435,7 +438,7 @@ effect for that property, so a theme always has a valid fallback appearance.
 
 | Field | Type | Required | Rule |
 | --- | --- | --- | --- |
-| `source` | string | yes | Must reference a declared data field |
+| `source` | string | yes | A declared data field or, in spec 2, a built-in source |
 | `stops` | array | yes | 1–8 entries |
 | `stops[].at` | finite number | yes | Strictly increasing |
 | `stops[].value` | `#RRGGBB` | yes | Existing color syntax |
@@ -470,6 +473,56 @@ or a source that is not a declared data field rejects the package, for example
 `layers[0].bind.width.source: expected a declared data field`. Invalid `scroll`
 fields are diagnosed the same way, for example `layers[0].scroll.mode: expected
 loop or bounce` or `layers[0].scroll.gap: not allowed in bounce mode`.
+
+### Built-in sources
+
+A theme with `"spec": 2` may name a value the firmware already has instead of a
+fetched field, and everything above applies to it unchanged: the same numeric
+mapping and clamping, the same color stops, the same fallback to the layer's
+static value when there is no value. Use them exactly like a data field, for
+example a seconds bar that needs no `data` block:
+
+```json
+{"id": "sec", "type": "shape", "shape": "rectangle", "x": 20, "y": 200, "width": 1, "height": 6, "fill": "#ff5a47",
+ "bind": {"width": {"source": "time.second", "input": [0, 59], "output": [0, 200]}}}
+```
+
+| Source | Range | Meaning |
+| --- | --- | --- |
+| `time.second` | 0–59 | Second of the minute |
+| `time.minute` | 0–59 | Minute of the hour |
+| `time.hour` | 0–23 | Hour, 24-hour clock |
+| `time.hour12` | 0–11 | Hour, 12-hour clock (midnight and noon are 0) |
+| `time.secondOfDay` | 0–86399 | Seconds since midnight |
+| `time.day` | 1–31 | Day of the month |
+| `time.month` | 1–12 | Month, January is 1 |
+| `time.weekday` | 0–6 | Day of the week, Sunday is 0 |
+
+`time.*` follows the same clock as `{HH}` and the other date and time text
+variables, in the configured timezone. Until the clock has been set (no NTP
+yet) there is no value, so the layer keeps its static value. A layer bound to a
+`time.*` source repaints only when the bound property actually changes: a
+`time.second` bar repaints its own rectangle once a second, a `time.minute`
+bar once a minute, and neither makes the rest of the canvas redraw.
+
+`device.*` sources are optional values a firmware supplies from something the
+theme engine itself does not know about. The names are fixed:
+`device.focusToday`, `device.focusGoal`, `device.streak`, `device.humidity` and
+`device.temperature`. A firmware that does not supply one leaves the layer on
+its static value, exactly like a fetched field that is missing, so one theme
+can run on firmwares with and without it. SmallTV Pomodoro supplies all five.
+This firmware has no sensor and no focus timer, so it supplies none of them
+today; the engine takes them from the firmware through `Engine::setDeviceValues()`
+and they are always strings holding a number, like fetched fields. A `device.*`
+value is never read from a theme's `data` block, and a fetched field cannot
+shadow one.
+
+In a `"spec": 1` theme these names are refused when the package is checked, with
+`layers[0].bind.width.source: time.* and device.* sources need "spec": 2`. Spec 1
+keeps its rule that `source` must be a declared data field. In spec 2, `time`
+and `device` can no longer be used as the `id` of a `data` source, since
+`time.second` would then be ambiguous. A name that starts with `time.` or
+`device.` but is not in the tables is rejected with `unknown time.* or device.* name`.
 
 ## Example: a dynamic dashboard
 

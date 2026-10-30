@@ -12,6 +12,14 @@
 #include <cstring>
 #include <memory>
 #include <utility>
+#ifdef ARDUINO
+#include <pgmspace.h>
+#else
+#define PROGMEM
+#define strcmp_P strcmp
+#define strlen_P strlen
+#define memcpy_P memcpy
+#endif
 
 namespace smalltv {
 // Dirty-rectangle primitives: intersect() clips a region to the canvas or to
@@ -739,8 +747,57 @@ static bool applicable(const Layer& layer, BoundProperty property, bool color) {
   if (layer.shape == Shape::Circle) return property == BoundProperty::Radius;
   return property == BoundProperty::X2 || property == BoundProperty::Y2;
 }
-static bool declaredSource(const Theme& theme, const std::string& source) {
-  return validFieldToken(source, theme);
+// Built-in names, spec 2 only. `time.*` is fixed; the five `device.*` names are
+// the ones a firmware may provide (docs/features/themes.md).
+// The tables and the messages sit in flash on the ESP8266, where a string
+// literal would otherwise take RAM; the host tests see plain arrays.
+static const char timeNames[8][12] PROGMEM = {"second", "minute", "hour", "hour12", "secondOfDay", "day", "month", "weekday"};
+static const char deviceNames[5][12] PROGMEM = {"focusToday", "focusGoal", "streak", "humidity", "temperature"};
+static const char needSpec2[] PROGMEM = "time.* and device.* sources need \"spec\": 2";
+static const char unknownBuiltIn[] PROGMEM = "unknown time.* or device.* name";
+static const char reservedId[] PROGMEM = "time and device are the names of built-in sources";
+static std::string fromFlash(const char* text) {
+  std::string out(strlen_P(text), '\0');
+  memcpy_P(&out[0], text, out.size());
+  return out;
+}
+BuiltIn builtInSource(const std::string& source) {
+  if (source.compare(0, 5, "time.") == 0) {
+    for (size_t i = 0; i < 8; ++i)
+      if (strcmp_P(source.c_str() + 5, timeNames[i]) == 0) return static_cast<BuiltIn>(static_cast<int>(BuiltIn::TimeSecond) + i);
+  } else if (source.compare(0, 7, "device.") == 0) {
+    for (size_t i = 0; i < 5; ++i) if (strcmp_P(source.c_str() + 7, deviceNames[i]) == 0) return BuiltIn::Device;
+  }
+  return BuiltIn::None;
+}
+double timeValue(BuiltIn which, const tm& time) {
+  switch (which) {
+    case BuiltIn::TimeSecond: return time.tm_sec;
+    case BuiltIn::TimeMinute: return time.tm_min;
+    case BuiltIn::TimeHour: return time.tm_hour;
+    case BuiltIn::TimeHour12: return time.tm_hour % 12;
+    case BuiltIn::TimeSecondOfDay: return time.tm_hour * 3600 + time.tm_min * 60 + time.tm_sec;
+    case BuiltIn::TimeDay: return time.tm_mday;
+    case BuiltIn::TimeMonth: return time.tm_mon + 1;
+    case BuiltIn::TimeWeekday: return time.tm_wday;
+    default: return 0;
+  }
+}
+// A binding source is a declared data field or, under spec 2, a built-in
+// value. Spec 1 keeps its exact rule: a name that is not a declared field is
+// refused, and for a time./device. name the message says why.
+static bool declaredSource(const Theme& theme, Binding& binding, const Fields& fields) {
+  const bool dotted = binding.source.compare(0, 5, "time.") == 0 || binding.source.compare(0, 7, "device.") == 0;
+  if (dotted && theme.spec < 2) {
+    if (validFieldToken(binding.source, theme)) return true;
+    return fields.fail("source", fromFlash(needSpec2));
+  }
+  if (dotted) {
+    binding.builtin = builtInSource(binding.source);
+    if (binding.builtin == BuiltIn::None) return fields.fail("source", fromFlash(unknownBuiltIn));
+    return true;
+  }
+  return validFieldToken(binding.source, theme) || fields.fail("source", "expected a declared data field");
 }
 // Shared by `input` (two finite doubles) and, via twoIntegers below, `output`
 // (two ranged ints) -- both binding schemas need exactly a two-element array.
@@ -806,7 +863,7 @@ static bool parseBindings(JsonObjectConst object, const Theme& theme, const std:
     if (declaration.isNull()) return fields.fail("", "expected an object");
     if (binding.color) {
       if (!fields.keys("|source|stops|") || !fields.text("source", binding.source, 64)) return false;
-      if (!declaredSource(theme, binding.source)) return fields.fail("source", "expected a declared data field");
+      if (!declaredSource(theme, binding, fields)) return false;
       JsonArrayConst stops = declaration["stops"].as<JsonArrayConst>();
       if (stops.isNull() || stops.size() == 0 || stops.size() > 8) return fields.fail("stops", "expected 1 to 8 stops");
       double previous = 0;
@@ -823,12 +880,13 @@ static bool parseBindings(JsonObjectConst object, const Theme& theme, const std:
       int lo = 0, hi = 0;
       if (!propertyRange(binding.property, lo, hi)) return fields.fail("", "expected a numeric binding target");
       if (!fields.keys("|source|input|output|clamp|") || !fields.text("source", binding.source, 64)) return false;
-      if (!declaredSource(theme, binding.source)) return fields.fail("source", "expected a declared data field");
+      if (!declaredSource(theme, binding, fields)) return false;
       if (!twoReals(declaration["input"], fields, "input", binding.numeric.input0, binding.numeric.input1)) return false;
       if (binding.numeric.input0 == binding.numeric.input1) return fields.fail("input", "endpoints must differ");
       if (!twoIntegers(declaration["output"], fields, "output", lo, hi, binding.numeric.output0, binding.numeric.output1)) return false;
       if (fields.has("clamp") && !fields.boolean("clamp", binding.numeric.clamp)) return false;
     }
+    if (binding.builtin != BuiltIn::None && binding.builtin != BuiltIn::Device) layer.timeBound = true;
     layer.bindings.push_back(std::move(binding));
   }
   return true;
@@ -915,6 +973,7 @@ __attribute__((noinline)) static bool parseHeader(JsonObjectConst root, const Ma
       int interval = 0;
       if (!sf.keys("|id|url|interval|insecureTls|fields|") || !sf.text("id", data.id, 32) || !sf.text("url", data.url, 200) || !sf.number("interval", 10, 86400, interval) || !sf.boolean("insecureTls", data.insecureTls, false)) return false;
       if (!validId(data.id) || data.id.find('.') != std::string::npos) return sf.fail("id", "use ASCII letters, digits, '-' or '_'");
+      if (t.spec >= 2 && (data.id == "time" || data.id == "device")) return sf.fail("id", fromFlash(reservedId));
       // The embedded TLS client cannot validate a server certificate, so an
       // https:// source must explicitly acknowledge that with `insecureTls`
       // rather than the firmware silently accepting unauthenticated TLS.
@@ -1175,13 +1234,20 @@ void Engine::resolveLayer(size_t index) {
   resolved.fill = layer.fill;
   resolved.stroke = layer.stroke;
   for (const auto& binding : layer.bindings) {
-    const std::string* source = nullptr;
-    for (const auto& item : values_) if (item.key == binding.source) {
-      source = &item.value;
-      break;
-    }
     double value = 0;
-    if (!source || !parseFiniteNumber(*source, value)) continue;
+    if (binding.builtin == BuiltIn::None || binding.builtin == BuiltIn::Device) {
+      const auto& pool = binding.builtin == BuiltIn::Device ? device_ : values_;
+      const std::string* source = nullptr;
+      for (const auto& item : pool) if (item.key == binding.source) {
+        source = &item.value;
+        break;
+      }
+      if (!source || !parseFiniteNumber(*source, value)) continue;
+    } else {
+      // time.*: until the clock is set there is no value, so the static one stays.
+      if (!hadTime_) continue;
+      value = timeValue(binding.builtin, lastTime_);
+    }
     if (binding.color) {
       const uint16_t color = resolveColorBinding(binding.colors, value);
       if (binding.property == BoundProperty::Color) resolved.color = color;
@@ -1363,6 +1429,12 @@ void Engine::setValues(std::vector<ThemeValue> values) {
   values_ = std::move(values);
   valuesChanged_ = true;
 }
+// Same as setValues(), for the firmware's `device.*` values.
+void Engine::setDeviceValues(std::vector<ThemeValue> values) {
+  if (device_ == values) return;
+  device_ = std::move(values);
+  valuesChanged_ = true;
+}
 // Merges a newly dirty region into the accumulated list, absorbing any
 // existing rectangle it overlaps so update() never reports two overlapping
 // regions (which would otherwise make render() redraw the overlap twice).
@@ -1401,7 +1473,10 @@ std::vector<Rect> Engine::update(uint32_t now, const tm* time) {
     // Re-resolve bindings only when fetched values actually changed; a
     // geometry or color change (but not a scrollSpeed-only change, see
     // sameGeometry's own comment) marks this layer dirty.
-    if (valuesChanged_) {
+    // A layer bound to time.* also re-resolves when the clock moved; the
+    // result only marks it dirty if a property really changed (a minute
+    // binding does nothing on 59 of 60 seconds).
+    if (valuesChanged_ || (timeChanged && l.timeBound)) {
       resolveLayer(i);
       changed = changed || !sameGeometry(previous, s.resolved) || !sameColors(previous, s.resolved);
     }

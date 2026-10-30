@@ -69,10 +69,23 @@ struct ColorStop {
 struct ColorBinding {
   std::vector<ColorStop> stops;
 };
+// A `source` that names a value the engine knows (spec 2, #31) instead of a
+// declared data field. `time.*` comes from the clock handed to update();
+// `device.*` is optional and comes from the firmware (setDeviceValues()), so
+// the binding keeps its name in `source` and has no enum entry of its own.
+enum class BuiltIn : uint8_t {
+  None, TimeSecond, TimeMinute, TimeHour, TimeHour12, TimeSecondOfDay, TimeDay, TimeMonth, TimeWeekday, Device
+};
+// "time.minute" and the like give their BuiltIn; "device.<name>" for a name
+// the spec lists gives Device. Anything else, including a data field, is None.
+BuiltIn builtInSource(const std::string& source);
+// A `time.*` source's value for a broken-down time.
+double timeValue(BuiltIn which, const tm& time);
 // One `bind` entry: a single property driven by a single declared data field,
 // through either a numeric mapping or a color-stop table (never both).
 struct Binding {
   BoundProperty property = BoundProperty::X;
+  BuiltIn builtin = BuiltIn::None;
   std::string source;
   bool color = false;
   NumericBinding numeric;
@@ -104,6 +117,7 @@ struct Layer {
   uint8_t anchorX = 0, anchorY = 0;
   uint16_t color = 0xffff, fill = 0, stroke = 0;
   bool hasFill = false, hasStroke = false, loop = true;
+  bool timeBound = false;   // some binding reads a time.* source
   uint16_t frames = 1, fps = 1;
   Scroll scroll;
   std::vector<Binding> bindings;
@@ -175,6 +189,10 @@ class Engine {
  public:
   void setTheme(Theme theme, uint32_t now);
   void setValues(std::vector<ThemeValue> values);
+  // Values a firmware provides for `device.*` sources, keyed "device.<name>".
+  // A name that is not set leaves its bindings on the layer's static value,
+  // like a fetched field that is missing.
+  void setDeviceValues(std::vector<ThemeValue> values);
   // Forces the next update() to report a full-canvas dirty rectangle, e.g.
   // after a notification overlay restores the theme. It never resets scroll
   // progress, only what gets repainted.
@@ -186,7 +204,7 @@ class Engine {
   void resolveLayer(size_t index);
   Theme theme_;
   BlockList<LayerState> states_;
-  std::vector<ThemeValue> values_;
+  std::vector<ThemeValue> values_, device_;
   bool full_ = true, hadTime_ = false, valuesChanged_ = false;
   tm lastTime_{};
 };
