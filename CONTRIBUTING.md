@@ -33,6 +33,7 @@ The ESP8266 runs a theme with about 6.5 KB of heap free, and a failed allocation
 - No single heap block grows with the input. Store data per item in small blocks, as `BlockList` does for layers, or cap the total and reserve it exactly
 - Constant tables and long strings go in flash: `PROGMEM` or `F()` on the ESP8266
 - A loop over input-sized data, such as validating every image of a package, reads in chunks and calls `yield()`, so a large or crafted input cannot trip the watchdog. Report the time it takes on the largest input the format allows
+- Every web handler starts with `requireAuth()`, which runs the cross-site and Host checks before the password check. An upload callback runs before its handler, so it asks `guardAllowed()` and the password at the start of the upload, and writes nothing to flash when either says no
 
 ## Code
 
