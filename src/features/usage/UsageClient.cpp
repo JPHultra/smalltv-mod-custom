@@ -1,106 +1,137 @@
 #include "UsageClient.h"
-#include "Platform.h"
 #include <ArduinoJson.h>
-#include <math.h>
+#include <string.h>
 
-static UsageData g_usage;
-static uint32_t  g_nextPollMs = 0;
-static bool      g_inited = false;
+static UsageStore g_store;
+static uint32_t   g_revision = 0;
 
-// ---------------------------------------------------------------------------
-void usageInit(const Settings& s) {
-  (void)s;
-  g_usage.clear();
-  g_nextPollMs = millis();
-  g_inited = true;
+void usageInit() {
+  memset(&g_store, 0, sizeof(g_store));
+  g_revision = 0;
 }
 
-void usageForceRefresh() { g_nextPollMs = millis(); }
-
-const UsageData& usageGet() { return g_usage; }
-
-bool usageFresh(uint32_t withinMs) {
-  return g_usage.valid && (millis() - g_usage.lastOkMs) <= withinMs;
+static ProviderUsage* findOrAdd(const char* id) {
+  if (!id || !id[0]) return nullptr;
+  for (uint8_t i = 0; i < g_store.count; i++)
+    if (!strcmp(g_store.providers[i].id, id)) return &g_store.providers[i];
+  if (g_store.count >= USAGE_MAX_PROVIDERS) return nullptr;
+  ProviderUsage& p = g_store.providers[g_store.count++];
+  memset(&p, 0, sizeof(p));
+  strlcpy(p.id, id, sizeof(p.id));
+  strlcpy(p.name, id, sizeof(p.name));
+  return &p;
 }
 
-// ---- parse: usage contract -------------------------------------------------
-// { "s":29, "sr":142, "w":4, "wr":9876, "st":"allowed", "ok":true }
-//   s  = 5h utilization %        sr = minutes until 5h reset
-//   w  = 7d utilization %        wr = minutes until 7d reset
-//   st = rate-limit status       ok = false => explicit "no data"
-static void usageFilter(JsonDocument& f) {
-  f["s"] = true; f["sr"] = true; f["w"] = true;
-  f["wr"] = true; f["st"] = true; f["ok"] = true;
+static void readMetrics(JsonObjectConst src, ProviderUsage& dst) {
+  JsonArrayConst metrics = src["metrics"].as<JsonArrayConst>();
+  if (metrics.isNull()) return;   // no metrics in this push: keep the previous set
+  dst.metricCount = 0;
+  for (JsonObjectConst m : metrics) {
+    if (dst.metricCount >= USAGE_MAX_METRICS) break;
+    UsageMetric& out = dst.metrics[dst.metricCount];
+    memset(&out, 0, sizeof(out));
+    const char* label = m["label"] | "";
+    strlcpy(out.label, label[0] ? label : "--", sizeof(out.label));
+    out.pct = constrain(m["pct"] | 0.0f, 0.0f, 100.0f);
+    out.resetMin = m["resetMin"] | 0;
+    if (out.resetMin < 0) out.resetMin = 0;
+    dst.metricCount++;
+  }
 }
 
-static bool applyUsageDoc(UsageData& d, JsonDocument& doc) {
-  if (doc["ok"].is<bool>() && doc["ok"].as<bool>() == false) return false;
-  if (!doc["s"].is<float>() && !doc["s"].is<int>()) return false;   // require at least session %
+bool usageApply(const String& body) {
+  if (body.length() == 0 || body.length() > 4096) return false;
+  JsonDocument doc;
+  if (deserializeJson(doc, body)) return false;
 
-  d.sessionPct      = constrain(doc["s"].as<float>(), 0.0f, 100.0f);
-  d.weeklyPct       = constrain(doc["w"] | 0.0f, 0.0f, 100.0f);
-  d.sessionResetMin = doc["sr"] | 0;
-  d.weeklyResetMin  = doc["wr"] | 0;
-  strlcpy(d.status, doc["st"] | "", sizeof(d.status));
+  bool touched = false;
+  JsonArrayConst providers = doc["providers"].as<JsonArrayConst>();
+  if (!providers.isNull()) {
+    for (JsonObjectConst p : providers) {
+      const char* id = p["id"] | "";
+      ProviderUsage* dst = findOrAdd(id);
+      if (!dst) continue;
+      const char* name = p["name"] | "";
+      if (name[0]) strlcpy(dst->name, name, sizeof(dst->name));
+      const char* status = p["status"] | "";
+      strlcpy(dst->status, status, sizeof(dst->status));
+      readMetrics(p, *dst);
+      const bool ok = p["ok"].is<bool>() ? p["ok"].as<bool>() : true;
+      if (ok) {
+        dst->valid = true;
+        dst->error = false;
+        dst->lastOkMs = millis();
+      } else {
+        dst->error = true;
+      }
+      touched = true;
+    }
+  } else if (doc["s"].is<float>() || doc["s"].is<int>()) {
+    // Legacy Claude daemon: {s,sr,w,wr,st,ok}
+    ProviderUsage* dst = findOrAdd("claude");
+    if (dst) {
+      strlcpy(dst->name, "Claude", sizeof(dst->name));
+      const char* status = doc["st"] | "";
+      strlcpy(dst->status, status, sizeof(dst->status));
+      dst->metricCount = 2;
+      memset(&dst->metrics[0], 0, sizeof(dst->metrics[0]));
+      memset(&dst->metrics[1], 0, sizeof(dst->metrics[1]));
+      strlcpy(dst->metrics[0].label, "5h", sizeof(dst->metrics[0].label));
+      dst->metrics[0].pct = constrain(doc["s"] | 0.0f, 0.0f, 100.0f);
+      dst->metrics[0].resetMin = doc["sr"] | 0;
+      strlcpy(dst->metrics[1].label, "7d", sizeof(dst->metrics[1].label));
+      dst->metrics[1].pct = constrain(doc["w"] | 0.0f, 0.0f, 100.0f);
+      dst->metrics[1].resetMin = doc["wr"] | 0;
+      const bool ok = doc["ok"].is<bool>() ? doc["ok"].as<bool>() : true;
+      if (ok) {
+        dst->valid = true;
+        dst->error = false;
+        dst->lastOkMs = millis();
+      } else {
+        dst->error = true;
+      }
+      touched = true;
+    }
+  }
 
-  d.valid = true;
-  d.error = false;
-  d.lastOkMs = millis();
+  if (!touched) return false;
+  g_revision++;
   return true;
 }
 
-static bool parseUsage(UsageData& d, Stream& stream) {
-  JsonDocument filter; usageFilter(filter);
-  JsonDocument doc;
-  if (deserializeJson(doc, stream, DeserializationOption::Filter(filter))) return false;
-  return applyUsageDoc(d, doc);
+const ProviderUsage* usageFind(const char* id) {
+  if (!id || !id[0]) return nullptr;
+  for (uint8_t i = 0; i < g_store.count; i++)
+    if (!strcmp(g_store.providers[i].id, id)) return &g_store.providers[i];
+  return nullptr;
 }
 
-// Pushed payload (POST /api/usage): same contract, parsed from a String body.
-bool usageApply(const String& body) {
-  JsonDocument filter; usageFilter(filter);
-  JsonDocument doc;
-  if (deserializeJson(doc, body, DeserializationOption::Filter(filter))) return false;
-  return applyUsageDoc(g_usage, doc);
+bool usageStale(const ProviderUsage& provider, uint32_t withinMs) {
+  if (!provider.valid) return true;
+  return (int32_t)(millis() - provider.lastOkMs) > (int32_t)withinMs;
 }
 
-// ---- one HTTP(S) GET + parse (mirrors StockClient::fetchUrl) ----------------
-static bool fetchUsage(const Settings& s) {
-  const String& url = s.usage.usageUrl;
-  if (url.length() < 8) return false;
-  bool https = url.startsWith("https://");
+uint32_t usageRevision() { return g_revision; }
 
-  std::unique_ptr<NetClient> client;
-  if (https) {
-    if (ESP.getFreeHeap() < 20000) return false;   // too little heap for TLS (incl. the 9 KB thunk); skip, don't crash
-    client.reset(platformMakeSecureClient(2048));   // LAN / self-hosted endpoint
-  } else {
-    client.reset(new WiFiClient());
+void usageStatusJson(JsonObject& root) {
+  root["count"] = g_store.count;
+  JsonArray arr = root["providers"].to<JsonArray>();
+  for (uint8_t i = 0; i < g_store.count; i++) {
+    const ProviderUsage& p = g_store.providers[i];
+    JsonObject o = arr.add<JsonObject>();
+    o["id"] = p.id;
+    o["name"] = p.name;
+    o["valid"] = p.valid;
+    o["error"] = p.error;
+    o["stale"] = usageStale(p);
+    o["status"] = p.status;
+    o["age"] = p.valid ? (millis() - p.lastOkMs) / 1000UL : 0;
+    JsonArray ms = o["metrics"].to<JsonArray>();
+    for (uint8_t k = 0; k < p.metricCount; k++) {
+      JsonObject m = ms.add<JsonObject>();
+      m["label"] = p.metrics[k].label;
+      m["pct"] = p.metrics[k].pct;
+      m["resetMin"] = p.metrics[k].resetMin;
+    }
   }
-
-  HTTPClient http;
-  http.setTimeout(s.httpTimeout);
-  http.setReuse(false);
-  // HTTP/1.0 so the server can't reply with chunked framing: parseUsage reads the
-  // raw stream via getStream(), which neither core de-chunks (same as StockClient).
-  http.useHTTP10(true);
-  if (!http.begin(*client, url)) return false;
-  http.addHeader("Accept", "application/json");
-
-  int code = http.GET();
-  if (code != HTTP_CODE_OK) { http.end(); return false; }
-
-  bool ok = parseUsage(g_usage, http.getStream());
-  http.end();
-  return ok;
-}
-
-// ---------------------------------------------------------------------------
-void usageService(const Settings& s) {
-  if (!g_inited) usageInit(s);
-  if ((int32_t)(millis() - g_nextPollMs) < 0) return;
-
-  if (!fetchUsage(s)) g_usage.error = true;   // keep stale data, flag the error
-
-  g_nextPollMs = millis() + (uint32_t)s.usage.pollSec * 1000UL;
 }

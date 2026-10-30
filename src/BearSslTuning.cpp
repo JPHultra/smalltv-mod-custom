@@ -9,7 +9,7 @@
 // avoids the much heavier x25519 the server could otherwise pick, and drops the
 // unused curve code from flash. Stack cost of the EC step is minor next to the
 // RSA cert-chain verify; the real savings come from session resumption + small
-// buffers + the contiguous-heap guard in StockClient.
+// buffers + the contiguous-heap guard in the view poller.
 // (Under BEARSSL_SSL_BASIC there is no EC engine to pin, so this is skipped —
 // used only by the small "loader" builds that don't need cash.ch.)
 #include "Target.h"

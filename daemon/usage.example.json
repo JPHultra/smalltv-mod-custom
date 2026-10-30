@@ -1,0 +1,30 @@
+{
+  "providers": [
+    {
+      "id": "claude",
+      "name": "Claude",
+      "ok": true,
+      "status": "normal",
+      "metrics": [
+        {"label": "5h", "pct": 29, "resetMin": 142},
+        {"label": "7d", "pct": 4, "resetMin": 9876}
+      ]
+    },
+    {
+      "id": "chatgpt",
+      "name": "ChatGPT",
+      "ok": true,
+      "metrics": [
+        {"label": "5h", "pct": 62, "resetMin": 88}
+      ]
+    },
+    {
+      "id": "deepseek",
+      "name": "DeepSeek",
+      "ok": true,
+      "metrics": [
+        {"label": "balance", "pct": 81, "resetMin": 0}
+      ]
+    }
+  ]
+}

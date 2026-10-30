@@ -14,7 +14,7 @@ class Arduino_GFX;   // fwd-decl: only the drawing .cpp files pull in the full l
 // and a few have red and blue swapped in the controller. gfxTint() applies the
 // per-channel gain set in the Display tab to every colour on its way to the
 // panel, so a unit can be matched to the others without touching each renderer.
-// Colours computed inside a feature go through it too (see UsageMode/RadarMode).
+// Colours computed inside a view go through it too (see ViewRender).
 uint16_t gfxTint(uint16_t rgb565);
 
 #define C_BLACK  gfxTint(0x0000)
