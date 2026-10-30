@@ -1,0 +1,33 @@
+{
+  "device": "http://smalltv.local",
+  "interval": 60,
+  "timeout": 10,
+  "providers": [
+    {
+      "id": "claude",
+      "name": "Claude",
+      "url": "http://127.0.0.1:8787/",
+      "adapter": "claude-legacy"
+    },
+    {
+      "id": "chatgpt",
+      "name": "ChatGPT",
+      "url": "http://127.0.0.1:8788/usage",
+      "adapter": "generic",
+      "statusPath": "status",
+      "metrics": [
+        {"label": "5h", "pctPath": "limits.5h.pct", "resetPath": "limits.5h.resetMin"},
+        {"label": "7d", "pctPath": "limits.7d.pct", "resetPath": "limits.7d.resetMin"}
+      ]
+    },
+    {
+      "id": "deepseek",
+      "name": "DeepSeek",
+      "url": "http://127.0.0.1:8789/usage",
+      "adapter": "generic",
+      "metrics": [
+        {"label": "balance", "pctPath": "balance.pct"}
+      ]
+    }
+  ]
+}

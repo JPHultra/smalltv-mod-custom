@@ -91,43 +91,12 @@ jobs:
       - name: Check release asset names
         run: python3 tools/ci_checks.py assets
 
-      # Build, stage and size-check one env at a time. Staging immediately is
-      # deliberate: the pioarduino custom-SDKConfig path can clear another
-      # env's build directory while switching framework configurations, and a
-      # later env must not remove an image that this job already produced.
+      # The script orders envs by shared framework state, stages each image
+      # immediately (the pioarduino custom-SDKConfig path can clear another
+      # env's build directory), runs the 8 KB slot gate, and pins the
+      # PlatformIO/pioarduino cores to the versions that work with this SCons.
       - name: Build, stage and size-check every target
-        run: |
-          set -e
-          mkdir -p dist
-          copy() { [ -f "$1" ] && cp "$1" "$2" || { echo "missing: $1"; exit 1; }; }
-          check() { python3 tools/ci_checks.py size --min-free 8192 --envs "$1"; }
-
-          pio run -e smalltv
-          check smalltv
-          copy .pio/build/smalltv/firmware.bin dist/smalltv-mod-firmware.bin
-
-          pio run -e smalltv_c2
-          check smalltv_c2
-          copy .pio/build/smalltv_c2/firmware.bin dist/smalltv-mod-firmware-c2.bin
-          copy .pio/build/smalltv_c2/firmware.factory.bin dist/smalltv-mod-firmware-c2.factory.bin
-
-          pio run -e smalltv_esp32
-          check smalltv_esp32
-          copy .pio/build/smalltv_esp32/firmware.bin dist/smalltv-mod-firmware-esp32.bin
-          copy .pio/build/smalltv_esp32/firmware.factory.bin dist/smalltv-mod-firmware-esp32.factory.bin
-
-          pio run -e smalltv_esp32_wg
-          check smalltv_esp32_wg
-          copy .pio/build/smalltv_esp32_wg/firmware.bin dist/smalltv-mod-firmware-esp32-wg.bin
-          copy .pio/build/smalltv_esp32_wg/firmware.factory.bin dist/smalltv-mod-firmware-esp32-wg.factory.bin
-
-          pio run -e smalltv_esp32_8mb
-          check smalltv_esp32_8mb
-          copy .pio/build/smalltv_esp32_8mb/firmware.bin dist/smalltv-mod-firmware-esp32-pro.bin
-          copy .pio/build/smalltv_esp32_8mb/firmware.factory.bin dist/smalltv-mod-firmware-esp32-pro.factory.bin
-
-          pio run -e smalltv_loader
-          copy .pio/build/smalltv_loader/firmware.bin dist/smalltv-mod-loader.bin
+        run: python3 tools/build_release.py --pio pio --dist dist --jobs 8
 
       # Host-native, not board-specific: only needs ArduinoJson, which the
       # firmware build above already fetched into .pio/libdeps.
@@ -150,6 +119,9 @@ jobs:
             tests/test_view.cpp src/features/view/ViewModel.cpp \
             -o /tmp/smalltv-view-tests
           /tmp/smalltv-view-tests
+
+      - name: Test usage daemon adapters
+        run: python3 -m unittest discover -s daemon -p 'test_*.py'
 
       # always(), so a run that dies after linking still hands over whatever was
       # already built and staged. The build step fails the job on the first

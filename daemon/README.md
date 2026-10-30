@@ -27,7 +27,35 @@ The legacy Claude-only shape is still accepted:
 {"s":29,"sr":142,"w":4,"wr":9876,"st":"normal","ok":true}
 ```
 
+## Aggregate provider endpoints
+
+`usage_daemon.py` fetches one URL per provider, maps each source to the contract
+above, and pushes all three together. Copy and edit the example, then run it:
+
+```sh
+cp daemon/usage-daemon.example.json daemon/usage-daemon.json
+python3 daemon/usage_daemon.py --config daemon/usage-daemon.json
+```
+
+`daemon/usage-daemon.json` is ignored by git because it may contain API keys or
+local URLs. Use `--once` for one cycle and `--dry-run` to print the normalized
+document without pushing. The config accepts per-provider `headers` for bearer
+tokens or other auth.
+
+Adapters:
+
+| Adapter | Source shape |
+|---|---|
+| `claude-legacy` | the old `{s,sr,w,wr,st,ok}` payload |
+| `generic` | any JSON object, with dotted `statusPath`, `pctPath`, `resetPath` per metric |
+| `normalized` | a provider object already shaped like the contract |
+
+A failed provider is sent as `{"id":...,"name":...,"ok":false}` so the device
+keeps the previous values and shows the error state.
+
 ## Push a JSON file
+
+If something else already produces the normalized document, skip the aggregator:
 
 ```sh
 python3 daemon/push_usage.py --device http://smalltv.local --file usage.json
@@ -35,12 +63,12 @@ python3 daemon/push_usage.py --device http://smalltv.local --demo --once
 python3 daemon/push_usage.py --device http://smalltv.local --url http://127.0.0.1:8787/usage
 ```
 
-`--interval` (default 60) repeats the push. The script uses only the Python
+`--interval` (default 60) repeats the push. Both scripts use only the Python
 standard library.
 
 ## Provider collectors
 
-`push_usage.py` is the transport. It deliberately does not contain provider
-credentials or scraping. Add a collector that writes the normalized document
-(the `--file` or `--url` input) for your Claude, ChatGPT and DeepSeek accounts,
-then run the pusher against it. The firmware only needs the contract above.
+`usage_daemon.py` is the normalizer/transport. It deliberately does not contain
+provider credentials or scraping. Point the `claude`, `chatgpt` and `deepseek`
+entries at whatever local endpoints already know how to read those accounts;
+the firmware only needs the normalized contract.

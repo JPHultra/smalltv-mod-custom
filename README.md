@@ -19,8 +19,29 @@ Home Assistant/MQTT screens have been removed.
 
 ## Build
 
+The fast path builds every release image in the order that minimizes pioarduino
+framework rebuilds, stages the ten assets in `dist/`, and runs the same 8 KB
+slot gate as CI:
+
 ```sh
 pip install platformio==6.1.19
+python3 tools/build_release.py
+```
+
+Useful options:
+
+```sh
+python3 tools/build_release.py --envs smalltv,smalltv_c2
+python3 tools/build_release.py --pio /path/to/pio --jobs 8
+python3 tools/build_release.py --clean       # wipe .pio/build, keep packages
+python3 tools/build_release.py --dry-run
+```
+
+The script pins `platformio`/`pioarduino` to 6.1.19 (the SCons that works with
+the ESP32 framework), and groups the ESP8266, C2, classic-custom, and
+classic-stock builds. The individual commands still work:
+
+```sh
 pio run -e smalltv
 pio run -e smalltv_c2
 pio run -e smalltv_esp32 -e smalltv_esp32_wg
@@ -39,6 +60,10 @@ Host checks:
 c++ -std=c++11 -Wall -Wextra -Werror -g -Isrc \
   -I.pio/libdeps/smalltv/ArduinoJson/src tests/test_storage.cpp -o /tmp/storage && /tmp/storage
 c++ -std=c++11 -Wall -Wextra -Werror -g -Isrc tests/test_webguard.cpp -o /tmp/webguard && /tmp/webguard
+c++ -std=c++11 -Wall -Wextra -Werror -g -DSMALLTV_ESP8266 \
+  -Itests/shim -Isrc -Isrc/features/view -I.pio/libdeps/smalltv/ArduinoJson/src \
+  tests/test_view.cpp src/features/view/ViewModel.cpp -o /tmp/view && /tmp/view
+python3 -m unittest discover -s daemon -p 'test_*.py'
 ```
 
 Flashing is unchanged from upstream: OTA from the stock web UI on the ESP8266,
@@ -103,9 +128,13 @@ One local process normalizes the three providers and POSTs the document to
 ]}
 ```
 
-`daemon/push_usage.py` pushes a file, a URL, or demo data. Provider collectors
-are intentionally separate. The legacy Claude-only `{s,sr,w,wr,st,ok}` payload
-is still accepted.
+`daemon/usage_daemon.py` aggregates one URL per provider, with a
+`claude-legacy` adapter for the old `{s,sr,w,wr,st,ok}` payload, a `generic`
+dotted-path adapter, and a `normalized` adapter. Copy
+`daemon/usage-daemon.example.json` to `daemon/usage-daemon.json` (git-ignored),
+point the providers at your local sources, and run it. `daemon/push_usage.py`
+remains for a single pre-built document, a URL, or demo data. The firmware only
+needs the normalized contract above; provider credentials stay on the PC.
 
 ## HTTP API
 
