@@ -45,6 +45,8 @@ input[type=color]{width:100%;height:38px;background:#0b0e13;border:1px solid var
  <h1>SmallTV Dashboard Editor</h1>
  <span class="muted">240x240 · declarative draw list</span>
  <span style="flex:1"></span>
+ <button class="sec" onclick="loadExample()">Load example</button>
+ <button class="sec" onclick="clearView()">Clear</button>
  <button class="sec" onclick="loadLocal()">Load local</button>
  <button class="sec" onclick="saveLocal()">Save local</button>
  <button class="sec" onclick="downloadJson()">Download JSON</button>
@@ -121,6 +123,14 @@ input[type=color]{width:100%;height:38px;background:#0b0e13;border:1px solid var
 
 <script>
 const ICONS=['thermometer','humidity','sun','cloud','rain','snow','wind','home','door-open','door-closed','window-open','window-closed','motion','plug','battery','alert','check','x','arrow-up','arrow-down'];
+const DEMO_VIEW={bg:'#0b1420',ttl:15,draw:[
+ {t:'text',x:120,y:8,s:2,c:'#7f93ab',a:'c',v:'SMALLTV'},
+ {t:'text',x:120,y:26,s:6,c:'#e9edf4',a:'c',v:'{HH}:{MM}'},
+ {t:'text',x:120,y:82,s:2,c:'#86e2bf',a:'c',v:'{WEEKDAY} {YYYY}-{MON}-{DD}'},
+ {t:'usage',x:8,y:112,w:224,h:58,c:'#d97757',provider:'claude',metric:-1},
+ {t:'usage',x:8,y:178,w:110,h:52,c:'#10a37f',provider:'chatgpt',metric:0},
+ {t:'usage',x:122,y:178,w:110,h:52,c:'#4d6bfe',provider:'deepseek',metric:0}
+]};
 const SAMPLE_USAGE={providers:[
  {id:'claude',name:'Claude',valid:true,metrics:[{label:'5h',pct:42,resetMin:128},{label:'7d',pct:18,resetMin:4200}]},
  {id:'chatgpt',name:'ChatGPT',valid:true,metrics:[{label:'5h',pct:67,resetMin:74}]},
@@ -268,6 +278,8 @@ function syncJson(){const el=$('json');if(el)el.value=JSON.stringify(exportView(
 function applyJson(){try{const v=JSON.parse($('json').value);if(!v||typeof v!=='object'||!Array.isArray(v.draw))throw new Error('Expected an object with a draw array');view.bg=v.bg||'#000000';view.ttl=Number(v.ttl)||15;view.draw=v.draw.map(l=>Object.assign({id:uid++},l));selected=view.draw.length?0:-1;$('bg').value=view.bg;$('ttl').value=view.ttl;draw();renderLayers();renderProps();toast('JSON applied')}catch(e){toast('Invalid JSON: '+e.message)}}
 function copyJson(){navigator.clipboard&&navigator.clipboard.writeText($('json').value).then(()=>toast('Copied')).catch(()=>toast('Copy failed'))}
 function downloadJson(){const blob=new Blob([$('json').value],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='view.json';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
+function loadExample(){$('json').value=JSON.stringify(DEMO_VIEW);applyJson();toast('Example loaded')}
+function clearView(){if(!confirm('Clear the canvas?'))return;view={bg:'#000000',ttl:15,draw:[]};selected=-1;$('bg').value=view.bg;$('ttl').value=view.ttl;draw();renderLayers();renderProps();syncJson();toast('Cleared')}
 function saveLocal(){localStorage.setItem('smalltv-view',JSON.stringify(view));toast('Saved locally')}
 function loadLocal(){try{const v=JSON.parse(localStorage.getItem('smalltv-view')||'null');if(!v)throw new Error('Nothing saved');$('json').value=JSON.stringify(v,null,2);applyJson()}catch(e){toast(e.message)}}
 

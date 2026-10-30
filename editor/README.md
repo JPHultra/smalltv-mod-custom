@@ -37,6 +37,7 @@ The token is a write credential for `/api/dashboard`, `/api/view` and
   move it, and edit its properties on the right.
 - The JSON pane is the source of truth: **Apply** loads pasted JSON, **Copy**
   copies the current view, **Download JSON** saves it as `view.json`.
+- **Load example** starts from the sample dashboard; **Clear** starts empty.
 - Text supports `{HH}`, `{hh}`, `{MM}`, `{SS}`, `{DD}`, `{MON}`, `{MONTH}`,
   `{WD}`, `{WEEKDAY}` and `{YYYY}`.
 - Icons are drawn as placeholder boxes in the editor; the device renders the
