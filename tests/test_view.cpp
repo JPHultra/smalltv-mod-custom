@@ -39,6 +39,11 @@ int main() {
   assert(s.bitmap[s.prims[3].voff] == 0x80);
   assert(s.prims[4].type == VIEW_P_LINE);
 
+  // An omitted metric means "all metrics" (the renderer stacks them).
+  const char* all_metrics = R"({"draw":[{"t":"usage","x":0,"y":0,"w":100,"h":50,"c":"#ffffff","provider":"claude"}]})";
+  assert(viewScreenParse(all_metrics, strlen(all_metrics), s, error));
+  assert(s.prims[0].type == VIEW_P_USAGE && s.prims[0].aux == 255);
+
   assert(!viewScreenParse("not json", 8, s, error));
   assert(error.length() > 0);
   assert(!viewScreenParse("[]", 2, s, error));

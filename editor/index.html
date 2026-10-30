@@ -149,7 +149,7 @@ function addLayer(type){
  if(type==='line')Object.assign(base,{x:20,y:200,x2:220,y2:200,c:'#8b96a5'});
  if(type==='icon')Object.assign(base,{x:120,y:80,s:2,a:'c',v:'sun',c:'#ffff00'});
  if(type==='bitmap')Object.assign(base,{x:100,y:100,w:8,h:8,s:2,a:'l',c:'#3fb950',d:'AA55AA55AA55AA55'});
- if(type==='usage')Object.assign(base,{x:8,y:50,w:224,h:82,c:'#d97757',provider:'claude',metric:0});
+ if(type==='usage')Object.assign(base,{x:8,y:50,w:224,h:82,c:'#d97757',provider:'claude',metric:-1});
  view.draw.push(base);selected=view.draw.length-1;draw();renderLayers();renderProps();syncJson();
 }
 function selectLayer(i){selected=i;draw();renderLayers();renderProps()}
@@ -169,7 +169,7 @@ function setProp(k,v,type){if(selected<0)return;const l=view.draw[selected];
   if(k==='s'){const max=l.t==='text'?10:(l.t==='icon'?8:4);n=Math.max(1,Math.min(max,n))}
   if(k==='w'||k==='h')n=Math.max(1,Math.min(240,n));
   if(k==='r')n=Math.max(l.t==='circle'?1:0,Math.min(240,n));
-  if(k==='metric')n=Math.max(0,Math.min(2,n));
+  if(k==='metric')n=Math.max(-1,Math.min(2,n));
   l[k]=n;
  } else l[k]=v;
  draw();renderLayers();syncJson()}
@@ -186,15 +186,30 @@ function renderProps(){
  if(l.t==='line'){h+='<label>X2</label><input type="number" value="'+(l.x2||0)+'" oninput="setProp(\'x2\',this.value,\'number\')"><label>Y2</label><input type="number" value="'+(l.y2||0)+'" oninput="setProp(\'y2\',this.value,\'number\')">'}
  if(l.t==='icon'){h+='<label>Icon</label><select onchange="setProp(\'v\',this.value)">'+ICONS.map(n=>'<option value="'+n+'"'+(l.v===n?' selected':'')+'>'+n+'</option>').join('')+'</select><label>Scale (1-8)</label><input type="number" min="1" max="8" value="'+(l.s||1)+'" oninput="setProp(\'s\',this.value,\'number\')"><label>Align</label><select onchange="setProp(\'a\',this.value)"><option value="l"'+(l.a==='l'?' selected':'')+'>Left</option><option value="c"'+(l.a==='c'?' selected':'')+'>Centre</option><option value="r"'+(l.a==='r'?' selected':'')+'>Right</option></select>'}
  if(l.t==='bitmap'){h+='<label>Width</label><input type="number" min="1" max="48" value="'+(l.w||8)+'" oninput="setProp(\'w\',this.value,\'number\')"><label>Height</label><input type="number" min="1" max="48" value="'+(l.h||8)+'" oninput="setProp(\'h\',this.value,\'number\')"><label>Scale (1-4)</label><input type="number" min="1" max="4" value="'+(l.s||1)+'" oninput="setProp(\'s\',this.value,\'number\')"><label>Hex data (MSB first)</label><textarea oninput="setProp(\'d\',this.value)">'+esc(l.d||'')+'</textarea>'}
- if(l.t==='usage'){h+='<label>Width</label><input type="number" value="'+(l.w||224)+'" oninput="setProp(\'w\',this.value,\'number\')"><label>Height</label><input type="number" value="'+(l.h||82)+'" oninput="setProp(\'h\',this.value,\'number\')"><label>Provider</label><select onchange="setProp(\'provider\',this.value)"><option value="claude"'+(l.provider==='claude'?' selected':'')+'>claude</option><option value="chatgpt"'+(l.provider==='chatgpt'?' selected':'')+'>chatgpt</option><option value="deepseek"'+(l.provider==='deepseek'?' selected':'')+'>deepseek</option></select><label>Metric (0-2)</label><input type="number" min="0" max="2" value="'+(l.metric||0)+'" oninput="setProp(\'metric\',this.value,\'number\')">'}
+ if(l.t==='usage'){h+='<label>Width</label><input type="number" value="'+(l.w||224)+'" oninput="setProp(\'w\',this.value,\'number\')"><label>Height</label><input type="number" value="'+(l.h||82)+'" oninput="setProp(\'h\',this.value,\'number\')"><label>Provider</label><select onchange="setProp(\'provider\',this.value)"><option value="claude"'+(l.provider==='claude'?' selected':'')+'>claude</option><option value="chatgpt"'+(l.provider==='chatgpt'?' selected':'')+'>chatgpt</option><option value="deepseek"'+(l.provider==='deepseek'?' selected':'')+'>deepseek</option></select><label>Metric (-1 = all)</label><input type="number" min="-1" max="2" value="'+(l.metric!=null?l.metric:-1)+'" oninput="setProp(\'metric\',this.value,\'number\')">'}
  box.innerHTML=h;
 }
 
 function usageFor(id){const u=(usageData||SAMPLE_USAGE).providers.find(p=>p.id===id);return u||null}
+function drawUsageRows(ctx,l,u){
+ const w=l.w||224, hh=l.h||82, top=l.y+20, rowH=(hh-20)/u.metrics.length;
+ u.metrics.forEach((m,i)=>{
+  const ry=top+i*rowH, large=rowH>=24, pct=Math.max(0,Math.min(100,Number(m.pct)||0));
+  ctx.fillStyle='#8b96a5';ctx.font='9px monospace';ctx.textAlign='left';ctx.fillText(m.label,l.x+12,ry);
+  ctx.fillStyle='#ffffff';ctx.font='bold '+(large?14:10)+'px monospace';ctx.textAlign='right';ctx.fillText(Math.round(pct)+'%',l.x+w-12,ry-(large?2:0));
+  const by=ry+(large?13:9), bw=w-24, bh=large?6:4;
+  ctx.fillStyle='#2a2a28';roundRect(ctx,l.x+12,by,bw,bh,bh/2);ctx.fill();
+  ctx.fillStyle=pct>=90?'#f85149':(pct>=75?'#d97757':'#788c5d');ctx.save();roundRect(ctx,l.x+12,by,Math.max(0,bw*pct/100),bh,bh/2);ctx.fill();ctx.restore();
+ });
+}
 function drawUsage(ctx,l){
- const u=usageFor(l.provider);const m=u&&u.metrics?u.metrics[Math.min(l.metric||0,u.metrics.length-1)]:null;
+ const u=usageFor(l.provider);
  ctx.fillStyle='#1f1f1e';roundRect(ctx,l.x,l.y,l.w||224,l.h||82,8);ctx.fill();
  ctx.fillStyle=l.c||'#d97757';ctx.font='bold 12px monospace';ctx.textBaseline='top';ctx.textAlign='left';ctx.fillText(u?u.name:l.provider||'?',l.x+8,l.y+7);
+ if(!u||!u.metrics||!u.metrics.length){ctx.fillStyle='#8b96a5';ctx.font='10px monospace';ctx.fillText('waiting',l.x+12,l.y+30);return}
+ const all=(l.metric===undefined||l.metric===null||Number(l.metric)<0);
+ if(all&&u.metrics.length>1){drawUsageRows(ctx,l,u);return}
+ const m=u.metrics[all?0:Math.min(Number(l.metric)||0,u.metrics.length-1)];
  if(!m){ctx.fillStyle='#8b96a5';ctx.font='10px monospace';ctx.fillText('waiting',l.x+12,l.y+30);return}
  ctx.fillStyle='#8b96a5';ctx.font='10px monospace';ctx.textAlign='right';ctx.fillText(m.label,l.x+(l.w||224)-8,l.y+8);
  const hh=l.h||82, fs=hh>=74?28:(hh>=56?21:14);

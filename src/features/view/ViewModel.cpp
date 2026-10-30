@@ -157,7 +157,9 @@ static bool parsePrim(JsonObjectConst p, ViewScreen& sc, ViewPrim& out) {
     out.type  = VIEW_P_USAGE;
     out.x2    = (int16_t)w;
     out.y2    = (int16_t)h;
-    out.aux   = (uint8_t)constrain((int)(p["metric"] | 0), 0, USAGE_MAX_METRICS - 1);
+    // -1 (or an omitted metric) means "all metrics"; the renderer stacks them.
+    const int metric = p["metric"] | -1;
+    out.aux   = metric < 0 ? 255 : (uint8_t)constrain(metric, 0, USAGE_MAX_METRICS - 1);
     sc.hasUsage = true;
     out.voff  = sc.textUsed;
     memcpy(sc.text + sc.textUsed, provider, L);

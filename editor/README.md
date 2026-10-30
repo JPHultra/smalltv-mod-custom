@@ -41,8 +41,9 @@ The token is a write credential for `/api/dashboard`, `/api/view` and
   `{WD}`, `{WEEKDAY}` and `{YYYY}`.
 - Icons are drawn as placeholder boxes in the editor; the device renders the
   real vector icon.
-- Usage components read the latest provider snapshot pushed by the daemon. The
-  editor uses sample values until **Fetch usage** succeeds.
+- Usage components read the latest provider snapshot pushed by the daemon. A
+  `metric` of `-1` (or no metric) stacks every metric the provider sends; `0`-`2`
+  picks one. The editor uses sample values until **Fetch usage** succeeds.
 
 ## JSON shape
 
@@ -58,7 +59,7 @@ The token is a write credential for `/api/dashboard`, `/api/view` and
     {"t":"line","x":20,"y":226,"x2":220,"y2":226,"c":"#8b96a5"},
     {"t":"icon","x":40,"y":100,"s":2,"c":"#ffff00","a":"l","v":"sun"},
     {"t":"bitmap","x":60,"y":100,"w":8,"h":8,"s":2,"c":"#3fb950","a":"l","d":"AA55AA55AA55AA55"},
-    {"t":"usage","x":8,"y":120,"w":224,"h":82,"c":"#d97757","provider":"claude","metric":0}
+    {"t":"usage","x":8,"y":120,"w":224,"h":82,"c":"#d97757","provider":"claude","metric":-1}
   ]
 }
 ```

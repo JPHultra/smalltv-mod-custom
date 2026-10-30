@@ -85,13 +85,14 @@ editor.
   "ttl": 15,
   "draw": [
     {"t":"text","x":120,"y":30,"s":6,"c":"#e9edf4","a":"c","v":"{HH}:{MM}"},
-    {"t":"usage","x":8,"y":120,"w":224,"h":82,"c":"#d97757","provider":"claude","metric":0}
+    {"t":"usage","x":8,"y":120,"w":224,"h":82,"c":"#d97757","provider":"claude","metric":-1}
   ]
 }
 ```
 
 Primitives: `fill`, `rect`, `rrect`, `circle`, `line`, `text`, `icon`,
-`bitmap`, `usage`. Text supports `{HH}`, `{hh}`, `{MM}`, `{SS}`, `{DD}`,
+`bitmap`, `usage`. A usage component with `metric` omitted or set to `-1`
+stacks every metric the provider sends; `0`-`2` picks one. Text supports `{HH}`, `{hh}`, `{MM}`, `{SS}`, `{DD}`,
 `{MON}`, `{MONTH}`, `{WD}`, `{WEEKDAY}`, `{YYYY}`. `ttl` is used by the overlay;
 the stored dashboard ignores it. A sample lives in
 [`examples/view.json`](examples/view.json).

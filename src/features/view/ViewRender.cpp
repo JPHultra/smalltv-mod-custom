@@ -102,6 +102,77 @@ static uint16_t barColor(float pct) {
   return gfxTint(0x7C6B);
 }
 
+static void drawUsageBar(Arduino_GFX* gfx, int x, int y, int w, int h,
+                         float pct, uint16_t track) {
+  if (w <= 0 || h <= 0) return;
+  gfx->fillRoundRect(x, y, w, h, h / 2, track);
+  int filled = (int)(w * constrain(pct, 0.0f, 100.0f) / 100.0f);
+  if (filled >= h)    gfx->fillRoundRect(x, y, filled, h, h / 2, barColor(pct));
+  else if (filled > 0) gfx->fillRect(x, y, filled, h, barColor(pct));
+}
+
+static void drawUsageSingle(Arduino_GFX* gfx, int x, int y, int w, int h,
+                            const UsageMetric& m, uint16_t dim, uint16_t track) {
+  gfx->setTextSize(2);
+  gfx->setTextColor(dim);
+  gfx->setCursor(x + w - textWidth(m.label, 2) - 16, y + 8);
+  gfx->print(m.label);
+
+  char pct[10];
+  snprintf(pct, sizeof(pct), "%d%%", (int)lroundf(constrain(m.pct, 0.0f, 100.0f)));
+  uint8_t size = (h >= 74) ? 4 : (h >= 56 ? 3 : 2);
+  while (size > 1 && textWidth(pct, size) > w - 24) size--;
+  gfx->setTextSize(size);
+  gfx->setTextColor(gfxTint(0xFFFF));
+  gfx->setCursor(x + 12, y + 20);
+  gfx->print(pct);
+
+  const int bx = x + 12, bw = w - 24;
+  const int by = y + h - 14;
+  if (bw > 0 && by > y + 18) drawUsageBar(gfx, bx, by, bw, 8, m.pct, track);
+
+  if (h >= 80) {
+    char reset[20], line[36];
+    fmtReset(m.resetMin, reset, sizeof(reset));
+    snprintf(line, sizeof(line), "Resets in %s", reset);
+    gfx->setTextSize(1);
+    gfx->setTextColor(dim);
+    gfx->setCursor(x + 12, y + h - 28);
+    gfx->print(line);
+  }
+}
+
+// -1/omitted metric: stack every metric the provider sent, compactly.
+static void drawUsageRows(Arduino_GFX* gfx, int x, int y, int w, int h,
+                          const ProviderUsage& u, uint16_t dim, uint16_t track) {
+  const int count = u.metricCount;
+  if (count <= 0) return;
+  const int top = y + 20;
+  const int rowH = (h - 20) / count;
+  for (int i = 0; i < count; i++) {
+    const UsageMetric& m = u.metrics[i];
+    const int ry = top + i * rowH;
+    const bool large = rowH >= 24;
+    gfx->setTextSize(1);
+    gfx->setTextColor(dim);
+    gfx->setCursor(x + 12, ry);
+    gfx->print(m.label);
+
+    char pct[10];
+    snprintf(pct, sizeof(pct), "%d%%", (int)lroundf(constrain(m.pct, 0.0f, 100.0f)));
+    const uint8_t ps = large ? 2 : 1;
+    gfx->setTextSize(ps);
+    gfx->setTextColor(gfxTint(0xFFFF));
+    gfx->setCursor(x + w - textWidth(pct, ps) - 12, ry - (large ? 2 : 0));
+    gfx->print(pct);
+
+    const int by = ry + (large ? 13 : 9);
+    const int bh = large ? 6 : 4;
+    const int bw = w - 24;
+    if (bw > 0 && by + bh <= y + h) drawUsageBar(gfx, x + 12, by, bw, bh, m.pct, track);
+  }
+}
+
 static void drawUsage(Arduino_GFX* gfx, const ViewScreen& screen, const ViewPrim& p,
                       uint16_t accent) {
   const char* id = viewPrimText(screen, p);
@@ -136,13 +207,7 @@ static void drawUsage(Arduino_GFX* gfx, const ViewScreen& screen, const ViewPrim
     gfx->fillCircle(x + w - 8, y + 10, 3, dot);
   }
 
-  const UsageMetric* m = nullptr;
-  if (u && u->metricCount) {
-    int idx = p.aux < u->metricCount ? p.aux : 0;
-    m = &u->metrics[idx];
-  }
-
-  if (!m) {
+  if (!u || u->metricCount == 0) {
     const char* waiting = "waiting";
     const int ww = textWidth(waiting, 2);
     gfx->setTextSize(2);
@@ -152,40 +217,12 @@ static void drawUsage(Arduino_GFX* gfx, const ViewScreen& screen, const ViewPrim
     return;
   }
 
-  // Metric label, top-right.
-  gfx->setTextSize(2);
-  gfx->setTextColor(dim);
-  gfx->setCursor(x + w - textWidth(m->label, 2) - 16, y + 8);
-  gfx->print(m->label);
-
-  char pct[10];
-  snprintf(pct, sizeof(pct), "%d%%", (int)lroundf(constrain(m->pct, 0.0f, 100.0f)));
-  uint8_t size = (h >= 74) ? 4 : (h >= 56 ? 3 : 2);
-  while (size > 1 && textWidth(pct, size) > w - 24) size--;
-  gfx->setTextSize(size);
-  gfx->setTextColor(gfxTint(0xFFFF));
-  gfx->setCursor(x + 12, y + 20);
-  gfx->print(pct);
-
-  const int bx = x + 12, bw = w - 24;
-  const int by = y + h - 14;
-  const int bh = 8;
-  if (bw > 0 && by > y + 18) {
-    gfx->fillRoundRect(bx, by, bw, bh, bh / 2, track);
-    int fw = (int)(bw * constrain(m->pct, 0.0f, 100.0f) / 100.0f);
-    if (fw >= bh)    gfx->fillRoundRect(bx, by, fw, bh, bh / 2, barColor(m->pct));
-    else if (fw > 0) gfx->fillRect(bx, by, fw, bh, barColor(m->pct));
+  if (p.aux == 0xFF && u->metricCount > 1) {
+    drawUsageRows(gfx, x, y, w, h, *u, dim, track);
+    return;
   }
-
-  if (h >= 80) {
-    char reset[20], line[36];
-    fmtReset(m->resetMin, reset, sizeof(reset));
-    snprintf(line, sizeof(line), "Resets in %s", reset);
-    gfx->setTextSize(1);
-    gfx->setTextColor(dim);
-    gfx->setCursor(x + 12, y + h - 28);
-    gfx->print(line);
-  }
+  const int idx = (p.aux == 0xFF) ? 0 : (p.aux < u->metricCount ? p.aux : 0);
+  drawUsageSingle(gfx, x, y, w, h, u->metrics[idx], dim, track);
 }
 
 // ---------------------------------------------------------------------------
