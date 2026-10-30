@@ -75,3 +75,15 @@ class String {
   std::string s_;
 };
 inline String operator+(const char* a, const String& b) { return String(a) + b; }
+
+// Minimal timing / C-string helpers for the host parser tests.
+inline unsigned long millis() { return 0; }
+inline size_t strlcpy(char* dst, const char* src, size_t size) {
+  size_t len = strlen(src);
+  if (size) {
+    size_t copy = len < size - 1 ? len : size - 1;
+    memcpy(dst, src, copy);
+    dst[copy] = '\0';
+  }
+  return len;
+}

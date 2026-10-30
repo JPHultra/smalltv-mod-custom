@@ -63,6 +63,10 @@ c++ -std=c++11 -Wall -Wextra -Werror -g -Isrc tests/test_webguard.cpp -o /tmp/we
 c++ -std=c++11 -Wall -Wextra -Werror -g -DSMALLTV_ESP8266 \
   -Itests/shim -Isrc -Isrc/features/view -I.pio/libdeps/smalltv/ArduinoJson/src \
   tests/test_view.cpp src/features/view/ViewModel.cpp -o /tmp/view && /tmp/view
+c++ -std=c++11 -Wall -Wextra -Werror -g -DSMALLTV_ESP8266 \
+  -DARDUINOJSON_ENABLE_ARDUINO_STRING=1 -DARDUINOJSON_USE_DOUBLE=0 \
+  -Itests/shim -Isrc -Isrc/features/usage -I.pio/libdeps/smalltv/ArduinoJson/src \
+  tests/test_usage.cpp src/features/usage/UsageClient.cpp -o /tmp/usage && /tmp/usage
 python3 -m unittest discover -s daemon -p 'test_*.py'
 ```
 

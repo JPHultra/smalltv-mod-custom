@@ -120,6 +120,16 @@ jobs:
             -o /tmp/smalltv-view-tests
           /tmp/smalltv-view-tests
 
+      - name: Test usage parser
+        run: |
+          c++ -std=c++11 -Wall -Wextra -Werror -g -DSMALLTV_ESP8266 \
+            -DARDUINOJSON_ENABLE_ARDUINO_STRING=1 -DARDUINOJSON_USE_DOUBLE=0 \
+            -Itests/shim -Isrc -Isrc/features/usage \
+            -I.pio/libdeps/smalltv/ArduinoJson/src \
+            tests/test_usage.cpp src/features/usage/UsageClient.cpp \
+            -o /tmp/smalltv-usage-tests
+          /tmp/smalltv-usage-tests
+
       - name: Test usage daemon adapters
         run: python3 -m unittest discover -s daemon -p 'test_*.py'
 
