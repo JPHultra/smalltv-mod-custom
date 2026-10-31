@@ -71,22 +71,26 @@ bool ViewMode::replace(const String& json, String& error) {
 
 void ViewMode::begin() {
   reload();
+  painted_ = false;
   messageDrawn_ = false;
 }
 
 void ViewMode::repaint() {
   if (loaded_) {
     viewRender(screen_);
+    painted_ = true;
     lastUsageRev_ = usageRevision();
     lastClockKey_ = screen_.needsClock ? viewClockKey(screen_.needsSeconds) : 0;
     return;
   }
   gfxMessage("SmallTV View", "Push a view from the editor", C_YELLOW);
+  painted_ = true;
   messageDrawn_ = true;
 }
 
 void ViewMode::invalidate() {
   reload();
+  painted_ = false;
   messageDrawn_ = false;
   repaint();
 }
@@ -94,6 +98,10 @@ void ViewMode::invalidate() {
 void ViewMode::service() {
   if (!loaded_) {
     if (!messageDrawn_) repaint();
+    return;
+  }
+  if (!painted_) {
+    repaint();
     return;
   }
   const uint32_t rev = usageRevision();

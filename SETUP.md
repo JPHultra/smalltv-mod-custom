@@ -600,7 +600,7 @@ The device self-update is pointed at `JPHultra/smalltv-mod-custom` in
 `src/config.h`. Releases are built and published from this PC; there are no
 GitHub Actions.
 
-1. Edit `FW_VERSION` in `src/config.h` (currently `4.0.6-custom`) to the new version.
+1. Edit `FW_VERSION` in `src/config.h` (currently `4.0.7-custom`) to the new version.
 2. Build all targets and stage the assets:
 
 ```sh

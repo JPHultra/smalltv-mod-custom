@@ -27,6 +27,7 @@ class ViewMode {
  private:
   ViewScreen screen_{};
   bool       loaded_ = false;
+  bool       painted_ = false;
   bool       messageDrawn_ = false;
   uint32_t   lastUsageRev_ = 0;
   uint32_t   lastClockKey_ = 0;
