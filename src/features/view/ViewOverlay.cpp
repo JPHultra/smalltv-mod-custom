@@ -5,6 +5,8 @@
 
 ViewOverlay g_viewOverlay;
 
+ViewOverlay::~ViewOverlay() { delete pending_; }
+
 static uint16_t overlayTtl(const ViewScreen& screen, uint16_t defaultTtlSec) {
   uint32_t ttl = screen.ttl ? screen.ttl : defaultTtlSec;
   if (ttl < VIEW_OVERLAY_TTL_MIN_SEC) ttl = VIEW_OVERLAY_TTL_MIN_SEC;
@@ -28,7 +30,8 @@ bool ViewOverlay::show(const String& json, uint16_t defaultTtlSec, String& error
   const uint16_t ttl = overlayTtl(staging, defaultTtlSec);
 
   if (!active_) {
-    pendingValid_ = false;   // a stale queued item cannot survive an idle gap
+    delete pending_;         // a stale queued item cannot survive an idle gap
+    pending_ = nullptr;
     start(staging, ttl);
     return true;
   }
@@ -37,23 +40,25 @@ bool ViewOverlay::show(const String& json, uint16_t defaultTtlSec, String& error
     return true;
   }
   // Queue one item. Equal priority refreshes the waiting item (latest wins).
-  if (!pendingValid_ || staging.priority >= pending_.priority) {
-    pending_ = staging;
+  if (!pending_ || staging.priority >= pending_->priority) {
+    if (!pending_) pending_ = new ViewScreen;
+    if (pending_) *pending_ = staging;
     pendingTtl_ = ttl;
-    pendingValid_ = true;
   }
   return true;
 }
 
 void ViewOverlay::advance() {
-  if (!pendingValid_) {
+  if (!pending_) {
     active_ = false;
     g_viewMode.repaint();
     return;
   }
+  ViewScreen* next = pending_;
+  pending_ = nullptr;
   const uint16_t ttl = pendingTtl_;
-  pendingValid_ = false;
-  start(pending_, ttl);
+  start(*next, ttl);
+  delete next;
 }
 
 void ViewOverlay::service() {
@@ -77,8 +82,9 @@ void ViewOverlay::service() {
 }
 
 void ViewOverlay::dismiss() {
-  if (!active_ && !pendingValid_) return;
+  if (!active_ && !pending_) return;
   active_ = false;
-  pendingValid_ = false;
+  delete pending_;
+  pending_ = nullptr;
   g_viewMode.repaint();
 }

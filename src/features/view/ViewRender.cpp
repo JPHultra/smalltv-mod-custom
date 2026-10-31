@@ -335,12 +335,8 @@ static bool renderRegion(const ViewScreen& screen, int y0, int y1) {
   if (y1 > TFT_HEIGHT) y1 = TFT_HEIGHT;
   if (y1 <= y0) return false;
 
-  static ViewStripCanvas canvas(output);
-  static bool canvasReady = false;
-  if (!canvasReady) {
-    if (!canvas.begin(GFX_SKIP_OUTPUT_BEGIN)) return false;
-    canvasReady = true;
-  }
+  ViewStripCanvas canvas(output);
+  if (!canvas.begin(GFX_SKIP_OUTPUT_BEGIN)) return false;
 
   const int start = (y0 / VIEW_STRIP_H) * VIEW_STRIP_H;
   int end = ((y1 + VIEW_STRIP_H - 1) / VIEW_STRIP_H) * VIEW_STRIP_H;

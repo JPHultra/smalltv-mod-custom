@@ -26,7 +26,10 @@ static long verNum(const char* v) {
 
 OtaLatest otaCheckLatest(const Settings& s) {
   OtaLatest r;
-  if (ESP.getFreeHeap() < 20000) { r.error = F("low heap"); return r; }
+  if (ESP.getFreeHeap() < 20000) {
+    r.error = "low heap (" + String(ESP.getFreeHeap()) + ")";
+    return r;
+  }
 
   String url = F("https://");
   url += F(GH_API_HOST);
@@ -122,7 +125,8 @@ String otaUpdateFromGitHub(const Settings& s) {
   OtaLatest r = otaCheckLatest(s);
   if (!r.ok) return "check failed: " + r.error;
   if (!r.newer) return "already up to date (" FW_VERSION ")";
-  if (ESP.getFreeHeap() < 22000) return F("not enough free heap for a TLS update");
+  if (ESP.getFreeHeap() < 22000)
+    return "not enough free heap for a TLS update (" + String(ESP.getFreeHeap()) + ")";
 
   // mbedTLS manages its own buffers; each target pulls its own release asset
   // (UPDATE_ASSET in config.h). The two-slot OTA layout makes this atomic, so a

@@ -7,12 +7,13 @@
 
 class ViewOverlay {
  public:
+  ~ViewOverlay();
   // defaultTtlSec is used when the payload has no "ttl". Returns false on
   // invalid JSON; the current overlay/queue is then left untouched.
   bool show(const String& json, uint16_t defaultTtlSec, String& error);
   void service();
   bool active() const { return active_; }
-  bool queued() const { return pendingValid_; }
+  bool queued() const { return pending_ != nullptr; }
   // Clear the visible overlay and anything waiting; restore the dashboard.
   void dismiss();
   const String& error() const { return error_; }
@@ -22,9 +23,8 @@ class ViewOverlay {
   void advance();
 
   ViewScreen screen_{};
-  ViewScreen pending_{};
+  ViewScreen* pending_ = nullptr;
   bool       active_ = false;
-  bool       pendingValid_ = false;
   uint16_t   pendingTtl_ = 0;
   uint32_t   untilMs_ = 0;
   uint32_t   lastUsageRev_ = 0;

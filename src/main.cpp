@@ -188,13 +188,18 @@ void setup() {
   netAllowRetry(!g_safeMode);
   netBegin(g_settings, bootProgress);
   if (!g_safeMode || wgNeedsClock(g_settings)) clockReapply(g_settings);
-  wgBegin(g_settings, g_safeMode);
 
-  if (otaBootRequested()) {
+  // Keep the TLS update's heap free: WireGuard is not needed to reach GitHub,
+  // and it is started after a failed attempt (a successful one reboots).
+  const bool updatePending = otaBootRequested();
+  if (!updatePending) wgBegin(g_settings, g_safeMode);
+
+  if (updatePending) {
     Serial.println("[boot] github update");
     gfxBoot("SmallTV", "updating...");
     otaBootUpdate(g_settings);
     gfxBoot("SmallTV", "update failed");
+    wgBegin(g_settings, g_safeMode);
     delay(1200);
   }
 
