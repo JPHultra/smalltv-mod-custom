@@ -7,6 +7,7 @@
 #include "Gfx.h"
 #include "UsageClient.h"
 #include "ViewIcons.h"
+#include "font/glcdfont.h"
 
 // ---------------------------------------------------------------------------
 // Text tokens. A text primitive may contain {HH}, {MM}, ...; the same tokens
@@ -84,6 +85,30 @@ static void textAnchor(const char* text, uint8_t size, uint8_t align, int x, int
                                   : x;
 }
 
+// Draw the built-in 5x7 font pixel by pixel. Arduino_GFX's scaled drawChar
+// skips a whole glyph row when it does not fit the target, which leaves raster
+// seams when text is rendered through a strip canvas. This clips every pixel.
+static void drawGlyphString(Arduino_GFX* gfx, const char* text, int x, int y,
+                            uint8_t size, uint16_t color) {
+  if (!text || !*text) return;
+  const uint8_t s = size ? size : 1;
+  int cx = x, cy = y;
+  for (const char* p = text; *p; ++p) {
+    const unsigned char c = (unsigned char)*p;
+    if (c == '\r') continue;
+    if (c == '\n') { cx = x; cy += 8 * s; continue; }
+    for (uint8_t i = 0; i < 5; i++) {
+      uint8_t line = pgm_read_byte(&font[c * 5 + i]);
+      for (uint8_t j = 0; j < 8; j++, line >>= 1) {
+        if (!(line & 1)) continue;
+        if (s == 1) gfx->drawPixel(cx + i, cy + j, color);
+        else        gfx->fillRect(cx + i * s, cy + j * s, s, s, color);
+      }
+    }
+    cx += 6 * s;
+  }
+}
+
 static void drawTextPrim(Arduino_GFX* gfx, const ViewScreen& screen,
                          const ViewPrim& p, uint16_t color) {
   char out[VIEW_MAX_TEXT * 2];
@@ -91,10 +116,7 @@ static void drawTextPrim(Arduino_GFX* gfx, const ViewScreen& screen,
   const uint8_t size = p.aux ? p.aux : 1;
   int x;
   textAnchor(out, size, p.align, p.x, x);
-  gfx->setTextSize(size);
-  gfx->setTextColor(color);
-  gfx->setCursor(x, p.y);
-  gfx->print(out);
+  drawGlyphString(gfx, out, x, p.y, size, color);
 }
 
 // ---------------------------------------------------------------------------
@@ -126,10 +148,7 @@ static void drawUsageBar(Arduino_GFX* gfx, int x, int y, int w, int h,
 
 static void drawUsageSingle(Arduino_GFX* gfx, int x, int y, int w, int h,
                             const UsageMetric& m, uint16_t dim, uint16_t track) {
-  gfx->setTextSize(2);
-  gfx->setTextColor(dim);
-  gfx->setCursor(x + w - textWidth(m.label, 2) - 16, y + 8);
-  gfx->print(m.label);
+  drawGlyphString(gfx, m.label, x + w - textWidth(m.label, 2) - 16, y + 8, 2, dim);
 
   char pct[10];
   snprintf(pct, sizeof(pct), "%d%%", (int)lroundf(constrain(m.pct, 0.0f, 100.0f)));
@@ -143,10 +162,7 @@ static void drawUsageSingle(Arduino_GFX* gfx, int x, int y, int w, int h,
     if (maxChars < 1) maxChars = 1;
     if ((size_t)maxChars < strlen(big)) big[maxChars] = 0;
   }
-  gfx->setTextSize(size);
-  gfx->setTextColor(gfxTint(0xFFFF));
-  gfx->setCursor(x + 12, y + 20);
-  gfx->print(big);
+  drawGlyphString(gfx, big, x + 12, y + 20, size, gfxTint(0xFFFF));
 
   const int bx = x + 12, bw = w - 24;
   const int by = y + h - 14;
@@ -157,10 +173,7 @@ static void drawUsageSingle(Arduino_GFX* gfx, int x, int y, int w, int h,
     char reset[20], line[36];
     fmtReset(m.resetMin, reset, sizeof(reset));
     snprintf(line, sizeof(line), "Resets in %s", reset);
-    gfx->setTextSize(1);
-    gfx->setTextColor(dim);
-    gfx->setCursor(x + 12, y + h - 28);
-    gfx->print(line);
+    drawGlyphString(gfx, line, x + 12, y + h - 28, 1, dim);
   }
 }
 
@@ -175,10 +188,7 @@ static void drawUsageRows(Arduino_GFX* gfx, int x, int y, int w, int h,
     const UsageMetric& m = u.metrics[i];
     const int ry = top + i * rowH;
     const bool large = rowH >= 24;
-    gfx->setTextSize(1);
-    gfx->setTextColor(dim);
-    gfx->setCursor(x + 12, ry);
-    gfx->print(m.label);
+    drawGlyphString(gfx, m.label, x + 12, ry, 1, dim);
 
     char pct[10];
     snprintf(pct, sizeof(pct), "%d%%", (int)lroundf(constrain(m.pct, 0.0f, 100.0f)));
@@ -193,10 +203,8 @@ static void drawUsageRows(Arduino_GFX* gfx, int x, int y, int w, int h,
       if (maxChars < 1) maxChars = 1;
       if ((size_t)maxChars < strlen(right)) right[maxChars] = 0;
     }
-    gfx->setTextSize(ps);
-    gfx->setTextColor(gfxTint(0xFFFF));
-    gfx->setCursor(x + w - textWidth(right, ps) - 12, ry - (large ? 2 : 0));
-    gfx->print(right);
+    drawGlyphString(gfx, right, x + w - textWidth(right, ps) - 12,
+                    ry - (large ? 2 : 0), ps, gfxTint(0xFFFF));
 
     const int by = ry + (large ? 13 : 9);
     const int bh = large ? 6 : 4;
@@ -227,10 +235,7 @@ static void drawUsage(Arduino_GFX* gfx, const ViewScreen& screen, const ViewPrim
     if (maxChars < 1) maxChars = 1;
     if ((size_t)maxChars < strlen(label)) label[maxChars] = 0;
   }
-  gfx->setTextSize(nameSize);
-  gfx->setTextColor(accent);
-  gfx->setCursor(x + 8, y + 6);
-  gfx->print(label);
+  drawGlyphString(gfx, label, x + 8, y + 6, nameSize, accent);
 
   // State dot: green when data is fresh, red when the last push failed, dim
   // when the provider has no data yet or the snapshot is stale.
@@ -243,10 +248,7 @@ static void drawUsage(Arduino_GFX* gfx, const ViewScreen& screen, const ViewPrim
   if (!u || u->metricCount == 0) {
     const char* waiting = "waiting";
     const int ww = textWidth(waiting, 2);
-    gfx->setTextSize(2);
-    gfx->setTextColor(dim);
-    gfx->setCursor(x + (w - ww) / 2, y + h / 2 - 8);
-    gfx->print(waiting);
+    drawGlyphString(gfx, waiting, x + (w - ww) / 2, y + h / 2 - 8, 2, dim);
     return;
   }
 
