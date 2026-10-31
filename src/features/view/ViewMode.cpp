@@ -101,9 +101,11 @@ void ViewMode::service() {
   const bool usageChanged = screen_.hasUsage && rev != lastUsageRev_;
   const bool clockChanged = screen_.needsClock && clock != lastClockKey_;
   if (usageChanged) {
-    repaint();
-  } else if (clockChanged) {
-    if (!viewRenderClock(screen_)) repaint();
-    else lastClockKey_ = clock;
+    if (!viewRenderUsage(screen_)) { repaint(); return; }
+    lastUsageRev_ = rev;
+  }
+  if (clockChanged) {
+    if (!viewRenderText(screen_)) { repaint(); return; }
+    lastClockKey_ = clock;
   }
 }

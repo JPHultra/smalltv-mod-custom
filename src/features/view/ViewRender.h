@@ -5,6 +5,8 @@
 // drawn in array order, back to front.
 void viewRender(const ViewScreen& screen);
 
-// Repaint only token text (clock/date) when nothing underneath it changed.
+// Repaint only the rows occupied by token text or usage cards. The strip
+// canvas clips every primitive, so this is safe with overlapping layouts.
 // Returns false when the caller must do a full viewRender instead.
-bool viewRenderClock(const ViewScreen& screen);
+bool viewRenderText(const ViewScreen& screen);
+bool viewRenderUsage(const ViewScreen& screen);

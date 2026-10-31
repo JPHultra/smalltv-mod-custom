@@ -216,17 +216,19 @@ static const HaIconEntry kIcons[] = {
   { "x",             ic_x },
 };
 
-bool viewDrawIcon(const char* name, int x, int y, int s, uint16_t color) {
-  if (!name || !name[0]) return false;
+bool viewDrawIcon(Arduino_GFX* target, const char* name, int x, int y, int s, uint16_t color) {
+  if (!name || !name[0] || !target) return false;
   for (uint8_t i = 0; i < sizeof(kIcons) / sizeof(kIcons[0]); i++) {
     if (strcmp(kIcons[i].name, name)) continue;
-    Arduino_GFX* gfx = gfxDev();
-    if (!gfx) return false;
-    G = gfx; S = constrain(s, 1, 8); C = color; OX = x; OY = y;
+    G = target; S = constrain(s, 1, 8); C = color; OX = x; OY = y;
     kIcons[i].draw();
     return true;
   }
   return false;   // unknown name: the renderer skips it silently
+}
+
+bool viewDrawIcon(const char* name, int x, int y, int s, uint16_t color) {
+  return viewDrawIcon(gfxDev(), name, x, y, s, color);
 }
 
 #endif  // WITH_VIEW

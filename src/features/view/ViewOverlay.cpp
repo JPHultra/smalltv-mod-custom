@@ -67,14 +67,11 @@ void ViewOverlay::service() {
   const bool usageChanged = screen_.hasUsage && rev != lastUsageRev_;
   const bool clockChanged = screen_.needsClock && clock != lastClockKey_;
   if (usageChanged) {
-    viewRender(screen_);
+    if (!viewRenderUsage(screen_)) { viewRender(screen_); return; }
     lastUsageRev_ = rev;
-    lastClockKey_ = clock;
-  } else if (clockChanged) {
-    if (!viewRenderClock(screen_)) {
-      viewRender(screen_);
-      lastUsageRev_ = rev;
-    }
+  }
+  if (clockChanged) {
+    if (!viewRenderText(screen_)) { viewRender(screen_); return; }
     lastClockKey_ = clock;
   }
 }

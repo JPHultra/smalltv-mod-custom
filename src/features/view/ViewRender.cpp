@@ -84,111 +84,6 @@ static void textAnchor(const char* text, uint8_t size, uint8_t align, int x, int
                                   : x;
 }
 
-// ---------------------------------------------------------------------------
-// Bounds helpers for partial clock repaints. The panel has no framebuffer, so
-// repainting the whole view flashes. A token text change is redrawn in place
-// only when no shape/icon/usage layer sits in the cleared box.
-// ---------------------------------------------------------------------------
-struct ViewBox { int x, y, w, h; };
-
-static bool overlaps(const ViewBox& a, const ViewBox& b) {
-  return a.w > 0 && a.h > 0 && b.w > 0 && b.h > 0 &&
-         a.x < b.x + b.w && b.x < a.x + a.w &&
-         a.y < b.y + b.h && b.y < a.y + a.h;
-}
-
-static ViewBox clippedBox(int x, int y, int w, int h) {
-  int x0 = x < 0 ? 0 : x;
-  int y0 = y < 0 ? 0 : y;
-  int x1 = x + w > TFT_WIDTH ? TFT_WIDTH : x + w;
-  int y1 = y + h > TFT_HEIGHT ? TFT_HEIGHT : y + h;
-  if (x0 > TFT_WIDTH) x0 = TFT_WIDTH;
-  if (y0 > TFT_HEIGHT) y0 = TFT_HEIGHT;
-  if (x1 < x0) x1 = x0;
-  if (y1 < y0) y1 = y0;
-  return {x0, y0, x1 - x0, y1 - y0};
-}
-
-static int maxTextWidth(const char* in, uint8_t size) {
-  int chars = 0;
-  for (size_t i = 0; in[i];) {
-    if (in[i] != '{') { chars++; i++; continue; }
-    const char* end = strchr(in + i, '}');
-    if (!end) { chars++; i++; continue; }
-    size_t len = (size_t)(end - (in + i + 1));
-    char token[20];
-    if (len >= sizeof(token)) { chars++; i++; continue; }
-    memcpy(token, in + i + 1, len);
-    token[len] = 0;
-    int max = 0;
-    if (!strcmp(token, "HH") || !strcmp(token, "hh") ||
-        !strcmp(token, "MM") || !strcmp(token, "SS") || !strcmp(token, "DD")) max = 2;
-    else if (!strcmp(token, "YYYY")) max = 4;
-    else if (!strcmp(token, "MON") || !strcmp(token, "WD")) max = 3;
-    else if (!strcmp(token, "MONTH") || !strcmp(token, "WEEKDAY")) max = 9;
-    chars += max ? max : (int)len + 2;
-    i = (size_t)(end - in) + 1;
-  }
-  return chars * 6 * (size ? size : 1);
-}
-
-static ViewBox textBox(const ViewScreen& screen, const ViewPrim& p, bool maxWidth) {
-  const char* raw = viewPrimText(screen, p);
-  char out[VIEW_MAX_TEXT * 2];
-  expandText(raw, out, sizeof(out));
-  const uint8_t size = p.aux ? p.aux : 1;
-  int w = maxWidth ? maxTextWidth(raw, size) : textWidth(out, size);
-  if (maxWidth) {
-    const int current = textWidth(out, size);
-    if (current > w) w = current;
-  }
-  int x = (p.align == VIEW_A_CENTER) ? p.x - w / 2
-        : (p.align == VIEW_A_RIGHT)  ? p.x - w
-                                     : p.x;
-  ViewBox box = clippedBox(x, p.y, w, 8 * size);
-  if (maxWidth) {
-    box.x -= 1; box.y -= 1; box.w += 2; box.h += 2;
-    box = clippedBox(box.x, box.y, box.w, box.h);
-  }
-  return box;
-}
-
-static ViewBox primBox(const ViewScreen& screen, const ViewPrim& p) {
-  switch (p.type) {
-    case VIEW_P_FILL:
-      return {0, 0, TFT_WIDTH, TFT_HEIGHT};
-    case VIEW_P_RECT:
-    case VIEW_P_RRECT:
-    case VIEW_P_USAGE:
-      return clippedBox(p.x, p.y, p.x2, p.y2);
-    case VIEW_P_CIRCLE:
-      return clippedBox(p.x - p.aux, p.y - p.aux, p.aux * 2 + 1, p.aux * 2 + 1);
-    case VIEW_P_LINE: {
-      const int x = p.x < p.x2 ? p.x : p.x2;
-      const int y = p.y < p.y2 ? p.y : p.y2;
-      return clippedBox(x, y, (p.x < p.x2 ? p.x2 - p.x : p.x - p.x2) + 1,
-                              (p.y < p.y2 ? p.y2 - p.y : p.y - p.y2) + 1);
-    }
-    case VIEW_P_TEXT:
-      return textBox(screen, p, false);
-    case VIEW_P_ICON: {
-      const int size = p.aux ? p.aux : 1;
-      const int w = 24 * size;
-      const int x = (p.align == VIEW_A_CENTER) ? p.x - w / 2
-                  : (p.align == VIEW_A_RIGHT)  ? p.x - w : p.x;
-      return clippedBox(x, p.y, w, w);
-    }
-    case VIEW_P_BITMAP: {
-      const int s = p.aux ? p.aux : 1;
-      const int w = p.x2 * s, h = p.y2 * s;
-      const int x = (p.align == VIEW_A_CENTER) ? p.x - w / 2
-                  : (p.align == VIEW_A_RIGHT)  ? p.x - w : p.x;
-      return clippedBox(x, p.y, w, h);
-    }
-  }
-  return {0, 0, 0, 0};
-}
-
 static void drawTextPrim(Arduino_GFX* gfx, const ViewScreen& screen,
                          const ViewPrim& p, uint16_t color) {
   char out[VIEW_MAX_TEXT * 2];
@@ -364,55 +259,24 @@ static void drawUsage(Arduino_GFX* gfx, const ViewScreen& screen, const ViewPrim
 }
 
 // ---------------------------------------------------------------------------
-bool viewRenderClock(const ViewScreen& screen) {
-  Arduino_GFX* gfx = gfxDev();
-  if (!gfx) return false;
+// The panel has no framebuffer. Render into a small strip canvas and flush each
+// strip, so updates never blank the whole screen. A dirty row range is clipped
+// by the canvas: every primitive is drawn in order, just like a full render.
+// ---------------------------------------------------------------------------
+static const int VIEW_STRIP_H = 8;
 
-  ViewBox clear[VIEW_MAX_PRIMS];
-  int clearCount = 0;
+class ViewStripCanvas : public Arduino_Canvas {
+ public:
+  explicit ViewStripCanvas(Arduino_G* output)
+      : Arduino_Canvas(TFT_WIDTH, VIEW_STRIP_H, output, 0, 0) {}
+  void setOutputY(int16_t y) { _output_y = y; }
+};
+
+static void drawPrims(const ViewScreen& screen, Arduino_GFX* gfx, int yOffset) {
   for (uint8_t i = 0; i < screen.primCount; i++) {
-    const ViewPrim& p = screen.prims[i];
-    if (p.type != VIEW_P_TEXT) continue;
-    const char* raw = viewPrimText(screen, p);
-    if (!strchr(raw, '{')) continue;
-    clear[clearCount++] = textBox(screen, p, true);
-  }
-  if (!clearCount) return false;
-
-  // A shape/icon/usage card in the changed area needs a normal full render;
-  // painting it here could overwrite layers outside the dirty box.
-  for (uint8_t i = 0; i < screen.primCount; i++) {
-    const ViewPrim& p = screen.prims[i];
-    if (p.type == VIEW_P_TEXT) continue;
-    const ViewBox b = primBox(screen, p);
-    for (int j = 0; j < clearCount; j++) {
-      if (overlaps(b, clear[j])) return false;
-    }
-  }
-
-  for (int i = 0; i < clearCount; i++) {
-    gfx->fillRect(clear[i].x, clear[i].y, clear[i].w, clear[i].h, gfxTint(screen.bg));
-  }
-  for (uint8_t i = 0; i < screen.primCount; i++) {
-    const ViewPrim& p = screen.prims[i];
-    if (p.type != VIEW_P_TEXT) continue;
-    const ViewBox b = textBox(screen, p, false);
-    bool hit = false;
-    for (int j = 0; j < clearCount; j++) {
-      if (overlaps(b, clear[j])) { hit = true; break; }
-    }
-    if (hit) drawTextPrim(gfx, screen, p, gfxTint(p.color));
-  }
-  return true;
-}
-
-void viewRender(const ViewScreen& screen) {
-  Arduino_GFX* gfx = gfxDev();
-  if (!gfx) return;
-  gfx->fillScreen(gfxTint(screen.bg));
-
-  for (uint8_t i = 0; i < screen.primCount; i++) {
-    const ViewPrim& p = screen.prims[i];
+    ViewPrim p = screen.prims[i];
+    p.y -= yOffset;
+    if (p.type == VIEW_P_LINE) p.y2 -= yOffset;
     const uint16_t c = gfxTint(p.color);
     switch (p.type) {
       case VIEW_P_FILL:
@@ -434,18 +298,18 @@ void viewRender(const ViewScreen& screen) {
         drawTextPrim(gfx, screen, p, c);
         break;
       case VIEW_P_ICON: {
-        uint8_t size = p.aux ? p.aux : 1;
+        const uint8_t size = p.aux ? p.aux : 1;
         const int iw = 24 * size;
-        int x = (p.align == VIEW_A_CENTER) ? p.x - iw / 2
-              : (p.align == VIEW_A_RIGHT)  ? p.x - iw : p.x;
-        viewDrawIcon(viewPrimText(screen, p), x, p.y, size, c);
+        const int x = (p.align == VIEW_A_CENTER) ? p.x - iw / 2
+                    : (p.align == VIEW_A_RIGHT)  ? p.x - iw : p.x;
+        viewDrawIcon(gfx, viewPrimText(screen, p), x, p.y, size, c);
         break;
       }
       case VIEW_P_BITMAP: {
         const int w = p.x2, h = p.y2, s = p.aux ? p.aux : 1;
         const int rw = w * s;
-        int x = (p.align == VIEW_A_CENTER) ? p.x - rw / 2
-              : (p.align == VIEW_A_RIGHT)  ? p.x - rw : p.x;
+        const int x = (p.align == VIEW_A_CENTER) ? p.x - rw / 2
+                    : (p.align == VIEW_A_RIGHT)  ? p.x - rw : p.x;
         const uint8_t* bits = screen.bitmap + p.voff;
         for (int py = 0; py < h; py++)
           for (int px = 0; px < w; px++) {
@@ -462,4 +326,63 @@ void viewRender(const ViewScreen& screen) {
         break;
     }
   }
+}
+
+static bool renderRegion(const ViewScreen& screen, int y0, int y1) {
+  Arduino_GFX* output = gfxDev();
+  if (!output) return false;
+  if (y0 < 0) y0 = 0;
+  if (y1 > TFT_HEIGHT) y1 = TFT_HEIGHT;
+  if (y1 <= y0) return false;
+
+  static ViewStripCanvas canvas(output);
+  static bool canvasReady = false;
+  if (!canvasReady) {
+    if (!canvas.begin(GFX_SKIP_OUTPUT_BEGIN)) return false;
+    canvasReady = true;
+  }
+
+  const int start = (y0 / VIEW_STRIP_H) * VIEW_STRIP_H;
+  int end = ((y1 + VIEW_STRIP_H - 1) / VIEW_STRIP_H) * VIEW_STRIP_H;
+  if (end > TFT_HEIGHT) end = TFT_HEIGHT;
+  for (int y = start; y < end; y += VIEW_STRIP_H) {
+    canvas.setOutputY(y);
+    canvas.fillScreen(gfxTint(screen.bg));
+    drawPrims(screen, &canvas, y);
+    canvas.flush();
+  }
+  return true;
+}
+
+bool viewRenderText(const ViewScreen& screen) {
+  int y0 = TFT_HEIGHT, y1 = 0;
+  for (uint8_t i = 0; i < screen.primCount; i++) {
+    const ViewPrim& p = screen.prims[i];
+    if (p.type != VIEW_P_TEXT || !strchr(viewPrimText(screen, p), '{')) continue;
+    const int size = p.aux ? p.aux : 1;
+    if (p.y - 1 < y0) y0 = p.y - 1;
+    if (p.y + 8 * size + 1 > y1) y1 = p.y + 8 * size + 1;
+  }
+  return y1 > y0 && renderRegion(screen, y0, y1);
+}
+
+bool viewRenderUsage(const ViewScreen& screen) {
+  bool rendered = false;
+  for (uint8_t i = 0; i < screen.primCount; i++) {
+    const ViewPrim& p = screen.prims[i];
+    if (p.type != VIEW_P_USAGE || p.x2 <= 0 || p.y2 <= 0) continue;
+    if (!renderRegion(screen, p.y, p.y + p.y2)) return false;
+    rendered = true;
+  }
+  return rendered;
+}
+
+void viewRender(const ViewScreen& screen) {
+  if (renderRegion(screen, 0, TFT_HEIGHT)) return;
+
+  // Last-resort path if the strip canvas cannot be allocated.
+  Arduino_GFX* gfx = gfxDev();
+  if (!gfx) return;
+  gfx->fillScreen(gfxTint(screen.bg));
+  drawPrims(screen, gfx, 0);
 }
