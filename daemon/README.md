@@ -34,6 +34,25 @@ The legacy Claude-only shape is still accepted:
 
 ## Configure and run
 
+One step on Linux installs the user service and opens the setup page:
+
+```sh
+daemon/setup_linux.sh --device http://smalltv.local
+```
+
+One step on Windows installs the login task and opens the same page:
+
+```bat
+daemon\setup_windows.bat -DeviceUrl http://smalltv.local
+```
+
+For start-before-login: add `--linger` on Linux, or run
+`daemon\install_windows.bat -AtStartup` (and `daemon\setup_windows.bat
+-AtStartup`) from an elevated prompt on Windows. The browser is only for initial
+credential entry; the daemon itself runs hidden.
+
+Manual equivalent:
+
 ```sh
 cp daemon/usage-daemon.example.json daemon/usage-daemon.json
 python3 daemon/setup_ui.py --config daemon/usage-daemon.json

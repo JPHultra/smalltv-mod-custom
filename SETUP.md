@@ -302,8 +302,21 @@ its `device` to your device URL:
 
 The example stores provider credentials in the platform config directory:
 `~/.config/smalltv/credentials.json` on Linux/macOS, or
-`%APPDATA%\smalltv\credentials.json` on Windows. Enter them with the local
-setup UI:
+`%APPDATA%\smalltv\credentials.json` on Windows.
+
+One-step setup installs auto-start and opens the credential page:
+
+```sh
+daemon/setup_linux.sh --device http://192.168.1.50
+```
+
+```bat
+daemon\setup_windows.bat -DeviceUrl http://192.168.1.50
+```
+
+Add `--linger` on Linux or `-AtStartup` on Windows for start-before-login. The
+browser is only for initial credential entry; the daemon runs hidden. The manual
+setup UI alternative:
 
 ```sh
 python3 daemon/setup_ui.py --config daemon/usage-daemon.json

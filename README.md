@@ -176,9 +176,18 @@ One local process normalizes the three providers and POSTs the document to
   to the daemon.
 - **Generic / normalized** sources via dotted JSON paths or a pre-shaped object.
 
-Copy `daemon/usage-daemon.example.json` to `daemon/usage-daemon.json`
-(git-ignored), point the providers at your sources, and run it. Provider
-credentials are entered through the local setup UI:
+One-step setup installs auto-start and opens the credential page:
+
+```sh
+daemon/setup_linux.sh --device http://smalltv.local
+```
+
+```bat
+daemon\setup_windows.bat -DeviceUrl http://smalltv.local
+```
+
+Add `--linger` on Linux or `-AtStartup` on Windows for start-before-login. The
+manual setup UI is:
 
 ```sh
 python3 daemon/setup_ui.py --config daemon/usage-daemon.json
