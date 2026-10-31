@@ -1,7 +1,6 @@
 #include "Clock.h"
 #include "Platform.h"
 #include "config.h"
-#include "WgClient.h"
 
 static String            s_armedTz;          // last tzPosix armed (clockReapply re-arms only on change)
 static bool              s_ntpStarted = false; // SNTP has been started for a clock consumer
@@ -40,16 +39,8 @@ void clockBegin(const Settings& s) {
 }
 
 void clockReapply(const Settings& s) {
-  // SNTP only runs when something needs it. Starting the lwIP SNTP client is a
-  // permanent mid-arena heap allocation, and on the memory-tight ESP8266 that can
-  // fragment the largest contiguous block below what the cash.ch TLS handshake
-  // needs (blanking those tickers). So arm on the first enable, re-arm on a
-  // timezone change, and otherwise leave it alone. Night mode is one caller; a
-  // WireGuard tunnel and theme clocks also need it. The peer rejects a handshake stamped
-  // with a wrong clock (and that build is an ESP32, where the heap cost is moot).
-  const bool themeOnScreen = WITH_THEME &&
-      (s.mode == MODE_THEME || (s.mode == MODE_CAROUSEL && s.carouselTheme));
-  if (!s.clock.nightEnabled && !wgNeedsClock(s) && !themeOnScreen) return;
+  // The dashboard may contain clock tokens, so NTP is always wanted now. Arm
+  // it once and re-arm only when the timezone rule changes.
   if (!s_ntpStarted || s.clock.tzPosix != s_armedTz) clockBegin(s);
 }
 

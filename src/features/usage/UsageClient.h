@@ -1,18 +1,21 @@
-// UsageClient.h — pulls Claude usage from the local daemon's HTTP endpoint.
+// UsageClient.h — the device side of the usage daemon contract.
 //
-// The companion daemon (see daemon/) polls the Claude API rate-limit headers and
-// serves the latest snapshot as a tiny JSON object. The device GETs that URL on
-// its poll schedule — exactly like the stock webhook, but a different contract.
+// The daemon POSTs one normalized document to /api/usage. The legacy Claude
+// payload ({s,sr,w,wr,st,ok}) is still accepted and mapped to a "claude"
+// provider, so an existing clawdmeter-daemon keeps working.
 #pragma once
 #include "Settings.h"
 #include "UsageData.h"
 
-void usageInit(const Settings& s);
-void usageService(const Settings& s);     // call each loop; fetches on the poll schedule
-void usageForceRefresh();                 // poll again on the next service() call
-const UsageData& usageGet();
-bool usageFresh(uint32_t withinMs);       // true if the last good update is recent enough
+void usageInit();
+bool usageApply(const String& body);
 
-// Apply a usage payload PUSHED to the device (POST /api/usage) — used when the
-// device can't reach the daemon (Wi-Fi client isolation) so the daemon pushes.
-bool usageApply(const String& body);      // parse {s,sr,w,wr,st,ok}; true on success
+const ProviderUsage* usageFind(const char* id);
+bool usageStale(const ProviderUsage& provider, uint32_t withinMs = USAGE_STALE_MS);
+
+// Bumped on every accepted push; the dashboard/overlay use it to repaint only
+// when something actually arrived.
+uint32_t usageRevision();
+
+// /api/status and /api/usage reply shape.
+void usageStatusJson(JsonObject& root);

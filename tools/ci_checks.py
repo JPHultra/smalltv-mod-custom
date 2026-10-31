@@ -151,12 +151,16 @@ def cmd_assets(args):
         wanted = re.findall(r'#\s*define\s+UPDATE_ASSET\s+"([^"]+)"', f.read())
     with open(args.workflow, encoding="utf-8") as f:
         staged = set(re.findall(r"^\s*copy\s+\S+\s+dist/(\S+)\s*$", f.read(), re.M))
+    # The release builder stages from its ASSETS table; take the release names
+    # from there too, so a workflow that delegates to the script is covered.
+    with open(args.script, encoding="utf-8") as f:
+        staged |= set(re.findall(r'"(smalltv-mod-[^"]+\.bin)"', f.read()))
     if not wanted:
         print("::error::asset check: no UPDATE_ASSET found in %s" % args.config_h)
         return 1
     if not staged:
-        print("::error::asset check: no `copy <src> dist/<name>` lines found in %s"
-              % args.workflow)
+        print("::error::asset check: no dist/ asset names found in %s or %s"
+              % (args.workflow, args.script))
         return 1
     bad = False
     for a in wanted:
@@ -165,9 +169,11 @@ def cmd_assets(args):
         if not ok:
             bad = True
             print("::error::asset check: UPDATE_ASSET \"%s\" in %s is not staged "
-                  "into dist/ by %s (staged: %s). A device on that variant would "
-                  "find no matching release asset and could never self-update."
-                  % (a, args.config_h, args.workflow, ", ".join(sorted(staged))))
+                  "into dist/ by %s or %s (staged: %s). A device on that variant "
+                  "would find no matching release asset and could never "
+                  "self-update."
+                  % (a, args.config_h, args.workflow, args.script,
+                     ", ".join(sorted(staged))))
     return 1 if bad else 0
 
 
@@ -185,9 +191,10 @@ def main():
                    help="skip envs without a firmware.bin (local use)")
     s.set_defaults(fn=cmd_size)
 
-    a = sub.add_parser("assets", help="UPDATE_ASSET names vs dist/ copy lines")
+    a = sub.add_parser("assets", help="UPDATE_ASSET names vs dist/ staging")
     a.add_argument("--config-h", default="src/config.h")
     a.add_argument("--workflow", default=".github/workflows/build.yml")
+    a.add_argument("--script", default="tools/build_release.py")
     a.set_defaults(fn=cmd_assets)
 
     args = p.parse_args()

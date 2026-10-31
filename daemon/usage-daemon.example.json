@@ -1,0 +1,30 @@
+{
+  "device": "http://smalltv.local",
+  "interval": 60,
+  "timeout": 10,
+  "credentialsFile": "~/.config/smalltv/credentials.json",
+  "providers": [
+    {
+      "id": "claude",
+      "name": "Claude",
+      "adapter": "claude"
+    },
+    {
+      "id": "chatgpt",
+      "name": "Codex",
+      "adapter": "codex",
+      "includePlan": true,
+      "includeCredits": false,
+      "includeAdditional": false
+    },
+    {
+      "id": "deepseek",
+      "name": "DeepSeek",
+      "adapter": "deepseek",
+      "usageUrl": "http://127.0.0.1:8789/usage",
+      "usagePath": "today.total_tokens",
+      "usageLabel": "tokens today",
+      "usageBudget": 0
+    }
+  ]
+}

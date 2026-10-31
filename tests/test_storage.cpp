@@ -114,7 +114,7 @@ int main() {
   assert(applyAndSaveSettings(state, [](State& s) { s.value = 3; }, [&](const State& s) { return savedState && s.value == 3; }));
   assert(state.value == 3);
 
-  // The HA brightness write (MqttClient): it waits for 5 s of quiet, and a
+  // The debounced brightness write: it waits for 5 s of quiet, and a
   // write that fails (out of memory next to a running theme) stays pending and
   // is tried again 30 s later, instead of being dropped.
   int calls = 0;

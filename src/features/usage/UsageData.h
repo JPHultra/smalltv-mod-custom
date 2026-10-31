@@ -1,26 +1,31 @@
-// UsageData.h — runtime (volatile) Claude usage snapshot from the daemon.
+// UsageData.h — one normalized usage snapshot per provider.
+//
+// The companion daemon is the only writer. It pushes Claude, ChatGPT and
+// DeepSeek data in one JSON document; the firmware stores the latest snapshot
+// per provider and the dashboard's usage components read it.
 #pragma once
 #include <Arduino.h>
+#include "config.h"
 
-struct UsageData {
-  float    sessionPct;       // 5-hour window utilization (0..100)
-  int      sessionResetMin;  // minutes until the 5-hour window resets
-  float    weeklyPct;        // 7-day window utilization (0..100)
-  int      weeklyResetMin;   // minutes until the 7-day window resets
-  char     status[16];       // "normal"/"warning"/"rejected" from the usage
-                             // endpoint; "allowed"/"allowed_warning"/"rejected"
-                             // from older daemons. Both are accepted.
+struct UsageMetric {
+  char  label[USAGE_MAX_LABEL];
+  char  value[USAGE_VALUE_MAX];  // optional display value (balance, token count)
+  float pct;        // 0..100; 0 with a value means "value only, no bar"
+  int   resetMin;   // minutes until reset; <= 0 means "now"/unknown
+};
 
-  bool     valid;            // populated at least once
-  bool     error;            // most recent fetch failed
-  uint32_t lastOkMs;         // millis() of last good update
+struct ProviderUsage {
+  char     id[USAGE_MAX_ID];
+  char     name[USAGE_MAX_NAME];
+  char     status[USAGE_MAX_STATUS];
+  UsageMetric metrics[USAGE_MAX_METRICS];
+  uint8_t  metricCount;
+  bool     valid;     // populated at least once
+  bool     error;     // most recent push failed
+  uint32_t lastOkMs;  // millis() of the last successful push
+};
 
-  void clear() {
-    sessionPct = weeklyPct = 0;
-    sessionResetMin = weeklyResetMin = 0;
-    status[0] = 0;
-    valid = false;
-    error = false;
-    lastOkMs = 0;
-  }
+struct UsageStore {
+  ProviderUsage providers[USAGE_MAX_PROVIDERS];
+  uint8_t count;
 };

@@ -61,7 +61,7 @@ OtaLatest otaCheckLatest(const Settings& s) {
     http.setUserAgent(F(FW_NAME));                 // GitHub rejects requests with no UA
     http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
     // HTTP/1.0 forbids chunked responses. The body is parsed straight off
-    // getStream(), which neither core de-chunks (same fix as StockClient v2.4.1).
+    // getStream(), which neither core de-chunks.
     http.useHTTP10(true);
     const char* hdrKeys[] = { "x-ratelimit-remaining" };
     http.collectHeaders(hdrKeys, 1);

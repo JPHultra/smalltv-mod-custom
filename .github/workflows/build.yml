@@ -86,44 +86,23 @@ jobs:
         run: pip install platformio==6.1.19
 
       # Cheap, and a mismatch is not worth a 30 minute build to find out: every
-      # UPDATE_ASSET in src/config.h has to be a file the staging step below
+      # UPDATE_ASSET in src/config.h has to be a file the build step below
       # copies into dist/, or that variant's self-update finds no release asset.
       - name: Check release asset names
         run: python3 tools/ci_checks.py assets
 
-      - name: Build firmware (all targets)
-        run: pio run -e smalltv -e smalltv_lean -e smalltv_c2 -e smalltv_esp32 -e smalltv_esp32_wg -e smalltv_esp32_8mb -e smalltv_loader
-
-      # tests/theme/run.sh also builds the memory test with -m32, so it
-      # measures with the ESP8266's 32-bit pointers and sizes.
-      - name: Install 32-bit compiler support
-        run: sudo apt-get update && sudo apt-get install -y g++-multilib
-
-      - name: Test theme engine and packer
-        run: |
-          pip install -r tools/requirements-theme.txt
-          python3 -m unittest discover -s tests/theme -p 'test_*.py'
-          python3 tools/theme_pack.py examples/themes/pixel-room /tmp/pixel-room.stheme
-          cmp examples/themes/pixel-room.stheme /tmp/pixel-room.stheme
-          python3 tools/theme_pack.py examples/themes/terminal-ops /tmp/terminal-ops.stheme
-          cmp examples/themes/terminal-ops.stheme /tmp/terminal-ops.stheme
-          python3 tools/theme_pack.py examples/themes/live-status /tmp/live-status.stheme
-          cmp examples/themes/live-status.stheme /tmp/live-status.stheme
-          sh tests/theme/run.sh
-          node tests/theme/test_webui.js
-
-      # Mutated packages, theme manifests and imported settings through the
-      # real parsers, 32-bit with ASan and UBSan. A fixed seed and 2000 cases
-      # per target keep the step short and repeatable; see tests/fuzz/README.md
-      # for longer runs.
-      - name: Fuzz untrusted-input parsers
-        run: sh tests/fuzz/run.sh
+      # The script orders envs by shared framework state, stages each image
+      # immediately (the pioarduino custom-SDKConfig path can clear another
+      # env's build directory), runs the 8 KB slot gate, and pins the
+      # PlatformIO/pioarduino cores to the versions that work with this SCons.
+      - name: Build, stage and size-check every target
+        run: python3 tools/build_release.py --pio pio --dist dist --jobs 8
 
       # Host-native, not board-specific: only needs ArduinoJson, which the
       # firmware build above already fetched into .pio/libdeps.
       - name: Test atomic settings storage
         run: |
-          c++ -std=c++11 -Wall -Wextra -Werror -g -Isrc -I.pio/libdeps/smalltv_esp32_8mb/ArduinoJson/src \
+          c++ -std=c++11 -Wall -Wextra -Werror -g -Isrc -I.pio/libdeps/smalltv/ArduinoJson/src \
             tests/test_storage.cpp -o /tmp/smalltv-storage-tests
           /tmp/smalltv-storage-tests
 
@@ -132,47 +111,42 @@ jobs:
           c++ -std=c++11 -Wall -Wextra -Werror -g -Isrc tests/test_webguard.cpp -o /tmp/smalltv-webguard-tests
           /tmp/smalltv-webguard-tests
 
-      # One app image per target (web-UI OTA + GitHub self-update), the merged
-      # factory images for first-time USB flashing of the ESP32 boards, and the
-      # minimal loader used to install onto a SmallTV-ultra. Two boards get a
-      # second app image: the ESP8266 gets -lean, with Home Assistant and the
-      # usage meter compiled out, and the NM-TV-154 gets -esp32-wg, with the
-      # WireGuard client compiled in. UPDATE_ASSET in src/config.h maps each
-      # build back to its own file name so self-update keeps a device on the
-      # variant it runs.
-      # always() with a tolerant copy, for the same reason as the upload below:
-      # when one env dies the other six still built, and those binaries are
-      # usually what the next question needs. A missing file is a warning here,
-      # not a reason to hand over nothing. The build step's own exit status still
-      # decides whether the run is red.
-      - name: Stage artifacts
-        if: always()
+      - name: Test draw-list parser
         run: |
-          mkdir -p dist
-          copy() { [ -f "$1" ] && cp "$1" "$2" || echo "missing: $1"; }
-          copy .pio/build/smalltv/firmware.bin dist/smalltv-mod-firmware.bin
-          copy .pio/build/smalltv_lean/firmware.bin dist/smalltv-mod-firmware-lean.bin
-          copy .pio/build/smalltv_c2/firmware.bin dist/smalltv-mod-firmware-c2.bin
-          copy .pio/build/smalltv_c2/firmware.factory.bin dist/smalltv-mod-firmware-c2.factory.bin
-          copy .pio/build/smalltv_esp32/firmware.bin dist/smalltv-mod-firmware-esp32.bin
-          copy .pio/build/smalltv_esp32/firmware.factory.bin dist/smalltv-mod-firmware-esp32.factory.bin
-          copy .pio/build/smalltv_esp32_wg/firmware.bin dist/smalltv-mod-firmware-esp32-wg.bin
-          copy .pio/build/smalltv_esp32_wg/firmware.factory.bin dist/smalltv-mod-firmware-esp32-wg.factory.bin
-          copy .pio/build/smalltv_esp32_8mb/firmware.bin dist/smalltv-mod-firmware-esp32-pro.bin
-          copy .pio/build/smalltv_esp32_8mb/firmware.factory.bin dist/smalltv-mod-firmware-esp32-pro.factory.bin
-          copy .pio/build/smalltv_loader/firmware.bin dist/smalltv-mod-loader.bin
+          c++ -std=c++11 -Wall -Wextra -Werror -g -DSMALLTV_ESP8266 \
+            -Itests/shim -Isrc -Isrc/features/view \
+            -I.pio/libdeps/smalltv/ArduinoJson/src \
+            tests/test_view.cpp src/features/view/ViewModel.cpp \
+            -o /tmp/smalltv-view-tests
+          /tmp/smalltv-view-tests
 
-      # Image headroom. Prints image / size / slot / free for every env and fails
-      # when one has less than 8192 B left in its app slot. Slot sizes are read
-      # from the env's partition CSV or linker script, see tools/ci_checks.py.
-      # The 8 KiB floor is a policy choice, not a measured value. After the
-      # staging step so a red gate still uploads the binaries.
-      - name: Check image headroom
-        run: python3 tools/ci_checks.py size --min-free 8192
+      - name: Test usage parser
+        run: |
+          c++ -std=c++11 -Wall -Wextra -Werror -g -DSMALLTV_ESP8266 \
+            -DARDUINOJSON_ENABLE_ARDUINO_STRING=1 -DARDUINOJSON_USE_DOUBLE=0 \
+            -Itests/shim -Isrc -Isrc/features/usage \
+            -I.pio/libdeps/smalltv/ArduinoJson/src \
+            tests/test_usage.cpp src/features/usage/UsageClient.cpp \
+            -o /tmp/smalltv-usage-tests
+          /tmp/smalltv-usage-tests
+
+      - name: Test hostile parser inputs (ASan/UBSan)
+        run: |
+          c++ -std=c++11 -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=all \
+            -DSMALLTV_ESP8266 -DARDUINOJSON_ENABLE_ARDUINO_STRING=1 -DARDUINOJSON_USE_DOUBLE=0 \
+            -Itests/shim -Isrc -Isrc/features/view -Isrc/features/usage \
+            -I.pio/libdeps/smalltv/ArduinoJson/src \
+            tests/test_parsers_hostile.cpp \
+            src/features/view/ViewModel.cpp src/features/usage/UsageClient.cpp \
+            -o /tmp/smalltv-hostile-tests
+          /tmp/smalltv-hostile-tests
+
+      - name: Test usage daemon adapters
+        run: python3 -m unittest discover -s daemon -p 'test_*.py'
 
       # always(), so a run that dies after linking still hands over whatever was
-      # produced. A size question cannot be answered from a red run with no
-      # artifacts, and the step that reports sizes is the one that fails here.
+      # already built and staged. The build step fails the job on the first
+      # missing image or size-gate failure.
       - name: Upload build artifact
         if: always()
         uses: actions/upload-artifact@v4

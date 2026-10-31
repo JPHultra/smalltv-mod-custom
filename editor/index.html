@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SmallTV Dashboard Editor</title>
+<style>
+:root{--bg:#0e1116;--card:#171c24;--mut:#8b96a5;--fg:#e6edf3;--acc:#3fb950;--acc2:#2f81f7;--red:#f85149;--bd:#262d38}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--fg);font-size:14px}
+header{padding:14px 18px;border-bottom:1px solid var(--bd);display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+header h1{font-size:18px;margin:0;font-weight:650}
+header .muted{font-size:13px}
+.wrap{display:grid;grid-template-columns:250px minmax(240px,480px) 320px;gap:16px;padding:16px;max-width:1160px;margin:0 auto;align-items:start}
+@media(max-width:1000px){.wrap{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:14px}
+h2{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--mut);margin:0 0 10px}
+button{font:inherit;background:var(--acc);color:#04130a;border:0;padding:8px 12px;border-radius:8px;font-weight:650;cursor:pointer}
+button.sec{background:#222b36;color:var(--fg)}
+button.danger{background:var(--red);color:#1a0606}
+button.small{padding:5px 8px;font-size:12px;font-weight:600}
+button:disabled{opacity:.5;cursor:default}
+.palette{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.palette button{background:#222b36;color:var(--fg);font-weight:600;text-align:left}
+.stage{background:#080c12;border:1px solid var(--bd);border-radius:16px;padding:12px;display:flex;justify-content:center}
+canvas{width:min(480px,calc(100vw - 72px));height:auto;image-rendering:pixelated;background:#000;touch-action:none;border-radius:6px;cursor:crosshair}
+label{display:block;margin:9px 0 4px;font-size:12px;color:var(--mut)}
+input[type=text],input[type=url],input[type=password],input[type=number],select,textarea{width:100%;padding:8px 9px;background:#0b0e13;border:1px solid var(--bd);border-radius:8px;color:var(--fg);font-size:14px}
+textarea{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;min-height:86px}
+input[type=color]{width:100%;height:38px;background:#0b0e13;border:1px solid var(--bd);border-radius:8px;padding:2px}
+.row{display:flex;gap:8px}.row>*{flex:1}
+.muted{color:var(--mut)}
+.hint{color:var(--mut);font-size:12px;line-height:1.45}
+.layer{display:flex;align-items:center;gap:6px;padding:6px;border:1px solid var(--bd);border-radius:8px;margin-bottom:5px;cursor:pointer}
+.layer.sel{border-color:var(--acc2);background:#0b1626}
+.layer span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.status{font-size:12px;color:var(--mut);line-height:1.45;min-height:18px}
+.toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#0b0e13;border:1px solid var(--bd);padding:10px 16px;border-radius:10px;opacity:0;transition:.2s;pointer-events:none;z-index:20}
+.toast.show{opacity:1}
+.warn{color:#f0b429}
+</style>
+</head>
+<body>
+<header>
+ <h1>SmallTV Dashboard Editor</h1>
+ <span class="muted">240x240 · declarative draw list</span>
+ <span style="flex:1"></span>
+ <button class="sec" onclick="undo()">Undo</button>
+ <button class="sec" onclick="redo()">Redo</button>
+ <button class="sec" onclick="loadExample()">Load example</button>
+ <button class="sec" onclick="clearView()">Clear</button>
+ <button class="sec" onclick="loadLocal()">Load local</button>
+ <button class="sec" onclick="saveLocal()">Save local</button>
+ <button class="sec" onclick="downloadJson()">Download JSON</button>
+</header>
+
+<div class="wrap">
+ <div>
+  <div class="card">
+   <h2>Components</h2>
+   <div class="palette">
+    <button onclick="addLayer('text')">Text</button>
+    <button onclick="addLayer('rect')">Rectangle</button>
+    <button onclick="addLayer('rrect')">Rounded</button>
+    <button onclick="addLayer('circle')">Circle</button>
+    <button onclick="addLayer('line')">Line</button>
+    <button onclick="addLayer('icon')">Icon</button>
+    <button onclick="addLayer('bitmap')">Bitmap</button>
+    <button onclick="addLayer('usage')">Usage</button>
+   </div>
+   <label style="margin-top:14px">Canvas background</label>
+   <input id="bg" type="color" value="#000000" oninput="setBg(this.value)">
+   <label>Overlay TTL (s)</label>
+   <input id="ttl" type="number" min="2" max="120" value="15" oninput="view.ttl=Number(this.value)||15">
+   <label>Overlay priority (0-3)</label>
+   <input id="priority" type="number" min="0" max="3" value="0" oninput="view.priority=Number(this.value)||0">
+  </div>
+  <div class="card" style="margin-top:14px">
+   <h2>Layers</h2>
+   <div id="layers"></div>
+   <div class="row" style="margin-top:8px">
+    <button class="sec small" onclick="moveLayer(-1)">Up</button>
+    <button class="sec small" onclick="moveLayer(1)">Down</button>
+    <button class="danger small" onclick="deleteLayer()">Delete</button>
+   </div>
+  </div>
+ </div>
+
+ <div class="card stage">
+  <div>
+   <canvas id="screen" width="480" height="480" aria-label="240x240 dashboard preview"></canvas>
+   <div class="hint" style="margin-top:8px">Drag to move; square handles resize. Ctrl/Cmd+Z undo, Shift+Ctrl/Cmd+Z redo.</div>
+  </div>
+ </div>
+
+ <div>
+  <div class="card">
+   <h2>Selected layer</h2>
+   <div id="props" class="hint">Pick a component or a layer.</div>
+  </div>
+  <div class="card" style="margin-top:14px">
+   <h2>Device</h2>
+   <label>Device URL</label>
+   <input id="deviceUrl" type="url" value="http://smalltv.local" placeholder="http://smalltv.local">
+   <label>Editor token</label>
+   <input id="token" type="password" autocomplete="off" placeholder="set it in the device View tab">
+   <div class="row" style="margin-top:10px">
+    <button onclick="loadDevice()">Load</button>
+    <button onclick="pushDevice()">Save dashboard</button>
+   </div>
+   <div class="row" style="margin-top:8px">
+    <button class="sec" onclick="testOverlay()">Test overlay</button>
+    <button class="sec" onclick="clearOverlay()">Clear overlay</button>
+   </div>
+   <div class="row" style="margin-top:8px"><button class="sec" onclick="fetchUsage()">Fetch usage</button></div>
+   <div id="deviceStatus" class="status" style="margin-top:10px"></div>
+   <div class="hint" style="margin-top:8px">Direct push needs an HTTP page. An HTTPS deployment (GitHub Pages) cannot fetch an HTTP device because of mixed-content blocking; use the device's View tab textarea there.</div>
+  </div>
+  <div class="card" style="margin-top:14px">
+   <h2>JSON</h2>
+   <textarea id="json"></textarea>
+   <div class="row" style="margin-top:8px">
+    <button class="sec" onclick="applyJson()">Apply</button>
+    <button class="sec" onclick="copyJson()">Copy</button>
+   </div>
+  </div>
+ </div>
+</div>
+<div id="toast" class="toast"></div>
+
+<script>
+const ICONS=['thermometer','humidity','sun','cloud','rain','snow','wind','home','door-open','door-closed','window-open','window-closed','motion','plug','battery','alert','check','x','arrow-up','arrow-down'];
+const DEMO_VIEW={bg:'#0b1420',ttl:15,priority:0,draw:[
+ {t:'text',x:120,y:6,s:5,c:'#e9edf4',a:'c',v:'{HH}:{MM}'},
+ {t:'text',x:120,y:48,s:2,c:'#86e2bf',a:'c',v:'{WEEKDAY} {YYYY}-{MON}-{DD}'},
+ {t:'usage',x:8,y:68,w:224,h:54,c:'#d97757',provider:'claude',metric:-1},
+ {t:'usage',x:8,y:126,w:224,h:62,c:'#10a37f',provider:'chatgpt',metric:-1},
+ {t:'usage',x:8,y:192,w:224,h:44,c:'#4d6bfe',provider:'deepseek',metric:-1}
+]};
+const SAMPLE_USAGE={providers:[
+ {id:'claude',name:'Claude',valid:true,metrics:[{label:'5h',pct:42,resetMin:128},{label:'7d',pct:18,resetMin:4200}]},
+ {id:'chatgpt',name:'Codex',valid:true,metrics:[{label:'5h',pct:67,resetMin:74},{label:'7d',pct:45,resetMin:6372},{label:'plan',value:'plus',pct:0,resetMin:0}]},
+ {id:'deepseek',name:'DeepSeek',valid:true,metrics:[{label:'balance',value:'81 CNY',pct:0,resetMin:0},{label:'tokens',value:'1.2M',pct:0,resetMin:0}]}
+]};
+let view={bg:'#000000',ttl:15,priority:0,draw:[]};
+let selected=-1;
+let usageData=null;
+let drag=null;
+let uid=1;
+
+function $(id){return document.getElementById(id)}
+function toast(m){const t=$('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2000)}
+function clone(v){return JSON.parse(JSON.stringify(v))}
+function exportView(){const v=clone(view);v.draw=v.draw.map(l=>{const c=clone(l);delete c.id;return c});return v}
+let history=[],future=[],histAt=0;
+function snapshot(){return JSON.stringify(view)}
+function pushHistory(force){const now=Date.now();if(!force&&now-histAt<500)return;history.push(snapshot());if(history.length>60)history.shift();future=[];histAt=now}
+function restoreView(v){view=clone(v);selected=view.draw.length?Math.max(0,Math.min(selected,view.draw.length-1)):-1;$('bg').value=view.bg;$('ttl').value=view.ttl;$('priority').value=view.priority||0;draw();renderLayers();renderProps();syncJson()}
+function undo(){if(!history.length)return toast('Nothing to undo');future.push(snapshot());restoreView(JSON.parse(history.pop()));toast('Undo')}
+function redo(){if(!future.length)return toast('Nothing to redo');history.push(snapshot());restoreView(JSON.parse(future.pop()));toast('Redo')}
+function setBg(v){pushHistory(false);view.bg=v;draw();syncJson()}
+function nowTime(){const d=new Date();return {HH:String(d.getHours()).padStart(2,'0'),hh:String(d.getHours()%12||12).padStart(2,'0'),MM:String(d.getMinutes()).padStart(2,'0'),SS:String(d.getSeconds()).padStart(2,'0'),DD:String(d.getDate()).padStart(2,'0'),YYYY:String(d.getFullYear()),MON:d.toLocaleString('en',{month:'short'}),MONTH:d.toLocaleString('en',{month:'long'}),WD:d.toLocaleString('en',{weekday:'short'}),WEEKDAY:d.toLocaleString('en',{weekday:'long'})}}
+function expand(text){const t=nowTime();return String(text||'').replace(/\{([A-Za-z]+)\}/g,(m,k)=>Object.prototype.hasOwnProperty.call(t,k)?t[k]:m)}
+
+function addLayer(type){
+ pushHistory(true);
+ const base={id:uid++,t:type,x:20,y:20,c:'#ffffff'};
+ if(type==='text')Object.assign(base,{x:120,y:40,v:'Hello',s:3,a:'c',c:'#ffffff'});
+ if(type==='rect')Object.assign(base,{x:20,y:20,w:200,h:60,c:'#1f2937'});
+ if(type==='rrect')Object.assign(base,{x:20,y:20,w:200,h:60,r:12,c:'#1f2937'});
+ if(type==='circle')Object.assign(base,{x:120,y:120,r:40,c:'#2f81f7'});
+ if(type==='line')Object.assign(base,{x:20,y:200,x2:220,y2:200,c:'#8b96a5'});
+ if(type==='icon')Object.assign(base,{x:120,y:80,s:2,a:'c',v:'sun',c:'#ffff00'});
+ if(type==='bitmap')Object.assign(base,{x:100,y:100,w:8,h:8,s:2,a:'l',c:'#3fb950',d:'AA55AA55AA55AA55'});
+ if(type==='usage')Object.assign(base,{x:8,y:50,w:224,h:82,c:'#d97757',provider:'claude',metric:-1});
+ view.draw.push(base);selected=view.draw.length-1;draw();renderLayers();renderProps();syncJson();
+}
+function selectLayer(i){selected=i;draw();renderLayers();renderProps()}
+function deleteLayer(){if(selected<0)return;pushHistory(true);view.draw.splice(selected,1);selected=Math.min(selected,view.draw.length-1);draw();renderLayers();renderProps();syncJson()}
+function moveLayer(d){if(selected<0)return;const j=selected+d;if(j<0||j>=view.draw.length)return;pushHistory(true);const t=view.draw[selected];view.draw[selected]=view.draw[j];view.draw[j]=t;selected=j;draw();renderLayers();renderProps();syncJson()}
+
+function moveToEnd(front){if(selected<0)return;pushHistory(true);const [l]=view.draw.splice(selected,1);const i=front?view.draw.length:0;view.draw.splice(i,0,l);selected=i;draw();renderLayers();renderProps();syncJson()}
+function align(kind){if(selected<0)return;const l=view.draw[selected],b=bounds(l);let dx=0,dy=0;
+ if(kind==='left')dx=-b.x;else if(kind==='hcenter')dx=120-(b.x+b.w/2);else if(kind==='right')dx=240-(b.x+b.w);
+ else if(kind==='top')dy=-b.y;else if(kind==='vcenter')dy=120-(b.y+b.h/2);else if(kind==='bottom')dy=240-(b.y+b.h);
+ if(!dx&&!dy)return;pushHistory(true);l.x=Math.round(l.x+dx);l.y=Math.round(l.y+dy);draw();renderProps();syncJson()}
+function layerLabel(l){if(l.t==='text')return 'Text: '+String(l.v||'').slice(0,24);if(l.t==='usage')return 'Usage: '+(l.provider||'?');if(l.t==='icon')return 'Icon: '+(l.v||'?');if(l.t==='line')return 'Line';return l.t}
+function renderLayers(){
+ const box=$('layers');if(!box)return;box.innerHTML='';
+ view.draw.forEach((l,i)=>{const d=document.createElement('div');d.className='layer'+(i===selected?' sel':'');d.onclick=()=>selectLayer(i);d.innerHTML='<span>'+i+'. '+esc(layerLabel(l))+'</span>';box.appendChild(d)});
+ if(!view.draw.length)box.innerHTML='<div class="hint">No layers yet.</div>';
+}
+function esc(s){return String(s==null?'':s).replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]))}
+
+function setProp(k,v,type){if(selected<0)return;const l=view.draw[selected];pushHistory(false);
+ if(type==='number'){let n=Number(v)||0;
+  if(k==='s'){const max=l.t==='text'?10:(l.t==='icon'?8:4);n=Math.max(1,Math.min(max,n))}
+  if(k==='w'||k==='h')n=Math.max(1,Math.min(240,n));
+  if(k==='r')n=Math.max(l.t==='circle'?1:0,Math.min(240,n));
+  if(k==='metric')n=Math.max(-1,Math.min(4,n));
+  l[k]=n;
+ } else l[k]=v;
+ draw();renderLayers();syncJson();if(l.t==='bitmap')renderBitmapGrid(l)}
+function renderProps(){
+ const box=$('props');if(!box)return;
+ if(selected<0||!view.draw[selected]){box.innerHTML='Pick a component or a layer.';return}
+ const l=view.draw[selected];
+ let h='<label>X</label><input type="number" value="'+l.x+'" oninput="setProp(\'x\',this.value,\'number\')">';
+ h+='<label>Y</label><input type="number" value="'+l.y+'" oninput="setProp(\'y\',this.value,\'number\')">';
+ h+='<div class="row" style="margin-top:8px"><button class="sec small" onclick="align(\'left\')" title="Align left">L</button><button class="sec small" onclick="align(\'hcenter\')" title="Centre horizontally">C</button><button class="sec small" onclick="align(\'right\')" title="Align right">R</button></div>';
+ h+='<div class="row" style="margin-top:4px"><button class="sec small" onclick="align(\'top\')" title="Align top">T</button><button class="sec small" onclick="align(\'vcenter\')" title="Centre vertically">M</button><button class="sec small" onclick="align(\'bottom\')" title="Align bottom">B</button></div>';
+ h+='<div class="row" style="margin-top:4px"><button class="sec small" onclick="moveToEnd(true)">Front</button><button class="sec small" onclick="moveToEnd(false)">Back</button></div>';
+ h+='<label>Colour</label><input type="color" value="'+(l.c||'#ffffff')+'" oninput="setProp(\'c\',this.value)">';
+ if(l.t==='text'){h+='<label>Text</label><textarea oninput="setProp(\'v\',this.value)">'+esc(l.v||'')+'</textarea><label>Size (1-10)</label><input type="number" min="1" max="10" value="'+(l.s||1)+'" oninput="setProp(\'s\',this.value,\'number\')"><label>Align</label><select onchange="setProp(\'a\',this.value)"><option value="l"'+(l.a==='l'?' selected':'')+'>Left</option><option value="c"'+(l.a==='c'?' selected':'')+'>Centre</option><option value="r"'+(l.a==='r'?' selected':'')+'>Right</option></select>'}
+ if(l.t==='rect'||l.t==='rrect'){h+='<label>Width</label><input type="number" value="'+(l.w||0)+'" oninput="setProp(\'w\',this.value,\'number\')"><label>Height</label><input type="number" value="'+(l.h||0)+'" oninput="setProp(\'h\',this.value,\'number\')">';if(l.t==='rrect')h+='<label>Corner radius</label><input type="number" min="0" max="120" value="'+(l.r||0)+'" oninput="setProp(\'r\',this.value,\'number\')">'}
+ if(l.t==='circle')h+='<label>Radius</label><input type="number" min="1" max="240" value="'+(l.r||1)+'" oninput="setProp(\'r\',this.value,\'number\')">';
+ if(l.t==='line'){h+='<label>X2</label><input type="number" value="'+(l.x2||0)+'" oninput="setProp(\'x2\',this.value,\'number\')"><label>Y2</label><input type="number" value="'+(l.y2||0)+'" oninput="setProp(\'y2\',this.value,\'number\')">'}
+ if(l.t==='icon'){h+='<label>Icon</label><select onchange="setProp(\'v\',this.value)">'+ICONS.map(n=>'<option value="'+n+'"'+(l.v===n?' selected':'')+'>'+n+'</option>').join('')+'</select><label>Scale (1-8)</label><input type="number" min="1" max="8" value="'+(l.s||1)+'" oninput="setProp(\'s\',this.value,\'number\')"><label>Align</label><select onchange="setProp(\'a\',this.value)"><option value="l"'+(l.a==='l'?' selected':'')+'>Left</option><option value="c"'+(l.a==='c'?' selected':'')+'>Centre</option><option value="r"'+(l.a==='r'?' selected':'')+'>Right</option></select>'}
+ if(l.t==='bitmap'){h+='<label>Width</label><input type="number" min="1" max="48" value="'+(l.w||8)+'" oninput="setProp(\'w\',this.value,\'number\')"><label>Height</label><input type="number" min="1" max="48" value="'+(l.h||8)+'" oninput="setProp(\'h\',this.value,\'number\')"><label>Scale (1-4)</label><input type="number" min="1" max="4" value="'+(l.s||1)+'" oninput="setProp(\'s\',this.value,\'number\')"><label>Hex data (MSB first)</label><textarea oninput="setProp(\'d\',this.value)">'+esc(l.d||'')+'</textarea><label>Pixel grid</label><canvas id="bitmapGrid" width="240" height="240" onclick="toggleBitmapCell(event)" style="width:100%;height:auto;background:#0b0e13;border:1px solid var(--bd);border-radius:8px;image-rendering:pixelated;cursor:pointer"></canvas><div class="hint">Click a cell to toggle it.</div>'}
+ if(l.t==='usage'){h+='<label>Width</label><input type="number" value="'+(l.w||224)+'" oninput="setProp(\'w\',this.value,\'number\')"><label>Height</label><input type="number" value="'+(l.h||82)+'" oninput="setProp(\'h\',this.value,\'number\')"><label>Provider</label><select onchange="setProp(\'provider\',this.value)"><option value="claude"'+(l.provider==='claude'?' selected':'')+'>claude</option><option value="chatgpt"'+(l.provider==='chatgpt'?' selected':'')+'>chatgpt</option><option value="deepseek"'+(l.provider==='deepseek'?' selected':'')+'>deepseek</option></select><label>Metric (-1 = all)</label><input type="number" min="-1" max="4" value="'+(l.metric!=null?l.metric:-1)+'" oninput="setProp(\'metric\',this.value,\'number\')">'}
+ box.innerHTML=h;if(l.t==='bitmap')renderBitmapGrid(l);
+}
+
+function usageFor(id){const u=(usageData||SAMPLE_USAGE).providers.find(p=>p.id===id);return u||null}
+function drawUsageRows(ctx,l,u){
+ const w=l.w||224, hh=l.h||82, top=l.y+20, rowH=(hh-20)/u.metrics.length;
+ u.metrics.forEach((m,i)=>{
+  const ry=top+i*rowH, large=rowH>=24, pct=Math.max(0,Math.min(100,Number(m.pct)||0));
+  ctx.fillStyle='#8b96a5';ctx.font='9px monospace';ctx.textAlign='left';ctx.fillText(m.label,l.x+12,ry);
+  const right=m.value?String(m.value):Math.round(pct)+'%';
+  const fs=large?(right.length>6?10:14):(right.length>6?8:10);
+  ctx.fillStyle='#ffffff';ctx.font='bold '+fs+'px monospace';ctx.textAlign='right';ctx.fillText(right,l.x+w-12,ry-(large?2:0));
+  if(pct>0){const by=ry+(large?13:9), bw=w-24, bh=large?6:4;
+   ctx.fillStyle='#2a2a28';roundRect(ctx,l.x+12,by,bw,bh,bh/2);ctx.fill();
+   ctx.fillStyle=pct>=90?'#f85149':(pct>=75?'#d97757':'#788c5d');ctx.save();roundRect(ctx,l.x+12,by,Math.max(0,bw*pct/100),bh,bh/2);ctx.fill();ctx.restore();}
+ });
+}
+function drawUsage(ctx,l){
+ const u=usageFor(l.provider);
+ ctx.fillStyle='#1f1f1e';roundRect(ctx,l.x,l.y,l.w||224,l.h||82,8);ctx.fill();
+ ctx.fillStyle=l.c||'#d97757';ctx.font='bold 12px monospace';ctx.textBaseline='top';ctx.textAlign='left';ctx.fillText(u?u.name:l.provider||'?',l.x+8,l.y+7);
+ if(!u||!u.metrics||!u.metrics.length){ctx.fillStyle='#8b96a5';ctx.font='10px monospace';ctx.fillText('waiting',l.x+12,l.y+30);return}
+ const all=(l.metric===undefined||l.metric===null||Number(l.metric)<0);
+ if(all&&u.metrics.length>1){drawUsageRows(ctx,l,u);return}
+ const m=u.metrics[all?0:Math.min(Number(l.metric)||0,u.metrics.length-1)];
+ if(!m){ctx.fillStyle='#8b96a5';ctx.font='10px monospace';ctx.fillText('waiting',l.x+12,l.y+30);return}
+ ctx.fillStyle='#8b96a5';ctx.font='10px monospace';ctx.textAlign='right';ctx.fillText(m.label,l.x+(l.w||224)-8,l.y+8);
+ const hasValue=m.value!==undefined&&m.value!==null&&String(m.value).length>0;
+ const big=hasValue?String(m.value):Math.round(m.pct)+'%';
+ const hh=l.h||82, fs=big.length>8?(hh>=56?14:10):(hh>=74?28:(hh>=56?21:14));
+ ctx.fillStyle='#ffffff';ctx.font='bold '+fs+'px monospace';ctx.textAlign='left';ctx.fillText(big,l.x+12,l.y+20);
+ if(m.pct>0||!hasValue){const by=l.y+hh-14,bw=(l.w||224)-24;ctx.fillStyle='#2a2a28';roundRect(ctx,l.x+12,by,bw,8,4);ctx.fill();
+  ctx.fillStyle=m.pct>=90?'#f85149':(m.pct>=75?'#d97757':'#788c5d');ctx.save();roundRect(ctx,l.x+12,by,Math.max(0,bw*m.pct/100),8,4);ctx.fill();ctx.restore();}
+ if(hh>=80&&(!hasValue||m.resetMin>0)){ctx.fillStyle='#8b96a5';ctx.font='9px monospace';ctx.fillText('Resets in '+m.resetMin+'m',l.x+12,l.y+hh-26)}
+}
+function roundRect(ctx,x,y,w,h,r){if(w<=0||h<=0)return;r=Math.max(0,Math.min(r,w/2,h/2));ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath()}
+function bitmapBits(hex,w,h){const bits=[];for(let i=0;i<w*h;i++){const byte=parseInt((hex||'').slice((i>>3)*2,(i>>3)*2+2),16)||0;bits.push((byte>>(7-(i&7)))&1)}return bits}
+function bitsToHex(bits){let out='';for(let i=0;i<bits.length;i+=8){let n=0;for(let j=0;j<8;j++)n=(n<<1)|(bits[i+j]?1:0);out+=n.toString(16).padStart(2,'0').toUpperCase()}return out}
+function renderBitmapGrid(l){
+ const c=$('bitmapGrid');if(!c)return;const ctx=c.getContext('2d');const w=Math.max(1,l.w||8),h=Math.max(1,l.h||8),cell=Math.max(1,Math.floor(240/Math.max(w,h))),gw=w*cell,gh=h*cell,ox=Math.floor((240-gw)/2),oy=Math.floor((240-gh)/2);
+ ctx.fillStyle='#0b0e13';ctx.fillRect(0,0,240,240);const bits=bitmapBits(l.d||'',w,h);
+ for(let y=0;y<h;y++)for(let x=0;x<w;x++){ctx.fillStyle=bits[y*w+x]?(l.c||'#3fb950'):'#1b2430';ctx.fillRect(ox+x*cell,oy+y*cell,cell-1,cell-1)}
+ ctx.strokeStyle='#2a3544';ctx.lineWidth=1;for(let x=0;x<=w;x++){ctx.beginPath();ctx.moveTo(ox+x*cell,oy);ctx.lineTo(ox+x*cell,oy+gh);ctx.stroke()}for(let y=0;y<=h;y++){ctx.beginPath();ctx.moveTo(ox,oy+y*cell);ctx.lineTo(ox+gw,oy+y*cell);ctx.stroke()}
+ c._grid={ox,oy,cell,w,h};
+}
+function toggleBitmapCell(e){
+ if(selected<0)return;const l=view.draw[selected];if(!l||l.t!=='bitmap')return;const c=$('bitmapGrid'),r=c.getBoundingClientRect(),g=c._grid;if(!g)return;
+ const x=Math.floor((e.clientX-r.left)*240/r.width),y=Math.floor((e.clientY-r.top)*240/r.height),cx=Math.floor((x-g.ox)/g.cell),cy=Math.floor((y-g.oy)/g.cell);
+ if(cx<0||cx>=g.w||cy<0||cy>=g.h)return;pushHistory(true);const bits=bitmapBits(l.d||'',g.w,g.h);bits[cy*g.w+cx]=bits[cy*g.w+cx]?0:1;l.d=bitsToHex(bits);draw();syncJson();renderBitmapGrid(l);
+}
+function drawIconPreview(ctx,name,x,y,s,color){
+ const box=(gx,gy,w,h)=>ctx.fillRect(x+gx*s,y+gy*s,w*s,h*s);
+ const hline=(x1,x2,gy)=>box(x1,gy,x2-x1+1,1);
+ const vline=(gx,y1,y2)=>box(gx,y1,1,y2-y1+1);
+ const disc=(cx,cy,r)=>{ctx.beginPath();ctx.arc(x+cx*s,y+cy*s,r*s,0,Math.PI*2);ctx.fill()};
+ const tri=(x1,y1,x2,y2,x3,y3)=>{ctx.beginPath();ctx.moveTo(x+x1*s,y+y1*s);ctx.lineTo(x+x2*s,y+y2*s);ctx.lineTo(x+x3*s,y+y3*s);ctx.closePath();ctx.fill()};
+ const diag=(x1,y1,x2,y2)=>{ctx.beginPath();ctx.moveTo(x+x1*s,y+y1*s);ctx.lineTo(x+x2*s,y+y2*s);ctx.stroke()};
+ const rbox=(gx,gy,w,h,r)=>{roundRect(ctx,x+gx*s,y+gy*s,w*s,h*s,r*s);ctx.fill()};
+ const cloud=()=>{disc(9,13,4);disc(15,12,5);box(5,13,14,6)};
+ const flake=(fx,fy)=>{hline(fx-1,fx+1,fy);vline(fx,fy-1,fy+1)};
+ ctx.save();ctx.fillStyle=color;ctx.strokeStyle=color;ctx.lineWidth=s;ctx.lineCap='round';
+ switch(name){
+  case 'thermometer':box(10,2,4,14);disc(12,17,5);break;
+  case 'humidity':tri(12,2,6,12,18,12);disc(12,14,6);break;
+  case 'sun':disc(12,12,5);hline(1,4,12);hline(20,23,12);vline(12,1,4);vline(12,20,23);diag(4,4,6,6);diag(18,18,20,20);diag(20,4,18,6);diag(4,20,6,18);break;
+  case 'cloud':cloud();break;
+  case 'rain':cloud();diag(8,19,7,22);diag(12,19,11,22);diag(16,19,15,22);break;
+  case 'snow':cloud();flake(8,20);flake(12,21);flake(16,20);break;
+  case 'wind':hline(2,14,7);vline(14,5,7);hline(6,21,12);vline(21,12,14);hline(2,14,17);vline(14,17,19);break;
+  case 'home':tri(12,3,2,12,22,12);box(5,12,14,3);box(5,15,5,6);box(14,15,5,6);break;
+  case 'door-open':hline(5,19,4);vline(5,4,21);vline(19,4,21);tri(7,6,7,19,15,15);tri(7,6,15,15,15,9);disc(9,12,1);break;
+  case 'door-closed':hline(5,19,4);vline(5,4,21);vline(19,4,21);hline(8,16,7);hline(8,16,18);vline(8,7,18);vline(16,7,18);disc(14,13,1);break;
+  case 'window-open':hline(3,21,4);hline(3,21,20);vline(3,4,20);vline(21,4,20);tri(6,7,6,17,17,13);tri(6,7,17,13,17,11);break;
+  case 'window-closed':hline(3,21,4);hline(3,21,20);vline(3,4,20);vline(21,4,20);vline(12,4,20);hline(3,21,12);break;
+  case 'motion':disc(15,4,2);diag(14,7,11,13);diag(13,9,18,11);diag(13,9,9,12);diag(11,13,16,18);diag(11,13,6,18);break;
+  case 'plug':vline(10,3,8);vline(14,3,8);rbox(7,9,10,9,3);vline(12,18,22);break;
+  case 'battery':hline(2,20,8);hline(2,20,16);vline(2,8,16);vline(20,8,16);box(21,10,2,5);box(4,10,12,5);break;
+  case 'alert':diag(12,3,3,20);diag(12,3,21,20);hline(3,21,20);vline(12,9,14);disc(12,17,1);break;
+  case 'check':diag(4,13,10,19);diag(10,19,20,6);break;
+  case 'x':diag(5,5,19,19);diag(19,5,5,19);break;
+  case 'arrow-up':vline(12,4,20);diag(12,3,5,10);diag(12,3,19,10);break;
+  case 'arrow-down':vline(12,4,20);diag(5,14,12,21);diag(19,14,12,21);break;
+  default:
+   ctx.setLineDash([3,3]);ctx.strokeRect(x,y,24*s,24*s);ctx.setLineDash([]);
+   ctx.fillStyle='#8b96a5';ctx.font='8px monospace';ctx.textAlign='center';ctx.fillText(name||'?',x+12*s,y+12*s);
+ }
+ ctx.restore();
+}
+function drawText(ctx,text,x,y,s,align,color){
+ text=String(text||'');const cw=6*s;
+ const start=align==='c'?x-(text.length*cw)/2:(align==='r'?x-text.length*cw:x);
+ ctx.font=(8*s)+'px "Courier New",monospace';ctx.textAlign='left';ctx.textBaseline='top';ctx.fillStyle=color;
+ for(let i=0;i<text.length;i++)ctx.fillText(text[i],start+i*cw,y);
+}
+function draw(){
+ const c=$('screen'),ctx=c.getContext('2d');ctx.setTransform(2,0,0,2,0,0);
+ ctx.fillStyle=view.bg||'#000000';ctx.fillRect(0,0,240,240);
+ ctx.strokeStyle='rgba(255,255,255,.04)';ctx.lineWidth=.5;for(let i=20;i<240;i+=20){ctx.beginPath();ctx.moveTo(i,0);ctx.lineTo(i,240);ctx.stroke();ctx.beginPath();ctx.moveTo(0,i);ctx.lineTo(240,i);ctx.stroke()}
+ view.draw.forEach(l=>{
+  ctx.fillStyle=l.c||'#ffffff';ctx.strokeStyle=l.c||'#ffffff';ctx.textBaseline='top';
+  if(l.t==='fill'){ctx.fillRect(0,0,240,240)}
+  else if(l.t==='rect'||l.t==='rrect'){if(l.t==='rrect'){roundRect(ctx,l.x,l.y,l.w||0,l.h||0,l.r||0);ctx.fill()}else ctx.fillRect(l.x,l.y,l.w||0,l.h||0)}
+  else if(l.t==='circle'){ctx.beginPath();ctx.arc(l.x,l.y,l.r||1,0,Math.PI*2);ctx.fill()}
+  else if(l.t==='line'){ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(l.x,l.y);ctx.lineTo(l.x2||0,l.y2||0);ctx.stroke()}
+  else if(l.t==='text'){drawText(ctx,expand(l.v),l.x,l.y,l.s||1,l.a,l.c||'#ffffff')}
+  else if(l.t==='icon'){const s=l.s||1,w=24*s;const x=l.a==='c'?l.x-w/2:(l.a==='r'?l.x-w:l.x);drawIconPreview(ctx,l.v||'',x,l.y,s,l.c||'#ffffff')}
+  else if(l.t==='bitmap'){const s=l.s||1,w=l.w||8,h=l.h||8;const bits=bitmapBits(l.d,w,h);const x=l.a==='c'?l.x-(w*s)/2:(l.a==='r'?l.x-w*s:l.x);ctx.fillStyle=l.c||'#3fb950';for(let py=0;py<h;py++)for(let px=0;px<w;px++)if(bits[py*w+px])ctx.fillRect(x+px*s,l.y+py*s,s,s)}
+  else if(l.t==='usage')drawUsage(ctx,l);
+ });
+ if(selected>=0&&view.draw[selected]){const l=view.draw[selected],b=bounds(l);ctx.strokeStyle='#2f81f7';ctx.lineWidth=1;ctx.setLineDash([4,3]);ctx.strokeRect(b.x,b.y,b.w,b.h);ctx.setLineDash([]);if(resizable(l)){ctx.fillStyle='#2f81f7';handles(b).forEach(p=>ctx.fillRect(p.x-2,p.y-2,5,5))}}
+}
+function bounds(l){
+ if(l.t==='fill')return{x:0,y:0,w:240,h:240};
+ if(l.t==='rect'||l.t==='rrect'||l.t==='usage'||l.t==='bitmap'){const w=l.w||0,h=l.h||0;const s=l.t==='bitmap'?(l.s||1):1;return{x:l.x,y:l.y,w:w*s,h:h*s}}
+ if(l.t==='circle')return{x:l.x-(l.r||0),y:l.y-(l.r||0),w:2*(l.r||0)+1,h:2*(l.r||0)+1};
+ if(l.t==='line'){const x=Math.min(l.x,l.x2||0),y=Math.min(l.y,l.y2||0);return{x,y,w:Math.abs(l.x-(l.x2||0))+1,h:Math.abs(l.y-(l.y2||0))+1}}
+ if(l.t==='text'){const s=l.s||1,w=String(expand(l.v)).length*6*s,h=8*s;const x=l.a==='c'?l.x-w/2:(l.a==='r'?l.x-w:l.x);return{x,y:l.y,w,h}}
+ if(l.t==='icon'){const s=l.s||1,w=24*s;return{x:l.a==='c'?l.x-w/2:(l.a==='r'?l.x-w:l.x),y:l.y,w,h:w}}
+ return{x:l.x,y:l.y,w:10,h:10}
+}
+function resizable(l){return ['rect','rrect','circle','text','icon','bitmap','usage'].includes(l.t)}
+function handles(b){return [{k:'nw',x:b.x,y:b.y},{k:'n',x:b.x+b.w/2,y:b.y},{k:'ne',x:b.x+b.w,y:b.y},{k:'e',x:b.x+b.w,y:b.y+b.h/2},{k:'se',x:b.x+b.w,y:b.y+b.h},{k:'s',x:b.x+b.w/2,y:b.y+b.h},{k:'sw',x:b.x,y:b.y+b.h},{k:'w',x:b.x,y:b.y+b.h/2}]}
+function handleAt(x,y,b){if(!b)return null;for(const p of handles(b))if(Math.abs(x-p.x)<=6&&Math.abs(y-p.y)<=6)return p.k;return null}
+function hit(x,y){for(let i=view.draw.length-1;i>=0;i--){const b=bounds(view.draw[i]);if(x>=b.x&&x<b.x+b.w&&y>=b.y&&y<b.y+b.h)return i}return -1}
+const canvas=$('screen');
+function canvasPoint(e){const r=canvas.getBoundingClientRect();return{x:(e.clientX-r.left)*240/r.width,y:(e.clientY-r.top)*240/r.height}}
+function resizeLayer(l,d,x,y){
+ const o=d.orig,k=d.h,dx=Math.round(x-d.x0),dy=Math.round(y-d.y0);
+ if(l.t==='circle'){l.r=Math.max(1,Math.round(Math.hypot(x-o.x,y-o.y)));return}
+ if(l.t==='text'){let nh=(o.s||1)*8;if(k.includes('n'))nh-=dy;if(k.includes('s'))nh+=dy;l.s=Math.max(1,Math.min(10,Math.round(nh/8)));return}
+ if(l.t==='icon'){let nh=(o.s||1)*24;if(k.includes('n'))nh-=dy;if(k.includes('s'))nh+=dy;l.s=Math.max(1,Math.min(8,Math.round(nh/24)));return}
+ const sx=l.t==='bitmap'?(o.s||1):1,cdx=dx/sx,cdy=dy/sx;
+ let nx=o.x,ny=o.y,nw=o.w||1,nh=o.h||1;
+ if(k.includes('w')){nx=o.x+dx;nw=(o.w||1)-cdx}
+ if(k.includes('e'))nw=(o.w||1)+cdx;
+ if(k.includes('n')){ny=o.y+dy;nh=(o.h||1)-cdy}
+ if(k.includes('s'))nh=(o.h||1)+cdy;
+ if(nw<1){nx+=Math.round((nw-1)*sx);nw=1}
+ if(nh<1){ny+=Math.round((nh-1)*sx);nh=1}
+ l.x=Math.round(nx);l.y=Math.round(ny);l.w=Math.round(nw);l.h=Math.round(nh);
+}
+canvas.addEventListener('pointerdown',e=>{
+ const p=canvasPoint(e);
+ if(selected>=0&&view.draw[selected]){const b=bounds(view.draw[selected]),h=handleAt(p.x,p.y,b);if(h){drag={mode:'resize',h,x0:p.x,y0:p.y,orig:clone(view.draw[selected]),moved:false};canvas.setPointerCapture(e.pointerId);return}}
+ const i=hit(p.x,p.y);selectLayer(i);if(i>=0){drag={mode:'move',i,dx:p.x-view.draw[i].x,dy:p.y-view.draw[i].y,moved:false};canvas.setPointerCapture(e.pointerId)}
+});
+canvas.addEventListener('pointermove',e=>{
+ if(!drag)return;const p=canvasPoint(e);const l=drag.mode==='move'?view.draw[drag.i]:view.draw[selected];if(!l)return;
+ if(!drag.moved){pushHistory(true);drag.moved=true}
+ if(drag.mode==='move'){l.x=Math.round(p.x-drag.dx);l.y=Math.round(p.y-drag.dy)}
+ else resizeLayer(l,drag,p.x,p.y);
+ draw();renderProps();syncJson();
+});
+canvas.addEventListener('pointerup',()=>{if(drag&&drag.moved){draw();renderLayers();syncJson()}drag=null});
+canvas.addEventListener('pointercancel',()=>{drag=null});
+document.addEventListener('keydown',e=>{const tag=(e.target.tagName||'').toLowerCase();if(tag==='input'||tag==='textarea'||tag==='select')return;if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'){e.preventDefault();e.shiftKey?redo():undo()}else if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='y'){e.preventDefault();redo()}else if((e.key==='Delete'||e.key==='Backspace')&&selected>=0){e.preventDefault();deleteLayer()}});
+
+function syncJson(){const el=$('json');if(el)el.value=JSON.stringify(exportView(),null,2)}
+function applyJson(){try{const v=JSON.parse($('json').value);if(!v||typeof v!=='object'||!Array.isArray(v.draw))throw new Error('Expected an object with a draw array');pushHistory(true);view.bg=v.bg||'#000000';view.ttl=Number(v.ttl)||15;view.priority=Number(v.priority)||0;view.draw=v.draw.map(l=>Object.assign({id:uid++},l));selected=view.draw.length?0:-1;$('bg').value=view.bg;$('ttl').value=view.ttl;$('priority').value=view.priority;draw();renderLayers();renderProps();toast('JSON applied')}catch(e){toast('Invalid JSON: '+e.message)}}
+function copyJson(){navigator.clipboard&&navigator.clipboard.writeText($('json').value).then(()=>toast('Copied')).catch(()=>toast('Copy failed'))}
+function downloadJson(){const blob=new Blob([$('json').value],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='view.json';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
+function loadExample(){$('json').value=JSON.stringify(DEMO_VIEW);applyJson();toast('Example loaded')}
+function clearView(){if(!confirm('Clear the canvas?'))return;pushHistory(true);view={bg:'#000000',ttl:15,priority:0,draw:[]};selected=-1;$('bg').value=view.bg;$('ttl').value=view.ttl;$('priority').value=view.priority;draw();renderLayers();renderProps();syncJson();toast('Cleared')}
+function saveLocal(){localStorage.setItem('smalltv-view',JSON.stringify(view));toast('Saved locally')}
+function loadLocal(){try{const v=JSON.parse(localStorage.getItem('smalltv-view')||'null');if(!v)throw new Error('Nothing saved');$('json').value=JSON.stringify(v,null,2);applyJson()}catch(e){toast(e.message)}}
+
+async function api(path,opt){const base=$('deviceUrl').value.trim().replace(/\/$/,'');const token=$('token').value;if(!base)throw new Error('Set the device URL');if(location.protocol==='https:'&&base.startsWith('http:'))throw new Error('This HTTPS page cannot reach an HTTP device (mixed content). Use a local HTTP copy of the editor or the device View tab.');const sep=path.includes('?')?'&':'?';const url=base+path+sep+'token='+encodeURIComponent(token);const r=await fetch(url,opt);const text=await r.text();if(!r.ok)throw new Error(text||('HTTP '+r.status));return text}
+function status(m,warn){const el=$('deviceStatus');el.textContent=m;el.className='status'+(warn?' warn':'')}
+async function loadDevice(){try{status('Loading...');const text=await api('/api/dashboard');$('json').value=text;applyJson();status('Loaded from device')}catch(e){status('Load failed: '+e.message,true)}}
+async function pushDevice(){try{status('Saving...');await api('/api/dashboard',{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify(exportView())});status('Dashboard saved')}catch(e){status('Save failed: '+e.message,true)}}
+async function testOverlay(){try{status('Showing overlay...');await api('/api/view',{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify(exportView())});status('Overlay shown')}catch(e){status('Overlay failed: '+e.message,true)}}
+async function clearOverlay(){try{await api('/api/view/clear',{method:'POST'});status('Overlay cleared')}catch(e){status('Clear failed: '+e.message,true)}}
+async function fetchUsage(){try{status('Fetching usage...');const text=await api('/api/usage');usageData=JSON.parse(text);draw();status('Usage fetched')}catch(e){status('Usage failed: '+e.message,true)}}
+
+$('json').value=JSON.stringify(exportView(),null,2);
+draw();renderLayers();
+setInterval(()=>{if(!drag)draw()},1000);
+</script>
+</body>
+</html>
