@@ -32,6 +32,8 @@ static void readMetrics(JsonObjectConst src, ProviderUsage& dst) {
     memset(&out, 0, sizeof(out));
     const char* label = m["label"] | "";
     strlcpy(out.label, label[0] ? label : "--", sizeof(out.label));
+    const char* value = m["value"] | "";
+    if (value[0]) strlcpy(out.value, value, sizeof(out.value));
     out.pct = constrain(m["pct"] | 0.0f, 0.0f, 100.0f);
     out.resetMin = m["resetMin"] | 0;
     if (out.resetMin < 0) out.resetMin = 0;
@@ -130,6 +132,7 @@ void usageStatusJson(JsonObject& root) {
     for (uint8_t k = 0; k < p.metricCount; k++) {
       JsonObject m = ms.add<JsonObject>();
       m["label"] = p.metrics[k].label;
+      if (p.metrics[k].value[0]) m["value"] = p.metrics[k].value;
       m["pct"] = p.metrics[k].pct;
       m["resetMin"] = p.metrics[k].resetMin;
     }

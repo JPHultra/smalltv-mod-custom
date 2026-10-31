@@ -12,7 +12,7 @@ int main() {
      "metrics":[{"label":"5h","pct":29,"resetMin":142},
                 {"label":"7d","pct":4,"resetMin":9876}]},
     {"id":"chatgpt","name":"ChatGPT","ok":true,
-     "metrics":[{"label":"5h","pct":62,"resetMin":88}]}
+     "metrics":[{"label":"5h","pct":62,"resetMin":88,"value":"1.2M tokens"}]}
   ]})";
   assert(usageApply(String(normalized)));
   const ProviderUsage* claude = usageFind("claude");
@@ -23,6 +23,7 @@ int main() {
   assert(claude->metrics[0].resetMin == 142);
   const ProviderUsage* chatgpt = usageFind("chatgpt");
   assert(chatgpt && chatgpt->metricCount == 1 && chatgpt->metrics[0].pct == 62.0f);
+  assert(!strcmp(chatgpt->metrics[0].value, "1.2M tokens"));
   assert(usageFind("deepseek") == nullptr);
 
   // The legacy Claude daemon keeps working and updates the same provider.

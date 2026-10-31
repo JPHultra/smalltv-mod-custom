@@ -132,6 +132,7 @@
 #define USAGE_MAX_ID       16
 #define USAGE_MAX_NAME     20
 #define USAGE_MAX_LABEL    12
+#define USAGE_VALUE_MAX    20   // a display value such as "110.00 CNY" or "1.2M tokens"
 #define USAGE_MAX_STATUS   16
 #define USAGE_STALE_MS 120000UL
 

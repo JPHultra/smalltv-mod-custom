@@ -6,7 +6,7 @@
     {"t": "text", "x": 120, "y": 26, "s": 6, "c": "#e9edf4", "a": "c", "v": "{HH}:{MM}"},
     {"t": "text", "x": 120, "y": 82, "s": 2, "c": "#86e2bf", "a": "c", "v": "{WEEKDAY} {YYYY}-{MON}-{DD}"},
     {"t": "usage", "x": 8, "y": 112, "w": 224, "h": 58, "c": "#d97757", "provider": "claude", "metric": -1},
-    {"t": "usage", "x": 8, "y": 178, "w": 110, "h": 52, "c": "#10a37f", "provider": "chatgpt", "metric": 0},
-    {"t": "usage", "x": 122, "y": 178, "w": 110, "h": 52, "c": "#4d6bfe", "provider": "deepseek", "metric": 0}
+    {"t": "usage", "x": 8, "y": 178, "w": 110, "h": 52, "c": "#10a37f", "provider": "chatgpt", "metric": -1},
+    {"t": "usage", "x": 122, "y": 178, "w": 110, "h": 52, "c": "#4d6bfe", "provider": "deepseek", "metric": -1}
   ]
 }

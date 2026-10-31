@@ -120,18 +120,27 @@ static void drawUsageSingle(Arduino_GFX* gfx, int x, int y, int w, int h,
 
   char pct[10];
   snprintf(pct, sizeof(pct), "%d%%", (int)lroundf(constrain(m.pct, 0.0f, 100.0f)));
+  const bool hasValue = m.value[0] != 0;
+  char big[USAGE_VALUE_MAX + 1];
+  strlcpy(big, hasValue ? m.value : pct, sizeof(big));
   uint8_t size = (h >= 74) ? 4 : (h >= 56 ? 3 : 2);
-  while (size > 1 && textWidth(pct, size) > w - 24) size--;
+  while (size > 1 && textWidth(big, size) > w - 24) size--;
+  if (textWidth(big, 1) > w - 24 && w > 24) {
+    int maxChars = (w - 24) / 6;
+    if (maxChars < 1) maxChars = 1;
+    if ((size_t)maxChars < strlen(big)) big[maxChars] = 0;
+  }
   gfx->setTextSize(size);
   gfx->setTextColor(gfxTint(0xFFFF));
   gfx->setCursor(x + 12, y + 20);
-  gfx->print(pct);
+  gfx->print(big);
 
   const int bx = x + 12, bw = w - 24;
   const int by = y + h - 14;
-  if (bw > 0 && by > y + 18) drawUsageBar(gfx, bx, by, bw, 8, m.pct, track);
+  if (bw > 0 && by > y + 18 && (m.pct > 0 || !hasValue))
+    drawUsageBar(gfx, bx, by, bw, 8, m.pct, track);
 
-  if (h >= 80) {
+  if (h >= 80 && (!hasValue || m.resetMin > 0)) {
     char reset[20], line[36];
     fmtReset(m.resetMin, reset, sizeof(reset));
     snprintf(line, sizeof(line), "Resets in %s", reset);
@@ -160,16 +169,27 @@ static void drawUsageRows(Arduino_GFX* gfx, int x, int y, int w, int h,
 
     char pct[10];
     snprintf(pct, sizeof(pct), "%d%%", (int)lroundf(constrain(m.pct, 0.0f, 100.0f)));
-    const uint8_t ps = large ? 2 : 1;
+    char right[USAGE_VALUE_MAX + 1];
+    strlcpy(right, m.value[0] ? m.value : pct, sizeof(right));
+    int maxRight = w - 12 - textWidth(m.label, 1) - 8;
+    if (maxRight < 12) maxRight = 12;
+    uint8_t ps = large ? 2 : 1;
+    while (ps > 1 && textWidth(right, ps) > maxRight) ps--;
+    if (textWidth(right, 1) > maxRight) {
+      int maxChars = maxRight / 6;
+      if (maxChars < 1) maxChars = 1;
+      if ((size_t)maxChars < strlen(right)) right[maxChars] = 0;
+    }
     gfx->setTextSize(ps);
     gfx->setTextColor(gfxTint(0xFFFF));
-    gfx->setCursor(x + w - textWidth(pct, ps) - 12, ry - (large ? 2 : 0));
-    gfx->print(pct);
+    gfx->setCursor(x + w - textWidth(right, ps) - 12, ry - (large ? 2 : 0));
+    gfx->print(right);
 
     const int by = ry + (large ? 13 : 9);
     const int bh = large ? 6 : 4;
     const int bw = w - 24;
-    if (bw > 0 && by + bh <= y + h) drawUsageBar(gfx, x + 12, by, bw, bh, m.pct, track);
+    if (m.pct > 0 && bw > 0 && by + bh <= y + h)
+      drawUsageBar(gfx, x + 12, by, bw, bh, m.pct, track);
   }
 }
 

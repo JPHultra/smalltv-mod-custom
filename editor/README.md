@@ -44,7 +44,8 @@ The token is a write credential for `/api/dashboard`, `/api/view` and
   real vector icon.
 - Usage components read the latest provider snapshot pushed by the daemon. A
   `metric` of `-1` (or no metric) stacks every metric the provider sends; `0`-`2`
-  picks one. The editor uses sample values until **Fetch usage** succeeds.
+  picks one. A metric can carry a `value` string (balance, token count) instead
+  of a percentage. The editor uses sample values until **Fetch usage** succeeds.
 
 ## JSON shape
 

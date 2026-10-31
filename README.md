@@ -128,18 +128,31 @@ One local process normalizes the three providers and POSTs the document to
 ```json
 {"providers":[
   {"id":"claude","name":"Claude","ok":true,"metrics":[{"label":"5h","pct":29,"resetMin":142}]},
-  {"id":"chatgpt","name":"ChatGPT","ok":true,"metrics":[{"label":"5h","pct":62,"resetMin":88}]},
-  {"id":"deepseek","name":"DeepSeek","ok":true,"metrics":[{"label":"balance","pct":81,"resetMin":0}]}
+  {"id":"chatgpt","name":"Codex","ok":true,"metrics":[{"label":"5h","pct":1,"resetMin":292},
+                                                       {"label":"7d","pct":45,"resetMin":6372}]},
+  {"id":"deepseek","name":"DeepSeek","ok":true,"metrics":[{"label":"balance","value":"110 CNY","pct":0,"resetMin":0},
+                                                          {"label":"tokens","value":"1.2M","pct":0,"resetMin":0}]}
 ]}
 ```
 
-`daemon/usage_daemon.py` aggregates one URL per provider, with a
-`claude-legacy` adapter for the old `{s,sr,w,wr,st,ok}` payload, a `generic`
-dotted-path adapter, and a `normalized` adapter. Copy
-`daemon/usage-daemon.example.json` to `daemon/usage-daemon.json` (git-ignored),
-point the providers at your local sources, and run it. `daemon/push_usage.py`
-remains for a single pre-built document, a URL, or demo data. The firmware only
-needs the normalized contract above; provider credentials stay on the PC.
+`daemon/usage_daemon.py` aggregates the providers:
+
+- **Claude** via the legacy `{s,sr,w,wr,st,ok}` adapter.
+- **Codex / ChatGPT subscription** via the `codex` adapter. It reads the tokens
+  the Codex CLI already stores in `~/.codex/auth.json`, refreshes them when
+  needed, and maps the 5-hour and weekly windows from the ChatGPT usage endpoint.
+- **DeepSeek** via the `deepseek` adapter: official balance API plus optional
+  token usage from `daemon/deepseek_proxy.py`. DeepSeek has no aggregate usage
+  endpoint, so the proxy forwards API requests, counts their `usage` fields and
+  serves the total to the daemon.
+- **Generic / normalized** sources via dotted JSON paths or a pre-shaped object.
+
+Copy `daemon/usage-daemon.example.json` to `daemon/usage-daemon.json`
+(git-ignored), point the providers at your sources, and run it. A metric may
+carry a `value` string (for example `110 CNY` or `1.2M tokens`) instead of a
+percentage. `daemon/push_usage.py` remains for a single pre-built document, a
+URL, or demo data. The firmware only needs the normalized contract; provider
+credentials stay on the PC.
 
 ## HTTP API
 
