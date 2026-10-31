@@ -7,12 +7,14 @@
 <style>
 :root{--bg:#0e1116;--card:#171c24;--mut:#8b96a5;--fg:#e6edf3;--acc:#3fb950;--acc2:#2f81f7;--red:#f85149;--bd:#262d38}
 *{box-sizing:border-box}
+html,body{max-width:100%;overflow-x:hidden}
 body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--fg);font-size:14px}
 header{padding:14px 18px;border-bottom:1px solid var(--bd);display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 header h1{font-size:18px;margin:0;font-weight:650}
 header .muted{font-size:13px}
-.wrap{display:grid;grid-template-columns:250px minmax(240px,480px) 320px;gap:16px;padding:16px;max-width:1160px;margin:0 auto;align-items:start}
-@media(max-width:1000px){.wrap{grid-template-columns:1fr}}
+.wrap{display:grid;grid-template-columns:minmax(210px,250px) minmax(0,1fr) minmax(280px,320px);gap:16px;padding:16px;max-width:1160px;margin:0 auto;align-items:start;width:100%}
+.wrap>div{min-width:0}
+@media(max-width:1000px){.wrap{grid-template-columns:1fr}canvas{width:min(100%,480px)}}
 .card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:14px}
 h2{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--mut);margin:0 0 10px}
 button{font:inherit;background:var(--acc);color:#04130a;border:0;padding:8px 12px;border-radius:8px;font-weight:650;cursor:pointer}
@@ -22,8 +24,8 @@ button.small{padding:5px 8px;font-size:12px;font-weight:600}
 button:disabled{opacity:.5;cursor:default}
 .palette{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .palette button{background:#222b36;color:var(--fg);font-weight:600;text-align:left}
-.stage{background:#080c12;border:1px solid var(--bd);border-radius:16px;padding:12px;display:flex;justify-content:center}
-canvas{width:min(480px,calc(100vw - 72px));height:auto;image-rendering:pixelated;background:#000;touch-action:none;border-radius:6px;cursor:crosshair}
+.stage{background:#080c12;border:1px solid var(--bd);border-radius:16px;padding:12px;display:flex;justify-content:center;min-width:0}
+canvas{width:min(100%,480px,calc(100vh - 300px));max-width:480px;height:auto;image-rendering:pixelated;background:#000;touch-action:none;border-radius:6px;cursor:crosshair}
 label{display:block;margin:9px 0 4px;font-size:12px;color:var(--mut)}
 input[type=text],input[type=url],input[type=password],input[type=number],select,textarea{width:100%;padding:8px 9px;background:#0b0e13;border:1px solid var(--bd);border-radius:8px;color:var(--fg);font-size:14px}
 textarea{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;min-height:86px}

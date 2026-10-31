@@ -13,11 +13,11 @@ python3 -m http.server 8000
 
 Then open `http://localhost:8000/`.
 
-The same folder is deployed to GitHub Pages by `.github/workflows/editor.yml`.
-A page served over HTTPS cannot fetch an HTTP device (mixed-content blocking),
-so direct **Load / Save / Test overlay** only works from an HTTP page. On the
-GitHub Pages copy, use the device's **View** tab textarea for the final push, or
-export the JSON with **Download JSON** and paste it there.
+The same folder is published to GitHub Pages with `tools/deploy_pages.sh`. A
+page served over HTTPS cannot fetch an HTTP device (mixed-content blocking), so
+direct **Load / Save / Test overlay** only works from an HTTP page. On the GitHub
+Pages copy, use the device's **View** tab textarea for the final push, or export
+the JSON with **Download JSON** and paste it there.
 
 ## Device connection
 
