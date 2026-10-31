@@ -22,8 +22,8 @@ New here? Follow [SETUP.md](SETUP.md) for the complete build, flash, dashboard, 
 ## Build
 
 The fast path builds every release image in the order that minimizes pioarduino
-framework rebuilds, stages the ten assets in `dist/`, and runs the same 8 KB
-slot gate as CI:
+framework rebuilds, stages the ten assets in `dist/`, and runs the local 8 KB
+slot gate:
 
 ```sh
 pip install platformio==6.1.19
@@ -75,8 +75,24 @@ python3 -m unittest discover -s daemon -p 'test_*.py'
 Flashing is unchanged from upstream: OTA from the stock web UI on the ESP8266,
 esptool `write_flash 0x0 firmware.factory.bin` on the ESP32 boards, and the
 two-step loader on the Ultra. Self-update pulls release assets from
-`JPHultra/smalltv-mod-custom`, so tag releases as `vX.Y.Z` and let
-`.github/workflows/build.yml` attach the images.
+`JPHultra/smalltv-mod-custom`, so tag releases as `vX.Y.Z`.
+
+Release locally, without GitHub Actions:
+
+```sh
+# edit FW_VERSION in src/config.h first
+python3 tools/build_release.py --pio /path/to/pio --jobs 8
+python3 tools/ci_checks.py assets
+git add src/config.h
+git commit -m "Bump FW_VERSION to X.Y.Z"
+git push origin main
+git tag vX.Y.Z
+git push origin vX.Y.Z
+gh release create vX.Y.Z dist/* --title "vX.Y.Z" --notes "Release notes"
+```
+
+The ten `dist/` assets are attached to the release by `gh`; keep their names
+unchanged because the firmware's `UPDATE_ASSET` values point at them.
 
 ## Dashboard
 
@@ -103,12 +119,14 @@ stacks every metric the provider sends; `0`-`4` picks one. Text supports `{HH}`,
 the stored dashboard ignores it. A sample lives in
 [`examples/view.json`](examples/view.json).
 
-The editor deploys to GitHub Pages from `editor/`; open it at
-`https://jphultra.github.io/smalltv-mod-custom/`. It has drag/resize handles,
-undo/redo (Ctrl/Cmd+Z), alignment and z-order controls, real icon previews, and a
-clickable bitmap pixel grid. A page served over HTTPS cannot fetch an HTTP
-device (mixed-content blocking), so direct push only works from a local HTTP
-copy or the device's own **View** tab.
+Publish the editor to GitHub Pages from this PC with
+`tools/deploy_pages.sh`; it force-pushes `editor/` to the `gh-pages` branch and
+sets Pages to deploy from that branch. The URL is
+`https://jphultra.github.io/smalltv-mod-custom/`. The editor has drag/resize
+handles, undo/redo (Ctrl/Cmd+Z), alignment and z-order controls, real icon
+previews, and a clickable bitmap pixel grid. A page served over HTTPS cannot
+fetch an HTTP device (mixed-content blocking), so direct push only works from a
+local HTTP copy or the device's own **View** tab.
 
 ## Webhook overlay
 
