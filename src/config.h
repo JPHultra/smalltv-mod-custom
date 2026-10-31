@@ -10,7 +10,7 @@
 // Firmware identity
 // ---------------------------------------------------------------------------
 #define FW_NAME     "smalltv-mod"
-#define FW_VERSION  "4.0.1-custom"
+#define FW_VERSION  "4.0.2-custom"
 
 #define REPO_URL      "https://github.com/JPHultra/smalltv-mod-custom"
 #define REPO_OWNER    "JPHultra"

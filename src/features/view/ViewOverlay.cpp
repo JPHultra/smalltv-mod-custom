@@ -19,7 +19,7 @@ void ViewOverlay::start(const ViewScreen& screen, uint16_t ttlSec) {
   error_ = "";
   viewRender(screen_);
   lastUsageRev_ = usageRevision();
-  lastClockKey_ = screen_.needsClock ? viewClockKey() : 0;
+  lastClockKey_ = screen_.needsClock ? viewClockKey(screen_.needsSeconds) : 0;
 }
 
 bool ViewOverlay::show(const String& json, uint16_t defaultTtlSec, String& error) {
@@ -63,11 +63,18 @@ void ViewOverlay::service() {
     return;
   }
   const uint32_t rev = usageRevision();
-  const uint32_t clock = screen_.needsClock ? viewClockKey() : 0;
-  if ((screen_.hasUsage && rev != lastUsageRev_) ||
-      (screen_.needsClock && clock != lastClockKey_)) {
+  const uint32_t clock = screen_.needsClock ? viewClockKey(screen_.needsSeconds) : 0;
+  const bool usageChanged = screen_.hasUsage && rev != lastUsageRev_;
+  const bool clockChanged = screen_.needsClock && clock != lastClockKey_;
+  if (usageChanged) {
     viewRender(screen_);
     lastUsageRev_ = rev;
+    lastClockKey_ = clock;
+  } else if (clockChanged) {
+    if (!viewRenderClock(screen_)) {
+      viewRender(screen_);
+      lastUsageRev_ = rev;
+    }
     lastClockKey_ = clock;
   }
 }

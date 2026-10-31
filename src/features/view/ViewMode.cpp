@@ -78,7 +78,7 @@ void ViewMode::repaint() {
   if (loaded_) {
     viewRender(screen_);
     lastUsageRev_ = usageRevision();
-    lastClockKey_ = screen_.needsClock ? viewClockKey() : 0;
+    lastClockKey_ = screen_.needsClock ? viewClockKey(screen_.needsSeconds) : 0;
     return;
   }
   gfxMessage("SmallTV View", "Push a view from the editor", C_YELLOW);
@@ -97,7 +97,13 @@ void ViewMode::service() {
     return;
   }
   const uint32_t rev = usageRevision();
-  const uint32_t clock = screen_.needsClock ? viewClockKey() : 0;
-  if ((screen_.hasUsage && rev != lastUsageRev_) ||
-      (screen_.needsClock && clock != lastClockKey_)) repaint();
+  const uint32_t clock = screen_.needsClock ? viewClockKey(screen_.needsSeconds) : 0;
+  const bool usageChanged = screen_.hasUsage && rev != lastUsageRev_;
+  const bool clockChanged = screen_.needsClock && clock != lastClockKey_;
+  if (usageChanged) {
+    repaint();
+  } else if (clockChanged) {
+    if (!viewRenderClock(screen_)) repaint();
+    else lastClockKey_ = clock;
+  }
 }

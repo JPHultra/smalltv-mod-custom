@@ -107,6 +107,12 @@ static bool parsePrim(JsonObjectConst p, ViewScreen& sc, ViewPrim& out) {
     sc.textUsed += n;
     sc.text[sc.textUsed++] = 0;
     if (memchr(buf, '{', n)) sc.needsClock = true;
+    for (size_t i = 0; i + 3 < n; i++) {
+      if (buf[i] == '{' && buf[i + 1] == 'S' && buf[i + 2] == 'S' && buf[i + 3] == '}') {
+        sc.needsSeconds = true;
+        break;
+      }
+    }
   } else if (!strcmp(t, "icon")) {
     const char* v = p["v"];
     if (!v) return false;
@@ -215,8 +221,9 @@ const char* viewPrimText(const ViewScreen& screen, const ViewPrim& prim) {
   return screen.text + (prim.voff < sizeof(screen.text) ? prim.voff : 0);
 }
 
-uint32_t viewClockKey() {
+uint32_t viewClockKey(bool includeSeconds) {
   struct tm t;
   if (!clockNow(t)) return 0;
-  return (uint32_t)time(nullptr);
+  const uint32_t now = (uint32_t)time(nullptr);
+  return includeSeconds ? now : now / 60;
 }

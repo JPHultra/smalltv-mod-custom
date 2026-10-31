@@ -5,7 +5,7 @@
 #include <cstring>
 #include <ctime>
 
-// ViewModel::viewClockKey() needs the clock; the parser test never uses it.
+// ViewModel::viewClockKey() needs the clock; the parser test never calls it.
 bool clockNow(struct tm&) { return false; }
 
 int main() {
@@ -28,6 +28,7 @@ int main() {
   assert(s.hasUsage);
   assert(s.ttl == 15);
   assert(s.priority == 2);
+  assert(!s.needsSeconds);
   assert(s.bg != 0);
   assert(s.prims[0].type == VIEW_P_TEXT);
   assert(!strcmp(viewPrimText(s, s.prims[0]), "{HH}:{MM}"));
@@ -45,6 +46,11 @@ int main() {
   assert(viewScreenParse(all_metrics, strlen(all_metrics), s, error));
   assert(s.prims[0].type == VIEW_P_USAGE && s.prims[0].aux == 255);
   assert(s.priority == 0);
+  assert(!s.needsClock);
+
+  const char* seconds = R"({"draw":[{"t":"text","x":0,"y":0,"s":1,"c":"#ffffff","v":"{SS}"}]})";
+  assert(viewScreenParse(seconds, strlen(seconds), s, error));
+  assert(s.needsClock && s.needsSeconds);
 
   // Priority is clamped to 0..3 so a bad value cannot escape the queue contract.
   const char* high_priority = R"({"priority":9,"draw":[]})";

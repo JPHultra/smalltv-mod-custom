@@ -42,6 +42,7 @@ struct ViewScreen {
   uint16_t bitmapUsed;
   uint8_t  primCount;
   bool     needsClock;  // some text has a {token}
+  bool     needsSeconds; // some text has {SS}, so the clock key is per-second
   bool     hasUsage;    // at least one usage component
   uint8_t  priority;    // overlay priority, 0..3
   ViewPrim prims[VIEW_MAX_PRIMS];
@@ -61,5 +62,6 @@ ViewScreen& viewStaging();
 // NUL-terminated text or provider id referenced by `prim`.
 const char* viewPrimText(const ViewScreen& screen, const ViewPrim& prim);
 
-// Clock key for one-second repaint decisions; 0 until NTP has set the clock.
-uint32_t viewClockKey();
+// Clock key for repaint decisions; per-minute unless includeSeconds is true.
+// Returns 0 until NTP has set the clock.
+uint32_t viewClockKey(bool includeSeconds);
