@@ -1,0 +1,690 @@
+# Spin up everything
+
+This is the end-to-end guide for this repository: build the firmware, flash any
+supported board, set up the dashboard, run the external editor, feed Claude /
+Codex / DeepSeek usage, use the webhook overlay, and publish updates.
+
+All commands assume you are at the repository root:
+
+```sh
+cd /path/to/smalltv-mod-custom
+```
+
+## 1. What you are spinning up
+
+| Piece | Where | Purpose |
+|---|---|---|
+| Firmware | `src/` | One 240x240 dashboard, a transient webhook overlay, usage cards |
+| Release builder | `tools/build_release.py` | Builds and stages all release images in the fewest framework rebuilds |
+| Web UI | `src/webui.html` -> `src/webui.h` | Device settings, status, overlay JSON fallback |
+| Visual editor | `editor/` | Static dashboard editor, deployable to GitHub Pages |
+| Usage aggregator | `daemon/usage_daemon.py` | Claude + Codex + DeepSeek -> `/api/usage` |
+| DeepSeek proxy | `daemon/deepseek_proxy.py` | Counts DeepSeek token usage (the API has no aggregate endpoint) |
+| Usage pusher | `daemon/push_usage.py` | Push an already-normalized document |
+| Example dashboard | `examples/view.json` | Clock + Claude/Codex/DeepSeek cards |
+
+There is no ticker, radar, HA/MQTT, theme engine, notification-preset mode or
+carousel anymore. The dashboard is the only display mode; the webhook overlay is
+transient above it.
+
+## 2. Requirements
+
+- Linux, macOS or WSL. These instructions use Linux paths; replace `/dev/ttyUSB0`
+  with your port (`/dev/ttyACM0`, `COM3`, ...).
+- Python 3.12 for PlatformIO. PlatformIO 6.1.19 does not reliably run on newer
+  Pythons.
+- PlatformIO 6.1.19.
+- `esptool` for USB flashing and backups.
+- Node 22+ only if you want to run the editor syntax check. The editor itself
+  has no build step.
+- A Codex login (`~/.codex/auth.json`) for Codex subscription usage.
+- A DeepSeek API key for the balance collector.
+- Optionally, the separate
+  [clawdmeter-daemon](https://github.com/giovi321/clawdmeter-daemon) for Claude.
+
+Create a local toolchain venv:
+
+```sh
+python3.12 -m venv .venv
+. .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install 'platformio==6.1.19' 'esptool'
+```
+
+If `python3.12` is not installed, use `mise` (already used on this machine):
+
+```sh
+mise install python@3.12
+mise exec python@3.12 -- python3.12 -m venv .venv
+. .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install 'platformio==6.1.19' 'esptool'
+```
+
+The build script also pins `pioarduino` to 6.1.19, which is the SCons that works
+with the ESP32 framework.
+
+## 3. Build the firmware
+
+The fast path builds every release target in framework-friendly order, stages
+the ten assets in `dist/`, and runs the 8 KB OTA-slot gate:
+
+```sh
+python tools/build_release.py
+```
+
+Useful variants:
+
+```sh
+python tools/build_release.py --envs smalltv,smalltv_c2
+python tools/build_release.py --clean       # wipe .pio/build, keep packages
+python tools/build_release.py --pio /path/to/pio --jobs 8
+python tools/build_release.py --dry-run
+```
+
+Expected output in `dist/`:
+
+```text
+smalltv-mod-firmware.bin                  # ESP8266 / Ultra app image
+smalltv-mod-loader.bin                    # Ultra first-install loader
+smalltv-mod-firmware-c2.bin               # ESP32-C2 app
+smalltv-mod-firmware-c2.factory.bin       # ESP32-C2 first install
+smalltv-mod-firmware-esp32.bin            # NM-TV-154 app
+smalltv-mod-firmware-esp32.factory.bin    # NM-TV-154 first install
+smalltv-mod-firmware-esp32-wg.bin         # NM-TV-154 + WireGuard app
+smalltv-mod-firmware-esp32-wg.factory.bin # NM-TV-154 + WireGuard first install
+smalltv-mod-firmware-esp32-pro.bin        # SmallTV Pro app / stock-UI install
+smalltv-mod-firmware-esp32-pro.factory.bin# SmallTV Pro first install / recovery
+```
+
+Manual per-env builds still work:
+
+```sh
+pio run -e smalltv
+pio run -e smalltv_c2
+pio run -e smalltv_esp32
+pio run -e smalltv_esp32_wg
+pio run -e smalltv_esp32_8mb
+pio run -e smalltv_loader
+```
+
+After editing `src/webui.html`, regenerate the served page and rebuild:
+
+```sh
+python tools/gzip_webui.py
+```
+
+The release builder uses the current `.pio` caches; only switching between the
+C2, classic-ESP32 custom, classic-ESP32 stock and ESP8266 framework states costs
+a framework rebuild.
+
+## 4. Flash by board
+
+Back up the stock firmware before overwriting it. The factory files are written
+at offset `0x0`; the non-factory files are app images for OTA.
+
+### SmallTV / SmallTV-ultra (ESP8266)
+
+Standard SmallTV, from the stock web UI:
+
+1. Browse to `http://<device-ip>/update`.
+2. Upload `dist/smalltv-mod-firmware.bin`.
+3. The device reboots into this firmware.
+
+SmallTV-ultra, whose stock updater rejects the full image with `Not Enough
+Space`:
+
+1. Browse to `http://<device-ip>/update`, upload `dist/smalltv-mod-loader.bin`.
+2. Join the open `SmallTV-Loader` AP, browse to `http://192.168.4.1/update`.
+3. Upload `dist/smalltv-mod-firmware.bin`.
+
+UART recovery on either ESP8266 board:
+
+```sh
+PORT=/dev/ttyUSB0
+python -m esptool --port "$PORT" read_flash 0x0 0x400000 stock-backup.bin
+python -m esptool --port "$PORT" erase_flash
+python -m esptool --port "$PORT" write_flash 0x0 dist/smalltv-mod-firmware.bin
+```
+
+Hold `GPIO0` to GND while powering on to enter flash mode, then release it.
+
+### SmallTV ESP32-C2 / ESP8684
+
+```sh
+PORT=/dev/ttyUSB0
+python -m esptool --chip esp32c2 --port "$PORT" read_flash 0x0 0x400000 stock-backup.bin
+python -m esptool --chip esp32c2 --port "$PORT" --baud 921600 \
+  write_flash 0x0 dist/smalltv-mod-firmware-c2.factory.bin
+```
+
+The onboard CH340C handles auto-reset, so no button is needed. Use the system
+`esptool`, not the bundled PlatformIO one (the C2 env is already configured this
+way).
+
+### NM-TV-154 (classic ESP32, 4 MB)
+
+```sh
+PORT=/dev/ttyUSB0
+python -m esptool --chip esp32 --port "$PORT" read_flash 0x0 0x400000 stock-backup.bin
+python -m esptool --chip esp32 --port "$PORT" --baud 921600 \
+  write_flash 0x0 dist/smalltv-mod-firmware-esp32.factory.bin
+```
+
+For the WireGuard image, use `smalltv-mod-firmware-esp32-wg.factory.bin`.
+
+### SmallTV Pro (classic ESP32, 8 MB)
+
+The USB-C port is power only. First install over the air from the stock web UI:
+
+1. Browse to `http://<device-ip>/update`.
+2. Upload `dist/smalltv-mod-firmware-esp32-pro.bin` (the app image, not the
+   factory image).
+
+The partition layout matches stock, so the stock updater accepts it.
+
+UART backup/recovery:
+
+```sh
+PORT=/dev/ttyUSB0
+python -m esptool --chip esp32 --port "$PORT" read_flash 0x0 0x800000 stock-backup.bin
+python -m esptool --chip esp32 --port "$PORT" --baud 921600 \
+  write_flash 0x0 dist/smalltv-mod-firmware-esp32-pro.factory.bin
+```
+
+After the first install, every board updates from the web UI's **System** tab.
+
+## 5. First boot and WiFi
+
+1. The device shows `SETUP MODE` and opens `SmallTV-Setup`.
+2. Join it; if no captive portal appears, browse to `http://192.168.4.1`.
+3. Open **WiFi**, scan, select your 2.4 GHz network, enter the password, save.
+4. The device reboots and shows the network, its IP, and
+   `http://<hostname>.local`.
+
+The default hostname is unique, usually `smalltv-<chipid>`. Set a friendly
+hostname in **WiFi** if you want, then use the shown IP or the exact mDNS name.
+`smalltv.local` only works if you named the device `smalltv`.
+
+Optional on this screen:
+
+- **WiFi password** for the web UI, under **System**. Off by default. There is
+  no recovery other than reflashing.
+- **WireGuard** under **WiFi** on C2, Pro and the `-wg` image.
+- **Night mode** and timezone under **Display**.
+- **Button** actions under **Display** on classic-ESP32 boards.
+
+## 6. Dashboard and editor
+
+The device stores one draw list at `/view.json`. You can edit it with the
+external visual editor or paste JSON into the device's **View** tab.
+
+### Option A: visual editor on GitHub Pages
+
+The repository's `.github/workflows/editor.yml` deploys `editor/` to GitHub
+Pages when `main` changes. The URL is:
+
+```text
+https://jphultra.github.io/smalltv-mod-custom/
+```
+
+Direct push from that HTTPS page to an HTTP device is blocked by mixed content.
+Use the editor for design/export, or run a local HTTP copy for direct push.
+
+### Option B: visual editor locally, direct push
+
+```sh
+cd editor
+python3 -m http.server 8000
+```
+
+Open `http://localhost:8000`, then:
+
+1. **Device URL**: `http://<device-ip>` or the exact `http://<hostname>.local`.
+2. **Editor token**: the token you set in the device's **View** tab.
+3. **Load example** to start from the sample dashboard.
+4. **Load** to pull the installed dashboard, **Save dashboard** to install it,
+   **Test overlay** to show it for its TTL.
+5. **Fetch usage** to preview live provider data.
+
+The editor can load/push `/api/dashboard`, push/clear `/api/view`, and read
+`/api/usage`. The token is in the query string; it is a write credential, not
+the web UI password.
+
+### Option C: device-only JSON fallback
+
+1. Open the device web UI -> **View**.
+2. Set an **Editor token** and save.
+3. Open `examples/view.json` and paste it into the JSON textarea.
+4. **Save dashboard**, then **Test overlay**.
+
+### The draw list
+
+```json
+{
+  "bg": "#0b1420",
+  "ttl": 15,
+  "draw": [
+    {"t":"text","x":120,"y":26,"s":6,"c":"#e9edf4","a":"c","v":"{HH}:{MM}"},
+    {"t":"usage","x":8,"y":112,"w":224,"h":58,"c":"#d97757","provider":"claude","metric":-1},
+    {"t":"usage","x":8,"y":178,"w":110,"h":52,"c":"#10a37f","provider":"chatgpt","metric":-1},
+    {"t":"usage","x":122,"y":178,"w":110,"h":52,"c":"#4d6bfe","provider":"deepseek","metric":-1}
+  ]
+}
+```
+
+Primitives: `fill`, `rect`, `rrect`, `circle`, `line`, `text`, `icon`, `bitmap`,
+`usage`. Text tokens: `{HH}`, `{hh}`, `{MM}`, `{SS}`, `{DD}`, `{MON}`,
+`{MONTH}`, `{WD}`, `{WEEKDAY}`, `{YYYY}`. A usage `metric` of `-1` (or omitted)
+stacks all metrics; `0`-`2` selects one.
+
+## 7. Usage: Claude, Codex, DeepSeek
+
+### 7.1 Configure the aggregator
+
+```sh
+cp daemon/usage-daemon.example.json daemon/usage-daemon.json
+```
+
+`daemon/usage-daemon.json` is git-ignored because it may contain API keys and
+local URLs. Set its `device` to your device URL:
+
+```json
+"device": "http://192.168.1.50"
+```
+
+The device's `/api/usage` push endpoint is open by design (the daemon cannot
+carry the web UI password).
+
+### 7.2 Claude
+
+The example uses the legacy Claude daemon adapter:
+
+```json
+{"id":"claude","name":"Claude","url":"http://127.0.0.1:8787/","adapter":"claude-legacy"}
+```
+
+Run the separate
+[clawdmeter-daemon](https://github.com/giovi321/clawdmeter-daemon) with
+`--serve` on port 8787, or remove the `claude` provider from
+`usage-daemon.json` if you do not use it. The legacy daemon can also push
+directly to the device's `/api/usage`; if you do that, remove the aggregator's
+Claude entry to avoid duplicate updates.
+
+### 7.3 Codex / ChatGPT subscription
+
+Run Codex once and log in, so it creates `~/.codex/auth.json`:
+
+```sh
+codex login
+```
+
+The adapter:
+
+- reads the ChatGPT access token and account id from that file,
+- calls `https://chatgpt.com/backend-api/wham/usage`,
+- maps the 5-hour and weekly windows,
+- refreshes the token through `https://auth.openai.com/oauth/token` if needed,
+- writes the refreshed tokens back with mode `0600`.
+
+```json
+{"id":"chatgpt","name":"Codex","adapter":"codex","authFile":"~/.codex/auth.json"}
+```
+
+This is the endpoint the Codex CLI itself uses; it is not a public documented API,
+so it can change. The daemon does not send the email, account id or tokens to the
+device.
+
+### 7.4 DeepSeek balance
+
+Set the key in the environment of the daemon:
+
+```sh
+export DEEPSEEK_API_KEY='sk-...'
+```
+
+```json
+{"id":"deepseek","name":"DeepSeek","adapter":"deepseek","apiKeyEnv":"DEEPSEEK_API_KEY"}
+```
+
+Balance comes from `https://api.deepseek.com/user/balance`.
+
+### 7.5 DeepSeek token usage
+
+DeepSeek's public API returns usage per response but has no aggregate endpoint.
+Run the local proxy and route the DeepSeek client through it:
+
+```sh
+python daemon/deepseek_proxy.py
+```
+
+```text
+OpenAI-compatible base URL: http://127.0.0.1:8789
+Anthropic-compatible:       http://127.0.0.1:8789/anthropic
+```
+
+The proxy forwards to `https://api.deepseek.com`, adds
+`stream_options.include_usage` to streaming JSON requests, counts
+`prompt_tokens` / `completion_tokens` / `total_tokens`, and serves:
+
+```sh
+curl http://127.0.0.1:8789/usage
+curl -X POST http://127.0.0.1:8789/usage/reset
+```
+
+State lives in `~/.local/state/smalltv/deepseek-usage.json`. The API key is
+forwarded per request and never written there. Only OpenAI-compatible usage
+objects are counted; the Anthropic path is forwarded but not counted yet.
+
+Add the usage source to the provider:
+
+```json
+{
+  "id":"deepseek","name":"DeepSeek","adapter":"deepseek",
+  "apiKeyEnv":"DEEPSEEK_API_KEY",
+  "usageUrl":"http://127.0.0.1:8789/usage",
+  "usagePath":"total_tokens",
+  "usageLabel":"tokens",
+  "usageBudget":0
+}
+```
+
+Set `usageBudget` to a token budget if you want a fill bar; `0` shows the count
+only. If the proxy is down, balance still appears and the daemon logs the usage
+source error.
+
+### 7.6 Run the aggregator
+
+```sh
+python daemon/usage_daemon.py --config daemon/usage-daemon.json
+```
+
+Useful checks:
+
+```sh
+python daemon/usage_daemon.py --config daemon/usage-daemon.json --once --dry-run
+python daemon/usage_daemon.py --config daemon/usage-daemon.json --once
+curl http://<device-ip>/api/status
+```
+
+A metric can carry a `pct` (0-100), a `value` (for example `110 CNY` or
+`1.2M`), or both. The dashboard's usage cards show the value; `pct > 0` adds a
+fill bar.
+
+### 7.7 Optional: run them at login
+
+Create user units. Adjust `%h/Projects/smalltv-mod-custom` if your checkout is
+elsewhere.
+
+`~/.config/systemd/user/smalltv-deepseek-proxy.service`:
+
+```ini
+[Unit]
+Description=SmallTV DeepSeek usage proxy
+After=network-online.target
+
+[Service]
+WorkingDirectory=%h/Projects/smalltv-mod-custom
+ExecStart=%h/Projects/smalltv-mod-custom/.venv/bin/python daemon/deepseek_proxy.py
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+```
+
+`~/.config/systemd/user/smalltv-usage.service`:
+
+```ini
+[Unit]
+Description=SmallTV usage aggregator
+After=network-online.target smalltv-deepseek-proxy.service
+
+[Service]
+WorkingDirectory=%h/Projects/smalltv-mod-custom
+EnvironmentFile=%h/.config/smalltv/usage.env
+ExecStart=%h/Projects/smalltv-mod-custom/.venv/bin/python daemon/usage_daemon.py --config daemon/usage-daemon.json
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+```
+
+`~/.config/smalltv/usage.env` (mode 600):
+
+```sh
+DEEPSEEK_API_KEY=sk-...
+```
+
+Enable:
+
+```sh
+systemctl --user daemon-reload
+systemctl --user enable --now smalltv-deepseek-proxy.service smalltv-usage.service
+journalctl --user -u smalltv-usage -f
+```
+
+## 8. Notifications over the webhook
+
+The overlay is a full 240x240 draw list. Push one:
+
+```sh
+curl -X POST 'http://<device-ip>/api/view' \
+  -H 'Content-Type: text/plain' \
+  --data '{"ttl":20,"bg":"#000000","draw":[
+    {"t":"text","x":120,"y":100,"s":3,"c":"#ffffff","a":"c","v":"Build finished"},
+    {"t":"icon","x":120,"y":150,"s":3,"c":"#00ff88","a":"c","v":"check"}
+  ]}'
+```
+
+Clear it:
+
+```sh
+curl -X POST 'http://<device-ip>/api/view/clear'
+```
+
+If the web UI password is enabled, add the editor token instead of digest:
+
+```sh
+curl -X POST 'http://<device-ip>/api/view?token=<editor-token>' \
+  -H 'Content-Type: text/plain' --data @view.json
+```
+
+Or use digest auth:
+
+```sh
+curl --digest -u admin:'<password>' -X POST 'http://<device-ip>/api/view' ...
+```
+
+### Polling instead of pushing
+
+In **View**, set:
+
+- **Poll URL**: a URL returning the same draw list JSON.
+- **Poll every (s)**: e.g. `15`; `0` disables.
+- **Default hold (s)**: e.g. `20`.
+
+A `204` or an empty body clears the overlay; invalid JSON leaves it alone.
+A static file server works:
+
+```sh
+python3 -m http.server 8788 --directory /path/to/views
+# Poll URL: http://<pc-ip>:8788/view.json
+```
+
+The overlay is never persisted; reboot clears it.
+
+## 9. Web UI and API
+
+The UI is at `http://<device-ip>/` or `http://<hostname>.local/`.
+
+| Route | Purpose |
+|---|---|
+| `GET/POST /api/config` | settings |
+| `GET /api/status` | device, providers, overlay, poller |
+| `GET/POST /api/dashboard` | installed dashboard JSON |
+| `POST /api/view`, `POST /api/view/clear` | transient overlay |
+| `GET/POST /api/usage` | usage status / daemon push |
+| `POST /update` | firmware upload (System tab) |
+| `GET /api/export`, `POST /api/import` | settings backup |
+
+Common checks:
+
+```sh
+curl http://<device-ip>/api/status
+curl http://<device-ip>/api/dashboard
+curl http://<device-ip>/api/usage
+```
+
+A provider appears as `valid`, `stale`, or `error`; the **Usage** tab in the web
+UI shows the same data.
+
+## 10. Updates and releases
+
+The device self-update is pointed at `JPHultra/smalltv-mod-custom` in
+`src/config.h`. To publish a release:
+
+1. Merge the work into `main` (the workflows run on `main`/tags, not `rework`).
+2. Tag a version newer than `FW_VERSION` in `src/config.h` (currently `4.0.0`):
+
+```sh
+git checkout main
+git merge rework
+git push origin main
+git tag v4.0.1
+git push origin v4.0.1
+```
+
+The `build` workflow builds all targets, stages the ten assets, checks the 8 KB
+slots, and attaches them to the release. The `editor` workflow deploys the
+editor to GitHub Pages.
+
+On the device, **System -> Update from GitHub** checks the latest release and
+downloads the asset matching its variant. Manual OTA uses the non-factory app
+image from `dist/` or the release page.
+
+If the repo moves, update:
+
+- `REPO_URL`, `REPO_OWNER`, `REPO_NAME` in `src/config.h`.
+- `EDITOR_URL` in `src/WebPortal.cpp`.
+- `DAEMON_URL` in `src/config.h` if you document a different daemon location.
+
+## 11. Optional features
+
+### WireGuard
+
+Available on the C2, Pro and the `-wg` NM-TV-154 image. In **WiFi ->
+WireGuard VPN**, set the private key, peer public key, endpoint, tunnel address,
+allowed IPs and keepalive. Save, then watch the status line. The tunnel needs the
+clock, so enabling it starts NTP.
+
+### Physical button
+
+Classic-ESP32 boards expose a capacitive button. Configure short/long actions
+and sensitivity under **Display -> Button**. Actions include repaint, dismiss
+overlay, network info, wake and screen off.
+
+### Night mode
+
+**Display -> Clock & night mode** sets the timezone, start/end, and night
+brightness. `0` blanks the backlight. It only dims after a fresh NTP sync.
+
+### Web UI password
+
+**System -> Password** enables HTTP digest auth for the page, API and firmware
+upload. The daemon push endpoint `/api/usage` stays open. There is no recovery.
+
+### Settings backup
+
+**System -> Export settings** writes `config.json`, including WiFi passwords,
+the WireGuard private key and the editor token. **Import** applies and reboots.
+
+## 12. Verify the repository
+
+Host tests:
+
+```sh
+c++ -std=c++11 -Wall -Wextra -Werror -g -Isrc \
+  -I.pio/libdeps/smalltv/ArduinoJson/src tests/test_storage.cpp -o /tmp/storage && /tmp/storage
+c++ -std=c++11 -Wall -Wextra -Werror -g -Isrc tests/test_webguard.cpp -o /tmp/webguard && /tmp/webguard
+c++ -std=c++11 -Wall -Wextra -Werror -g -DSMALLTV_ESP8266 \
+  -Itests/shim -Isrc -Isrc/features/view -I.pio/libdeps/smalltv/ArduinoJson/src \
+  tests/test_view.cpp src/features/view/ViewModel.cpp -o /tmp/view && /tmp/view
+c++ -std=c++11 -Wall -Wextra -Werror -g -DSMALLTV_ESP8266 \
+  -DARDUINOJSON_ENABLE_ARDUINO_STRING=1 -DARDUINOJSON_USE_DOUBLE=0 \
+  -Itests/shim -Isrc -Isrc/features/usage -I.pio/libdeps/smalltv/ArduinoJson/src \
+  tests/test_usage.cpp src/features/usage/UsageClient.cpp -o /tmp/usage && /tmp/usage
+python -m unittest discover -s daemon -p 'test_*.py'
+```
+
+Other checks:
+
+```sh
+python tools/ci_checks.py assets
+python tools/ci_checks.py size --pio .venv/bin/pio --min-free 8192
+python3 - <<'PY'
+import pathlib, re
+html = pathlib.Path("editor/index.html").read_text()
+pathlib.Path("/tmp/editor-check.js").write_text(
+    re.findall(r"<script>(.*?)</script>", html, re.S)[-1])
+PY
+node --check /tmp/editor-check.js
+```
+
+The build script already runs `assets`, the per-env size gate and all firmware
+builds.
+
+## 13. Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| `pio: command not found` | Activate `.venv`, or pass `--pio /path/to/pio` |
+| `No module named 'SCons.Tool.FortranCommon'` | Use PlatformIO 6.1.19; the build script sets the constraints. Do not build with a newer pioarduino core |
+| `relocations in generic ELF (EM: 243)` when linking WireGuard | Stale shared libsodium port objects. `rm -rf .pio/build/port`, then rebuild; `extra_script.py` normally clears it per env |
+| Editor **Load/Save** fails at `https://...` | Mixed content. Use a local HTTP copy of the editor or the device **View** tab |
+| Editor 403 / authentication | Set **Editor token** in the device **View** tab and enter the same token; use the device IP or exact hostname |
+| Device shows “Push a view from the editor” | No `/view.json`. Push a dashboard or paste `examples/view.json` |
+| Codex provider is `unavailable` | Run Codex and log in so `~/.codex/auth.json` exists; the daemon refreshes an expired access token |
+| DeepSeek balance is `unavailable` | Set `DEEPSEEK_API_KEY` in the daemon's environment (or use `apiKeyFile`) |
+| DeepSeek token usage is missing/0 | The client is not using `http://127.0.0.1:8789`; start the proxy and set the provider's `usageUrl` |
+| Usage card shows 0% and no value | The daemon is not sending a `value`/`pct`; check `/api/status` and `--dry-run` |
+| `smalltv.local` does not resolve | Use the IP or the actual `smalltv-xxxx.local` shown on screen |
+| Web UI password lost | Reflash over USB/UART; there is no recovery |
+| ESP8266 HTTPS view poll fails | TLS is tight. Use an HTTP poll URL or do not poll |
+
+## 14. Repository map
+
+```text
+src/                  firmware
+  features/view/      dashboard draw list, renderer, overlay, poller
+  features/usage/     usage store and parser
+  config.h            identity, repo/update target, limits
+  WebPortal.cpp       web/API routes, auth, editor token
+  webui.html          web UI source (regenerate webui.h)
+  board_*.h           board pin maps
+tools/
+  build_release.py    grouped release builder
+  gzip_webui.py       web UI generator
+  ci_checks.py        asset and size gates
+editor/               static visual dashboard editor
+daemon/
+  usage_daemon.py     Claude/Codex/DeepSeek aggregator
+  deepseek_proxy.py   token-usage proxy
+  push_usage.py       one-shot JSON pusher
+examples/view.json    sample dashboard
+partitions/           ESP32 partition layouts
+case/                 3D-printed case
+.github/workflows/    firmware release + editor Pages deployment
+```
+
+## 15. Security notes
+
+- The web UI is plain HTTP. Keep it on the LAN or use WireGuard; do not forward
+  port 80 to the internet.
+- The settings export contains WiFi passwords, the WireGuard private key and the
+  editor token.
+- The Codex auth file and the DeepSeek API key stay on the PC. The daemon sends
+  only usage numbers to the device.
+- The DeepSeek proxy binds `127.0.0.1` by default. If you bind it to `0.0.0.0`,
+  anyone on the LAN can use the proxy and read the usage totals.
+- The editor token is a write credential for the view endpoints; treat it like
+  a password.

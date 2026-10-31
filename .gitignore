@@ -45,3 +45,6 @@ dependencies.lock
 
 # Release staging directory
 dist/
+
+# Local PlatformIO/toolchain venv
+.venv/

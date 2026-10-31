@@ -6,6 +6,8 @@ transient webhook overlay, and a normalized Claude/ChatGPT/DeepSeek usage feed.
 The stock ticker, plane radar, theme engine, notification presets and
 Home Assistant/MQTT screens have been removed.
 
+New here? Follow [SETUP.md](SETUP.md) for the complete build, flash, dashboard, editor and usage setup.
+
 ## Hardware targets
 
 | Env | Board |
