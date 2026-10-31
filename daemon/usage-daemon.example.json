@@ -6,14 +6,17 @@
     {
       "id": "claude",
       "name": "Claude",
-      "url": "http://127.0.0.1:8787/",
-      "adapter": "claude-legacy"
+      "adapter": "claude",
+      "authFile": "~/.claude/.credentials.json"
     },
     {
       "id": "chatgpt",
       "name": "Codex",
       "adapter": "codex",
-      "authFile": "~/.codex/auth.json"
+      "authFile": "~/.codex/auth.json",
+      "includePlan": true,
+      "includeCredits": false,
+      "includeAdditional": false
     },
     {
       "id": "deepseek",
@@ -21,8 +24,8 @@
       "adapter": "deepseek",
       "apiKeyEnv": "DEEPSEEK_API_KEY",
       "usageUrl": "http://127.0.0.1:8789/usage",
-      "usagePath": "total_tokens",
-      "usageLabel": "tokens",
+      "usagePath": "today.total_tokens",
+      "usageLabel": "tokens today",
       "usageBudget": 0
     }
   ]

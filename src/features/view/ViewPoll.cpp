@@ -35,6 +35,8 @@ static void fetchOverlay(const Settings& s) {
   http.useHTTP10(true);
   if (!http.begin(*client, url)) { g_error = F("connect failed"); return; }
   http.addHeader("Accept", "application/json");
+  if (s.view.pollAuthHeader.length() && s.view.pollAuthValue.length())
+    http.addHeader(s.view.pollAuthHeader.c_str(), s.view.pollAuthValue.c_str());
   http.setUserAgent(F(FW_NAME));
   int code = http.GET();
   if (code == 204) {

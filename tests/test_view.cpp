@@ -10,7 +10,7 @@ bool clockNow(struct tm&) { return false; }
 
 int main() {
   const char* json = R"({
-    "bg":"#102030","ttl":15,
+    "bg":"#102030","ttl":15,"priority":2,
     "draw":[
       {"t":"text","x":120,"y":20,"s":3,"c":"#ffffff","a":"c","v":"{HH}:{MM}"},
       {"t":"usage","x":8,"y":50,"w":224,"h":82,"c":"#d97757","provider":"claude","metric":1},
@@ -27,6 +27,7 @@ int main() {
   assert(s.needsClock);
   assert(s.hasUsage);
   assert(s.ttl == 15);
+  assert(s.priority == 2);
   assert(s.bg != 0);
   assert(s.prims[0].type == VIEW_P_TEXT);
   assert(!strcmp(viewPrimText(s, s.prims[0]), "{HH}:{MM}"));
@@ -43,6 +44,12 @@ int main() {
   const char* all_metrics = R"({"draw":[{"t":"usage","x":0,"y":0,"w":100,"h":50,"c":"#ffffff","provider":"claude"}]})";
   assert(viewScreenParse(all_metrics, strlen(all_metrics), s, error));
   assert(s.prims[0].type == VIEW_P_USAGE && s.prims[0].aux == 255);
+  assert(s.priority == 0);
+
+  // Priority is clamped to 0..3 so a bad value cannot escape the queue contract.
+  const char* high_priority = R"({"priority":9,"draw":[]})";
+  assert(viewScreenParse(high_priority, strlen(high_priority), s, error));
+  assert(s.priority == 3);
 
   assert(!viewScreenParse("not json", 8, s, error));
   assert(error.length() > 0);

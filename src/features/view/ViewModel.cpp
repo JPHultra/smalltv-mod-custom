@@ -193,6 +193,7 @@ bool viewScreenParse(const char* json, size_t length, ViewScreen& screen, String
   uint32_t ttl = o["ttl"] | 0;
   if (ttl > VIEW_TTL_MAX_SEC) ttl = VIEW_TTL_MAX_SEC;
   screen.ttl = (uint16_t)ttl;
+  screen.priority = (uint8_t)constrain((int)(o["priority"] | 0), 0, 3);
 
   if (o["draw"].is<JsonArrayConst>()) {
     for (JsonObjectConst p : o["draw"].as<JsonArrayConst>()) {

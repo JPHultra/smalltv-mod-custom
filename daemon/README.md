@@ -11,10 +11,11 @@ Codex/ChatGPT and DeepSeek usage and POSTs it to the device:
                 {"label":"7d","pct":4,"resetMin":9876}]},
     {"id":"chatgpt","name":"Codex","ok":true,"status":"plus",
      "metrics":[{"label":"5h","pct":1,"resetMin":292},
-                {"label":"7d","pct":45,"resetMin":6372}]},
+                {"label":"7d","pct":45,"resetMin":6372},
+                {"label":"plan","value":"plus","pct":0,"resetMin":0}]},
     {"id":"deepseek","name":"DeepSeek","ok":true,
      "metrics":[{"label":"balance","value":"110 CNY","pct":0,"resetMin":0},
-                {"label":"tokens","value":"1.2M","pct":0,"resetMin":0}]}
+                {"label":"tokens today","value":"1.2M","pct":0,"resetMin":0}]}
   ]
 }
 ```
@@ -47,7 +48,8 @@ document without pushing.
 
 | Adapter | Source |
 |---|---|
-| `claude-legacy` | the old `{s,sr,w,wr,st,ok}` payload |
+| `claude` | the Claude Code OAuth usage endpoint, using `~/.claude/.credentials.json` or `CLAUDE_CODE_OAUTH_TOKEN` |
+| `claude-legacy` | the old `{s,sr,w,wr,st,ok}` payload from a local clawdmeter |
 | `codex` | the ChatGPT/Codex subscription usage endpoint, using `~/.codex/auth.json` |
 | `deepseek` | the DeepSeek balance API, plus optional token usage from a local proxy |
 | `generic` | any JSON object, with dotted `statusPath`, `pctPath`, `resetPath`, `valuePath` |
@@ -56,23 +58,48 @@ document without pushing.
 A failed provider is sent as `{"id":...,"name":...,"ok":false}` so the device
 keeps the previous values and shows the error state.
 
+## Native Claude
+
+The `claude` adapter reads the Claude Code OAuth credentials that the CLI stores
+in `~/.claude/.credentials.json`, calls the OAuth usage endpoint, and maps the
+five-hour and weekly limits. It can also read the token from
+`CLAUDE_CODE_OAUTH_TOKEN`:
+
+```json
+{"id":"claude","name":"Claude","adapter":"claude","authFile":"~/.claude/.credentials.json"}
+```
+
+Run `claude setup-token` once if the credentials file has no usable access
+token, or export `CLAUDE_CODE_OAUTH_TOKEN`. If the access token has expired the
+daemon refreshes it with the stored refresh token and writes the new credentials
+back (mode 0600). The tokens are never sent to the device. The same refresh lock
+is shared with the Codex adapter so two daemon cycles cannot race.
+
+Run `python3 daemon/usage_daemon.py --config daemon/usage-daemon.json --once
+--dry-run` to verify the normalized output without pushing.
+
 ## Codex / ChatGPT subscription
 
 The `codex` adapter reads the ChatGPT tokens that the Codex CLI already stores
 in `~/.codex/auth.json`, calls
 `https://chatgpt.com/backend-api/wham/usage`, and maps the 5-hour and weekly
-windows. If the access token has expired it uses the stored refresh token
-against `https://auth.openai.com/oauth/token`, then writes the refreshed tokens
-back to the auth file (mode 0600). The email, account id and tokens are never
-sent to the device.
+windows. The plan name is included by default as a `plan` metric. If the access
+token has expired it uses the stored refresh token against
+`https://auth.openai.com/oauth/token`, then writes the refreshed tokens back to
+the auth file (mode 0600). The email, account id and tokens are never sent to
+the device.
 
 ```json
-{"id":"chatgpt","name":"Codex","adapter":"codex","authFile":"~/.codex/auth.json"}
+{"id":"chatgpt","name":"Codex","adapter":"codex","authFile":"~/.codex/auth.json",
+ "includePlan":true,"includeCredits":false,"includeAdditional":false}
 ```
 
-Run Codex at least once so the auth file exists. If Codex rotates the token
-while the daemon runs, the daemon re-reads the file before refreshing and uses
-the newer token.
+`includeCredits` adds the credits balance when the endpoint reports one, and
+`includeAdditional` adds any other rate-limit windows. The device shows at most
+five metrics per provider (`USAGE_MAX_METRICS`); the mapper caps the list at
+five. Run Codex at least once so the auth file exists. If Codex rotates the
+token while the daemon runs, the daemon re-reads the file before refreshing and
+uses the newer token.
 
 ## DeepSeek
 
@@ -93,11 +120,13 @@ python3 daemon/deepseek_proxy.py
 ```
 
 The proxy forwards to `https://api.deepseek.com`, adds
-`stream_options.include_usage` to streaming JSON requests, counts the usage
-fields, and serves `GET /usage` (and `POST /usage/reset`). The token counter
-persists in `~/.local/state/smalltv/deepseek-usage.json`; the API key is
-forwarded per request and is never written there. Only OpenAI-compatible usage
-objects are counted.
+`stream_options.include_usage` to streaming JSON requests, counts OpenAI
+`usage` objects and Anthropic streaming `message_start`/`message_delta` usage,
+and serves `GET /usage` (and `POST /usage/reset`). The token counter persists in
+`~/.local/state/smalltv/deepseek-usage.json`; the API key is forwarded per
+request and is never written there. The `/usage` document includes the running
+total, `date`, `today` and per-day `days` buckets, so the dashboard can show a
+daily number instead of the all-time count.
 
 Add the usage source to the DeepSeek provider:
 
@@ -106,12 +135,13 @@ Add the usage source to the DeepSeek provider:
   "id":"deepseek","name":"DeepSeek","adapter":"deepseek",
   "apiKeyEnv":"DEEPSEEK_API_KEY",
   "usageUrl":"http://127.0.0.1:8789/usage",
-  "usagePath":"total_tokens",
-  "usageLabel":"tokens",
+  "usagePath":"today.total_tokens",
+  "usageLabel":"tokens today",
   "usageBudget":0
 }
 ```
 
+Use `"usagePath":"total_tokens"` if you prefer the all-time counter.
 `usageBudget` is optional: set it to a token budget and the card gets a fill bar;
 leave it at `0` to show the count only. If the proxy is not running, the balance
 still appears and the daemon logs the usage-source error.

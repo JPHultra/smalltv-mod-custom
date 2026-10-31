@@ -130,6 +130,17 @@ jobs:
             -o /tmp/smalltv-usage-tests
           /tmp/smalltv-usage-tests
 
+      - name: Test hostile parser inputs (ASan/UBSan)
+        run: |
+          c++ -std=c++11 -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=all \
+            -DSMALLTV_ESP8266 -DARDUINOJSON_ENABLE_ARDUINO_STRING=1 -DARDUINOJSON_USE_DOUBLE=0 \
+            -Itests/shim -Isrc -Isrc/features/view -Isrc/features/usage \
+            -I.pio/libdeps/smalltv/ArduinoJson/src \
+            tests/test_parsers_hostile.cpp \
+            src/features/view/ViewModel.cpp src/features/usage/UsageClient.cpp \
+            -o /tmp/smalltv-hostile-tests
+          /tmp/smalltv-hostile-tests
+
       - name: Test usage daemon adapters
         run: python3 -m unittest discover -s daemon -p 'test_*.py'
 

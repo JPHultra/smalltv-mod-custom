@@ -98,29 +98,34 @@ editor.
 
 Primitives: `fill`, `rect`, `rrect`, `circle`, `line`, `text`, `icon`,
 `bitmap`, `usage`. A usage component with `metric` omitted or set to `-1`
-stacks every metric the provider sends; `0`-`2` picks one. Text supports `{HH}`, `{hh}`, `{MM}`, `{SS}`, `{DD}`,
+stacks every metric the provider sends; `0`-`4` picks one. Text supports `{HH}`, `{hh}`, `{MM}`, `{SS}`, `{DD}`,
 `{MON}`, `{MONTH}`, `{WD}`, `{WEEKDAY}`, `{YYYY}`. `ttl` is used by the overlay;
 the stored dashboard ignores it. A sample lives in
 [`examples/view.json`](examples/view.json).
 
 The editor deploys to GitHub Pages from `editor/`; open it at
-`https://jphultra.github.io/smalltv-mod-custom/`. A page served over HTTPS cannot
-fetch an HTTP device (mixed-content blocking), so direct push only works from a
-local HTTP copy or the device's own **View** tab.
+`https://jphultra.github.io/smalltv-mod-custom/`. It has drag/resize handles,
+undo/redo (Ctrl/Cmd+Z), alignment and z-order controls, real icon previews, and a
+clickable bitmap pixel grid. A page served over HTTPS cannot fetch an HTTP
+device (mixed-content blocking), so direct push only works from a local HTTP
+copy or the device's own **View** tab.
 
 ## Webhook overlay
 
-Push a draw list and the panel shows it above the dashboard for its `ttl`:
+Push a draw list and the panel shows it above the dashboard for its `ttl`.
+`priority` (0-3) lets a more important message interrupt the current overlay; an
+equal or lower priority waits behind it (one item).
 
 ```sh
 curl -X POST http://smalltv.local/api/view \
   -H 'Content-Type: text/plain' \
-  --data '{"ttl":20,"bg":"#000000","draw":[{"t":"text","x":120,"y":110,"s":3,"c":"#ffffff","a":"c","v":"Build finished"}]}'
+  --data '{"ttl":20,"priority":1,"bg":"#000000","draw":[{"t":"text","x":120,"y":110,"s":3,"c":"#ffffff","a":"c","v":"Build finished"}]}'
 ```
 
 The **View** tab can also poll a URL on a schedule (`view.pollUrl`,
-`view.pollSec`). `204` or an empty body clears the overlay; invalid JSON leaves
-it alone. The overlay is never persisted.
+`view.pollSec`), optionally with `view.pollAuthHeader` / `view.pollAuthValue`.
+`204` or an empty body clears the overlay and its queue; invalid JSON leaves
+them alone. The overlay is never persisted.
 
 ## Usage daemon
 
@@ -131,22 +136,26 @@ One local process normalizes the three providers and POSTs the document to
 {"providers":[
   {"id":"claude","name":"Claude","ok":true,"metrics":[{"label":"5h","pct":29,"resetMin":142}]},
   {"id":"chatgpt","name":"Codex","ok":true,"metrics":[{"label":"5h","pct":1,"resetMin":292},
-                                                       {"label":"7d","pct":45,"resetMin":6372}]},
+                                                       {"label":"7d","pct":45,"resetMin":6372},
+                                                       {"label":"plan","value":"plus","pct":0,"resetMin":0}]},
   {"id":"deepseek","name":"DeepSeek","ok":true,"metrics":[{"label":"balance","value":"110 CNY","pct":0,"resetMin":0},
-                                                          {"label":"tokens","value":"1.2M","pct":0,"resetMin":0}]}
+                                                          {"label":"tokens today","value":"1.2M","pct":0,"resetMin":0}]}
 ]}
 ```
 
 `daemon/usage_daemon.py` aggregates the providers:
 
-- **Claude** via the legacy `{s,sr,w,wr,st,ok}` adapter.
+- **Claude** via the native `claude` adapter (`~/.claude/.credentials.json` or
+  `CLAUDE_CODE_OAUTH_TOKEN`); the legacy `{s,sr,w,wr,st,ok}` adapter also works.
 - **Codex / ChatGPT subscription** via the `codex` adapter. It reads the tokens
   the Codex CLI already stores in `~/.codex/auth.json`, refreshes them when
-  needed, and maps the 5-hour and weekly windows from the ChatGPT usage endpoint.
+  needed, and maps the 5-hour and weekly windows plus the plan name. Credits and
+  additional rate-limit windows are opt-in with `includeCredits` /
+  `includeAdditional`.
 - **DeepSeek** via the `deepseek` adapter: official balance API plus optional
   token usage from `daemon/deepseek_proxy.py`. DeepSeek has no aggregate usage
-  endpoint, so the proxy forwards API requests, counts their `usage` fields and
-  serves the total to the daemon.
+  endpoint, so the proxy forwards API requests, counts OpenAI and Anthropic
+  usage, and serves running, daily and per-day totals to the daemon.
 - **Generic / normalized** sources via dotted JSON paths or a pre-shaped object.
 
 Copy `daemon/usage-daemon.example.json` to `daemon/usage-daemon.json`

@@ -19,7 +19,7 @@ cd /path/to/smalltv-mod-custom
 | Web UI | `src/webui.html` -> `src/webui.h` | Device settings, status, overlay JSON fallback |
 | Visual editor | `editor/` | Static dashboard editor, deployable to GitHub Pages |
 | Usage aggregator | `daemon/usage_daemon.py` | Claude + Codex + DeepSeek -> `/api/usage` |
-| DeepSeek proxy | `daemon/deepseek_proxy.py` | Counts DeepSeek token usage (the API has no aggregate endpoint) |
+| DeepSeek proxy | `daemon/deepseek_proxy.py` | Counts DeepSeek OpenAI/Anthropic token usage (the API has no aggregate endpoint) |
 | Usage pusher | `daemon/push_usage.py` | Push an already-normalized document |
 | Example dashboard | `examples/view.json` | Clock + Claude/Codex/DeepSeek cards |
 
@@ -37,10 +37,13 @@ transient above it.
 - `esptool` for USB flashing and backups.
 - Node 22+ only if you want to run the editor syntax check. The editor itself
   has no build step.
+- A Claude Code login (`~/.claude/.credentials.json`) or a
+  `CLAUDE_CODE_OAUTH_TOKEN` for native Claude usage.
 - A Codex login (`~/.codex/auth.json`) for Codex subscription usage.
 - A DeepSeek API key for the balance collector.
-- Optionally, the separate
-  [clawdmeter-daemon](https://github.com/giovi321/clawdmeter-daemon) for Claude.
+- Optionally, a local
+  [clawdmeter-daemon](https://github.com/giovi321/clawdmeter-daemon) if you want
+  the legacy Claude payload.
 
 Create a local toolchain venv:
 
@@ -248,8 +251,9 @@ Open `http://localhost:8000`, then:
 5. **Fetch usage** to preview live provider data.
 
 The editor can load/push `/api/dashboard`, push/clear `/api/view`, and read
-`/api/usage`. The token is in the query string; it is a write credential, not
-the web UI password.
+`/api/usage`. It supports drag/resize handles, undo/redo (Ctrl/Cmd+Z), alignment
+and z-order controls, real icon previews, and a clickable bitmap pixel grid. The
+token is in the query string; it is a write credential, not the web UI password.
 
 ### Option C: device-only JSON fallback
 
@@ -264,11 +268,13 @@ the web UI password.
 {
   "bg": "#0b1420",
   "ttl": 15,
+  "priority": 0,
   "draw": [
-    {"t":"text","x":120,"y":26,"s":6,"c":"#e9edf4","a":"c","v":"{HH}:{MM}"},
-    {"t":"usage","x":8,"y":112,"w":224,"h":58,"c":"#d97757","provider":"claude","metric":-1},
-    {"t":"usage","x":8,"y":178,"w":110,"h":52,"c":"#10a37f","provider":"chatgpt","metric":-1},
-    {"t":"usage","x":122,"y":178,"w":110,"h":52,"c":"#4d6bfe","provider":"deepseek","metric":-1}
+    {"t":"text","x":120,"y":6,"s":5,"c":"#e9edf4","a":"c","v":"{HH}:{MM}"},
+    {"t":"text","x":120,"y":48,"s":2,"c":"#86e2bf","a":"c","v":"{WEEKDAY} {YYYY}-{MON}-{DD}"},
+    {"t":"usage","x":8,"y":68,"w":224,"h":54,"c":"#d97757","provider":"claude","metric":-1},
+    {"t":"usage","x":8,"y":126,"w":224,"h":62,"c":"#10a37f","provider":"chatgpt","metric":-1},
+    {"t":"usage","x":8,"y":192,"w":224,"h":44,"c":"#4d6bfe","provider":"deepseek","metric":-1}
   ]
 }
 ```
@@ -276,7 +282,7 @@ the web UI password.
 Primitives: `fill`, `rect`, `rrect`, `circle`, `line`, `text`, `icon`, `bitmap`,
 `usage`. Text tokens: `{HH}`, `{hh}`, `{MM}`, `{SS}`, `{DD}`, `{MON}`,
 `{MONTH}`, `{WD}`, `{WEEKDAY}`, `{YYYY}`. A usage `metric` of `-1` (or omitted)
-stacks all metrics; `0`-`2` selects one.
+stacks all metrics; `0`-`4` selects one. `priority` is the overlay priority (0-3).
 
 ## 7. Usage: Claude, Codex, DeepSeek
 
@@ -298,18 +304,25 @@ carry the web UI password).
 
 ### 7.2 Claude
 
-The example uses the legacy Claude daemon adapter:
+The example uses the native Claude adapter:
 
 ```json
-{"id":"claude","name":"Claude","url":"http://127.0.0.1:8787/","adapter":"claude-legacy"}
+{"id":"claude","name":"Claude","adapter":"claude","authFile":"~/.claude/.credentials.json"}
 ```
 
-Run the separate
-[clawdmeter-daemon](https://github.com/giovi321/clawdmeter-daemon) with
-`--serve` on port 8787, or remove the `claude` provider from
-`usage-daemon.json` if you do not use it. The legacy daemon can also push
-directly to the device's `/api/usage`; if you do that, remove the aggregator's
-Claude entry to avoid duplicate updates.
+Run `claude setup-token` once if the credentials file has no usable access
+token, or export `CLAUDE_CODE_OAUTH_TOKEN`. The adapter:
+
+- reads the OAuth credentials from `~/.claude/.credentials.json`,
+- calls the Claude Code OAuth usage endpoint,
+- maps the 5-hour and weekly limits,
+- refreshes an expired access token and writes it back with mode `0600`.
+
+Tokens never leave the PC. The legacy `claude-legacy` adapter is still available
+for the old
+[clawdmeter-daemon](https://github.com/giovi321/clawdmeter-daemon) payload; if
+that daemon pushes to `/api/usage` directly, remove the aggregator's Claude entry
+to avoid duplicate updates.
 
 ### 7.3 Codex / ChatGPT subscription
 
@@ -323,17 +336,21 @@ The adapter:
 
 - reads the ChatGPT access token and account id from that file,
 - calls `https://chatgpt.com/backend-api/wham/usage`,
-- maps the 5-hour and weekly windows,
+- maps the 5-hour and weekly windows plus the plan name,
 - refreshes the token through `https://auth.openai.com/oauth/token` if needed,
 - writes the refreshed tokens back with mode `0600`.
 
 ```json
-{"id":"chatgpt","name":"Codex","adapter":"codex","authFile":"~/.codex/auth.json"}
+{"id":"chatgpt","name":"Codex","adapter":"codex","authFile":"~/.codex/auth.json",
+ "includePlan":true,"includeCredits":false,"includeAdditional":false}
 ```
 
-This is the endpoint the Codex CLI itself uses; it is not a public documented API,
-so it can change. The daemon does not send the email, account id or tokens to the
-device.
+`includePlan` is on by default. `includeCredits` adds the credits balance when
+present; `includeAdditional` adds other rate-limit windows. The mapper caps a
+provider at five metrics (`USAGE_MAX_METRICS`), so a card can show all of them
+when it has enough height. This is the endpoint the Codex CLI itself uses; it is
+not a public documented API, so it can change. The daemon does not send the
+email, account id or tokens to the device.
 
 ### 7.4 DeepSeek balance
 
@@ -364,8 +381,8 @@ Anthropic-compatible:       http://127.0.0.1:8789/anthropic
 ```
 
 The proxy forwards to `https://api.deepseek.com`, adds
-`stream_options.include_usage` to streaming JSON requests, counts
-`prompt_tokens` / `completion_tokens` / `total_tokens`, and serves:
+`stream_options.include_usage` to streaming JSON requests, counts OpenAI
+`usage` objects and Anthropic streaming usage, and serves:
 
 ```sh
 curl http://127.0.0.1:8789/usage
@@ -373,8 +390,9 @@ curl -X POST http://127.0.0.1:8789/usage/reset
 ```
 
 State lives in `~/.local/state/smalltv/deepseek-usage.json`. The API key is
-forwarded per request and never written there. Only OpenAI-compatible usage
-objects are counted; the Anthropic path is forwarded but not counted yet.
+forwarded per request and never written there. `/usage` includes the running
+total, `date`, `today` and per-day `days` buckets, so you can show today's tokens
+instead of the all-time count.
 
 Add the usage source to the provider:
 
@@ -383,15 +401,15 @@ Add the usage source to the provider:
   "id":"deepseek","name":"DeepSeek","adapter":"deepseek",
   "apiKeyEnv":"DEEPSEEK_API_KEY",
   "usageUrl":"http://127.0.0.1:8789/usage",
-  "usagePath":"total_tokens",
-  "usageLabel":"tokens",
+  "usagePath":"today.total_tokens",
+  "usageLabel":"tokens today",
   "usageBudget":0
 }
 ```
 
-Set `usageBudget` to a token budget if you want a fill bar; `0` shows the count
-only. If the proxy is down, balance still appears and the daemon logs the usage
-source error.
+Use `"usagePath":"total_tokens"` for the all-time counter. Set `usageBudget` to a
+token budget if you want a fill bar; `0` shows the count only. If the proxy is
+down, balance still appears and the daemon logs the usage source error.
 
 ### 7.6 Run the aggregator
 
@@ -470,11 +488,16 @@ The overlay is a full 240x240 draw list. Push one:
 ```sh
 curl -X POST 'http://<device-ip>/api/view' \
   -H 'Content-Type: text/plain' \
-  --data '{"ttl":20,"bg":"#000000","draw":[
+  --data '{"ttl":20,"priority":1,"bg":"#000000","draw":[
     {"t":"text","x":120,"y":100,"s":3,"c":"#ffffff","a":"c","v":"Build finished"},
     {"t":"icon","x":120,"y":150,"s":3,"c":"#00ff88","a":"c","v":"check"}
   ]}'
 ```
+
+`priority` (0-3, default 0) decides which overlay owns the panel. A higher
+priority interrupts the current one; an equal or lower priority waits behind it.
+One overlay can wait, so a burst of notifications does not leave a stale queue.
+When the visible overlay expires, the waiting one starts with its own full TTL.
 
 Clear it:
 
@@ -502,9 +525,14 @@ In **View**, set:
 - **Poll URL**: a URL returning the same draw list JSON.
 - **Poll every (s)**: e.g. `15`; `0` disables.
 - **Default hold (s)**: e.g. `20`.
+- **Auth header** / **Auth value**: optional, for a protected poll URL. Leave the
+  value blank to keep the saved secret; clear the header to remove it.
 
-A `204` or an empty body clears the overlay; invalid JSON leaves it alone.
-A static file server works:
+The poller feeds the same priority queue as `POST /api/view`, so a higher
+priority push can interrupt a polled view and the polled view can wait behind it.
+
+A `204` or an empty body clears the visible overlay and anything waiting;
+invalid JSON leaves both alone. A static file server works:
 
 ```sh
 python3 -m http.server 8788 --directory /path/to/views
@@ -613,6 +641,11 @@ c++ -std=c++11 -Wall -Wextra -Werror -g -DSMALLTV_ESP8266 \
   -DARDUINOJSON_ENABLE_ARDUINO_STRING=1 -DARDUINOJSON_USE_DOUBLE=0 \
   -Itests/shim -Isrc -Isrc/features/usage -I.pio/libdeps/smalltv/ArduinoJson/src \
   tests/test_usage.cpp src/features/usage/UsageClient.cpp -o /tmp/usage && /tmp/usage
+c++ -std=c++11 -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=all \
+  -DSMALLTV_ESP8266 -DARDUINOJSON_ENABLE_ARDUINO_STRING=1 -DARDUINOJSON_USE_DOUBLE=0 \
+  -Itests/shim -Isrc -Isrc/features/view -Isrc/features/usage \
+  -I.pio/libdeps/smalltv/ArduinoJson/src tests/test_parsers_hostile.cpp \
+  src/features/view/ViewModel.cpp src/features/usage/UsageClient.cpp -o /tmp/hostile && /tmp/hostile
 python -m unittest discover -s daemon -p 'test_*.py'
 ```
 
@@ -643,9 +676,12 @@ builds.
 | Editor **Load/Save** fails at `https://...` | Mixed content. Use a local HTTP copy of the editor or the device **View** tab |
 | Editor 403 / authentication | Set **Editor token** in the device **View** tab and enter the same token; use the device IP or exact hostname |
 | Device shows “Push a view from the editor” | No `/view.json`. Push a dashboard or paste `examples/view.json` |
+| Claude provider is `unavailable` | Run `claude setup-token`, or set `CLAUDE_CODE_OAUTH_TOKEN`; the credentials file may have empty access/refresh tokens |
 | Codex provider is `unavailable` | Run Codex and log in so `~/.codex/auth.json` exists; the daemon refreshes an expired access token |
+| Codex card is short a metric | Set `includeCredits` / `includeAdditional` if you want them; the mapper caps a provider at five metrics |
+| Poll URL returns 401 | Set **Auth header** and **Auth value** in **View**; leave the value blank to keep the saved secret |
 | DeepSeek balance is `unavailable` | Set `DEEPSEEK_API_KEY` in the daemon's environment (or use `apiKeyFile`) |
-| DeepSeek token usage is missing/0 | The client is not using `http://127.0.0.1:8789`; start the proxy and set the provider's `usageUrl` |
+| DeepSeek token usage is missing/0 | The client is not using `http://127.0.0.1:8789`; start the proxy and set the provider's `usageUrl`; use `usagePath: "today.total_tokens"` for a daily number |
 | Usage card shows 0% and no value | The daemon is not sending a `value`/`pct`; check `/api/status` and `--dry-run` |
 | `smalltv.local` does not resolve | Use the IP or the actual `smalltv-xxxx.local` shown on screen |
 | Web UI password lost | Reflash over USB/UART; there is no recovery |

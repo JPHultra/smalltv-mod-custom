@@ -88,6 +88,8 @@ struct ViewSettings {
   uint16_t pollSec;       // 0 = polling off
   uint16_t ttlSec;        // default overlay hold when the payload has no ttl
   String   editorToken;   // cross-origin editor token; never returned by the API
+  String   pollAuthHeader; // optional header for the poll URL (e.g. Authorization)
+  String   pollAuthValue;  // header value; never returned by the API
 
   void setDefaults();
   void toJson(JsonObject o, bool includeSecrets) const;

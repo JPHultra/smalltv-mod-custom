@@ -125,10 +125,10 @@
   #define VIEW_BITMAP_MAX_DIM 32
 #endif
 
-// Normalized usage store. The daemon pushes at most three providers with three
-// metrics each, so the whole store is a handful of bytes per provider.
+// Normalized usage store. The daemon pushes at most three providers; a provider
+// may have up to five metrics (Codex windows, plan, credits, extras).
 #define USAGE_MAX_PROVIDERS 3
-#define USAGE_MAX_METRICS   3
+#define USAGE_MAX_METRICS   5
 #define USAGE_MAX_ID       16
 #define USAGE_MAX_NAME     20
 #define USAGE_MAX_LABEL    12
@@ -140,6 +140,8 @@
 // on the LAN. It is a write token, not a read-everything credential.
 #define MAX_EDITOR_TOKEN_LEN 48
 #define DEFAULT_EDITOR_TOKEN ""
+#define MAX_POLL_AUTH_HEADER_LEN 32
+#define MAX_POLL_AUTH_VALUE_LEN  96
 
 // ---------------------------------------------------------------------------
 // Defaults (used on first boot / factory reset)

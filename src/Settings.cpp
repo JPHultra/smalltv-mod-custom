@@ -182,6 +182,8 @@ void ViewSettings::setDefaults() {
   pollSec = VIEW_DEFAULT_POLL_SEC;
   ttlSec  = VIEW_DEFAULT_TTL_SEC;
   editorToken = DEFAULT_EDITOR_TOKEN;
+  pollAuthHeader = "";
+  pollAuthValue = "";
 }
 
 void ViewSettings::toJson(JsonObject o, bool includeSecrets) const {
@@ -189,7 +191,12 @@ void ViewSettings::toJson(JsonObject o, bool includeSecrets) const {
   o["pollSec"]  = pollSec;
   o["ttlSec"]   = ttlSec;
   o["tokenSet"] = editorToken.length() > 0;
-  if (includeSecrets) o["editorToken"] = editorToken;
+  o["pollAuthHeader"] = pollAuthHeader;
+  o["pollAuthSet"] = pollAuthValue.length() > 0;
+  if (includeSecrets) {
+    o["editorToken"] = editorToken;
+    o["pollAuthValue"] = pollAuthValue;
+  }
 }
 
 void ViewSettings::fromJson(JsonObjectConst o) {
@@ -204,7 +211,15 @@ void ViewSettings::fromJson(JsonObjectConst o) {
     String t = o["editorToken"].as<String>();
     if (t.length()) editorToken = t;
   }
+  if (o["pollAuthHeader"].is<const char*>()) pollAuthHeader = o["pollAuthHeader"].as<String>();
+  if (o["pollAuthValue"].is<const char*>()) {
+    String v = o["pollAuthValue"].as<String>();
+    if (v.length()) pollAuthValue = v;
+  }
   if (editorToken.length() >= MAX_EDITOR_TOKEN_LEN) editorToken.remove(MAX_EDITOR_TOKEN_LEN - 1);
+  if (pollAuthHeader.length() >= MAX_POLL_AUTH_HEADER_LEN) pollAuthHeader.remove(MAX_POLL_AUTH_HEADER_LEN - 1);
+  if (pollAuthValue.length() >= MAX_POLL_AUTH_VALUE_LEN) pollAuthValue.remove(MAX_POLL_AUTH_VALUE_LEN - 1);
+  if (!pollAuthHeader.length()) pollAuthValue = "";
 }
 
 // ===========================================================================

@@ -160,6 +160,11 @@ small.hint{display:block;color:var(--mut);margin-top:4px;font-size:12px}
     <div><label>Poll every (s, 0 = off)</label><input id="pollSec" type="number" min="0" max="3600"></div>
     <div><label>Default hold (s)</label><input id="ttlSec" type="number" min="2" max="120"></div>
    </div>
+   <label>Poll auth header <span class="muted">(optional)</span></label>
+   <input id="pollAuthHeader" type="text" placeholder="Authorization">
+   <label>Poll auth value</label>
+   <input id="pollAuthValue" type="password" autocomplete="new-password" placeholder="(unchanged)">
+   <small class="hint">Example: header <code>Authorization</code>, value <code>Bearer &lt;token&gt;</code>. A blank value keeps the stored one.</small>
    <label>Editor token</label>
    <input id="editorToken" type="password" autocomplete="new-password" placeholder="(unchanged)">
    <small class="hint">The token lets the static editor at <a id="editorLink" href="#" target="_blank" rel="noopener">GitHub Pages</a> push changes. A blank field keeps the stored token. The token is a write credential, not a read-everything password.</small>
@@ -284,7 +289,7 @@ function loadConfig(){return j('/api/config').then(function(c){C=c;var f=c.featu
  var w=c.wg||{};sc('wgEnabled',!!w.enabled);sv('wgPeerPublicKey',w.peerPublicKey);sv('wgEndpointHost',w.endpointHost);sv('wgEndpointPort',w.endpointPort||51820);sv('wgAddress',w.address);sv('wgAllowedIps',w.allowedIps);sv('wgKeepalive',w.keepalive!=null?w.keepalive:25);
  var pk=$('wgPrivateKey');if(pk)pk.placeholder=w.privateKeySet?'(unchanged)':'paste the private key';
  var b=c.button||{};sv('btnShort',b.shortAction!=null?b.shortAction:3);sv('btnLong',b.longAction!=null?b.longAction:4);sv('btnSens',b.sensitivity!=null?b.sensitivity:85);$('btnSensVal')&&($('btnSensVal').textContent=(b.sensitivity!=null?b.sensitivity:85));
- var v=c.view||{};sv('pollUrl',v.pollUrl);sv('pollSec',v.pollSec!=null?v.pollSec:0);sv('ttlSec',v.ttlSec!=null?v.ttlSec:15);
+ var v=c.view||{};sv('pollUrl',v.pollUrl);sv('pollSec',v.pollSec!=null?v.pollSec:0);sv('ttlSec',v.ttlSec!=null?v.ttlSec:15);sv('pollAuthHeader',v.pollAuthHeader);var pav=$('pollAuthValue');if(pav){pav.value='';pav.placeholder=v.pollAuthSet?'(unchanged)':'(optional)'}
  var et=$('editorToken');if(et){et.value='';et.placeholder=v.tokenSet?'(unchanged)':'(optional)'}
  var el=$('editorLink');if(el&&c.editorUrl)el.href=c.editorUrl;
  var dl=$('daemonLink');if(dl&&c.daemonUrl)dl.href=c.daemonUrl;
@@ -295,7 +300,7 @@ function collect(){var o={hostname:gv('hostname'),apSsid:gv('apSsid'),wifi:colle
  brightness:parseInt(gv('brightness'))||0,rotation:parseInt(gv('rotation')),
  autoBrightness:gc('autoBrightness'),backlightInverted:gc('backlightInverted'),
  display:{colorOrder:gv('colorOrder')||'auto',invert:gc('colorInvert'),rGain:parseInt(gv('rGain'))||100,gGain:parseInt(gv('gGain'))||100,bGain:parseInt(gv('bGain'))||100},
- view:{pollUrl:gv('pollUrl'),pollSec:parseInt(gv('pollSec'))||0,ttlSec:parseInt(gv('ttlSec'))||15}};
+ view:{pollUrl:gv('pollUrl'),pollSec:parseInt(gv('pollSec'))||0,ttlSec:parseInt(gv('ttlSec'))||15,pollAuthHeader:gv('pollAuthHeader')}};
  if(gc('apOpen'))o.apPass='';else{var p=gv('apPass');if(p)o.apPass=p}
  if($('wgCard')){var w={enabled:gc('wgEnabled'),peerPublicKey:gv('wgPeerPublicKey'),endpointHost:gv('wgEndpointHost'),endpointPort:parseInt(gv('wgEndpointPort'))||51820,address:gv('wgAddress'),allowedIps:gv('wgAllowedIps'),keepalive:parseInt(gv('wgKeepalive'))||0};var pk=gv('wgPrivateKey');if(pk)w.privateKey=pk;o.wg=w}
  if($('buttonCard')){o.button={shortAction:parseInt(gv('btnShort')),longAction:parseInt(gv('btnLong')),sensitivity:parseInt(gv('btnSens'))||85}}
@@ -303,6 +308,7 @@ function collect(){var o={hostname:gv('hostname'),apSsid:gv('apSsid'),wifi:colle
  var ck=$('tz');if(ck){var tz=gv('tz');var posix=(tz in TZMAP)?TZMAP[tz]:((C.clock&&C.clock.tz===tz&&C.clock.tzPosix)?C.clock.tzPosix:'UTC0');
   o.clock={tz:tz,tzPosix:posix,nightEnabled:gc('nightEnabled'),nightStart:gv('nightStart')||'22:00',nightEnd:gv('nightEnd')||'07:00',nightLevel:parseInt(gv('nightLevel'))||0}}
  var et=gv('editorToken');if(et)o.view.editorToken=et;
+ var pav=gv('pollAuthValue');if(pav)o.view.pollAuthValue=pav;
  return o}
 function saveAll(){j('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(collect())}).then(function(r){toast(r.reboot?'Saved - rebooting...':'Saved');if(r.reboot)setTimeout(function(){location.reload()},6000);loadStatus()}).catch(function(e){toast('Save failed: '+e.message)})}
 function saveWifi(){j('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({wifi:collectWifi()})}).then(function(){toast('Saved, rebooting to connect...');j('/api/reboot',{method:'POST'})}).catch(function(e){toast('Save failed: '+e.message)})}

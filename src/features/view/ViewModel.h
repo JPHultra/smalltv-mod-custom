@@ -43,6 +43,7 @@ struct ViewScreen {
   uint8_t  primCount;
   bool     needsClock;  // some text has a {token}
   bool     hasUsage;    // at least one usage component
+  uint8_t  priority;    // overlay priority, 0..3
   ViewPrim prims[VIEW_MAX_PRIMS];
   char     text[VIEW_TEXT_POOL];
   uint8_t  bitmap[VIEW_BITMAP_POOL];

@@ -45,6 +45,8 @@ input[type=color]{width:100%;height:38px;background:#0b0e13;border:1px solid var
  <h1>SmallTV Dashboard Editor</h1>
  <span class="muted">240x240 · declarative draw list</span>
  <span style="flex:1"></span>
+ <button class="sec" onclick="undo()">Undo</button>
+ <button class="sec" onclick="redo()">Redo</button>
  <button class="sec" onclick="loadExample()">Load example</button>
  <button class="sec" onclick="clearView()">Clear</button>
  <button class="sec" onclick="loadLocal()">Load local</button>
@@ -70,6 +72,8 @@ input[type=color]{width:100%;height:38px;background:#0b0e13;border:1px solid var
    <input id="bg" type="color" value="#000000" oninput="setBg(this.value)">
    <label>Overlay TTL (s)</label>
    <input id="ttl" type="number" min="2" max="120" value="15" oninput="view.ttl=Number(this.value)||15">
+   <label>Overlay priority (0-3)</label>
+   <input id="priority" type="number" min="0" max="3" value="0" oninput="view.priority=Number(this.value)||0">
   </div>
   <div class="card" style="margin-top:14px">
    <h2>Layers</h2>
@@ -83,7 +87,10 @@ input[type=color]{width:100%;height:38px;background:#0b0e13;border:1px solid var
  </div>
 
  <div class="card stage">
-  <canvas id="screen" width="480" height="480" aria-label="240x240 dashboard preview"></canvas>
+  <div>
+   <canvas id="screen" width="480" height="480" aria-label="240x240 dashboard preview"></canvas>
+   <div class="hint" style="margin-top:8px">Drag to move; square handles resize. Ctrl/Cmd+Z undo, Shift+Ctrl/Cmd+Z redo.</div>
+  </div>
  </div>
 
  <div>
@@ -123,20 +130,19 @@ input[type=color]{width:100%;height:38px;background:#0b0e13;border:1px solid var
 
 <script>
 const ICONS=['thermometer','humidity','sun','cloud','rain','snow','wind','home','door-open','door-closed','window-open','window-closed','motion','plug','battery','alert','check','x','arrow-up','arrow-down'];
-const DEMO_VIEW={bg:'#0b1420',ttl:15,draw:[
- {t:'text',x:120,y:8,s:2,c:'#7f93ab',a:'c',v:'SMALLTV'},
- {t:'text',x:120,y:26,s:6,c:'#e9edf4',a:'c',v:'{HH}:{MM}'},
- {t:'text',x:120,y:82,s:2,c:'#86e2bf',a:'c',v:'{WEEKDAY} {YYYY}-{MON}-{DD}'},
- {t:'usage',x:8,y:112,w:224,h:58,c:'#d97757',provider:'claude',metric:-1},
- {t:'usage',x:8,y:178,w:110,h:52,c:'#10a37f',provider:'chatgpt',metric:-1},
- {t:'usage',x:122,y:178,w:110,h:52,c:'#4d6bfe',provider:'deepseek',metric:-1}
+const DEMO_VIEW={bg:'#0b1420',ttl:15,priority:0,draw:[
+ {t:'text',x:120,y:6,s:5,c:'#e9edf4',a:'c',v:'{HH}:{MM}'},
+ {t:'text',x:120,y:48,s:2,c:'#86e2bf',a:'c',v:'{WEEKDAY} {YYYY}-{MON}-{DD}'},
+ {t:'usage',x:8,y:68,w:224,h:54,c:'#d97757',provider:'claude',metric:-1},
+ {t:'usage',x:8,y:126,w:224,h:62,c:'#10a37f',provider:'chatgpt',metric:-1},
+ {t:'usage',x:8,y:192,w:224,h:44,c:'#4d6bfe',provider:'deepseek',metric:-1}
 ]};
 const SAMPLE_USAGE={providers:[
  {id:'claude',name:'Claude',valid:true,metrics:[{label:'5h',pct:42,resetMin:128},{label:'7d',pct:18,resetMin:4200}]},
- {id:'chatgpt',name:'Codex',valid:true,metrics:[{label:'5h',pct:67,resetMin:74},{label:'7d',pct:45,resetMin:6372}]},
+ {id:'chatgpt',name:'Codex',valid:true,metrics:[{label:'5h',pct:67,resetMin:74},{label:'7d',pct:45,resetMin:6372},{label:'plan',value:'plus',pct:0,resetMin:0}]},
  {id:'deepseek',name:'DeepSeek',valid:true,metrics:[{label:'balance',value:'81 CNY',pct:0,resetMin:0},{label:'tokens',value:'1.2M',pct:0,resetMin:0}]}
 ]};
-let view={bg:'#000000',ttl:15,draw:[]};
+let view={bg:'#000000',ttl:15,priority:0,draw:[]};
 let selected=-1;
 let usageData=null;
 let drag=null;
@@ -146,11 +152,18 @@ function $(id){return document.getElementById(id)}
 function toast(m){const t=$('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2000)}
 function clone(v){return JSON.parse(JSON.stringify(v))}
 function exportView(){const v=clone(view);v.draw=v.draw.map(l=>{const c=clone(l);delete c.id;return c});return v}
-function setBg(v){view.bg=v;draw();syncJson()}
+let history=[],future=[],histAt=0;
+function snapshot(){return JSON.stringify(view)}
+function pushHistory(force){const now=Date.now();if(!force&&now-histAt<500)return;history.push(snapshot());if(history.length>60)history.shift();future=[];histAt=now}
+function restoreView(v){view=clone(v);selected=view.draw.length?Math.max(0,Math.min(selected,view.draw.length-1)):-1;$('bg').value=view.bg;$('ttl').value=view.ttl;$('priority').value=view.priority||0;draw();renderLayers();renderProps();syncJson()}
+function undo(){if(!history.length)return toast('Nothing to undo');future.push(snapshot());restoreView(JSON.parse(history.pop()));toast('Undo')}
+function redo(){if(!future.length)return toast('Nothing to redo');history.push(snapshot());restoreView(JSON.parse(future.pop()));toast('Redo')}
+function setBg(v){pushHistory(false);view.bg=v;draw();syncJson()}
 function nowTime(){const d=new Date();return {HH:String(d.getHours()).padStart(2,'0'),hh:String(d.getHours()%12||12).padStart(2,'0'),MM:String(d.getMinutes()).padStart(2,'0'),SS:String(d.getSeconds()).padStart(2,'0'),DD:String(d.getDate()).padStart(2,'0'),YYYY:String(d.getFullYear()),MON:d.toLocaleString('en',{month:'short'}),MONTH:d.toLocaleString('en',{month:'long'}),WD:d.toLocaleString('en',{weekday:'short'}),WEEKDAY:d.toLocaleString('en',{weekday:'long'})}}
 function expand(text){const t=nowTime();return String(text||'').replace(/\{([A-Za-z]+)\}/g,(m,k)=>Object.prototype.hasOwnProperty.call(t,k)?t[k]:m)}
 
 function addLayer(type){
+ pushHistory(true);
  const base={id:uid++,t:type,x:20,y:20,c:'#ffffff'};
  if(type==='text')Object.assign(base,{x:120,y:40,v:'Hello',s:3,a:'c',c:'#ffffff'});
  if(type==='rect')Object.assign(base,{x:20,y:20,w:200,h:60,c:'#1f2937'});
@@ -163,9 +176,14 @@ function addLayer(type){
  view.draw.push(base);selected=view.draw.length-1;draw();renderLayers();renderProps();syncJson();
 }
 function selectLayer(i){selected=i;draw();renderLayers();renderProps()}
-function deleteLayer(){if(selected<0)return;view.draw.splice(selected,1);selected=Math.min(selected,view.draw.length-1);draw();renderLayers();renderProps();syncJson()}
-function moveLayer(d){if(selected<0)return;const j=selected+d;if(j<0||j>=view.draw.length)return;const t=view.draw[selected];view.draw[selected]=view.draw[j];view.draw[j]=t;selected=j;draw();renderLayers();renderProps();syncJson()}
+function deleteLayer(){if(selected<0)return;pushHistory(true);view.draw.splice(selected,1);selected=Math.min(selected,view.draw.length-1);draw();renderLayers();renderProps();syncJson()}
+function moveLayer(d){if(selected<0)return;const j=selected+d;if(j<0||j>=view.draw.length)return;pushHistory(true);const t=view.draw[selected];view.draw[selected]=view.draw[j];view.draw[j]=t;selected=j;draw();renderLayers();renderProps();syncJson()}
 
+function moveToEnd(front){if(selected<0)return;pushHistory(true);const [l]=view.draw.splice(selected,1);const i=front?view.draw.length:0;view.draw.splice(i,0,l);selected=i;draw();renderLayers();renderProps();syncJson()}
+function align(kind){if(selected<0)return;const l=view.draw[selected],b=bounds(l);let dx=0,dy=0;
+ if(kind==='left')dx=-b.x;else if(kind==='hcenter')dx=120-(b.x+b.w/2);else if(kind==='right')dx=240-(b.x+b.w);
+ else if(kind==='top')dy=-b.y;else if(kind==='vcenter')dy=120-(b.y+b.h/2);else if(kind==='bottom')dy=240-(b.y+b.h);
+ if(!dx&&!dy)return;pushHistory(true);l.x=Math.round(l.x+dx);l.y=Math.round(l.y+dy);draw();renderProps();syncJson()}
 function layerLabel(l){if(l.t==='text')return 'Text: '+String(l.v||'').slice(0,24);if(l.t==='usage')return 'Usage: '+(l.provider||'?');if(l.t==='icon')return 'Icon: '+(l.v||'?');if(l.t==='line')return 'Line';return l.t}
 function renderLayers(){
  const box=$('layers');if(!box)return;box.innerHTML='';
@@ -174,30 +192,33 @@ function renderLayers(){
 }
 function esc(s){return String(s==null?'':s).replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]))}
 
-function setProp(k,v,type){if(selected<0)return;const l=view.draw[selected];
+function setProp(k,v,type){if(selected<0)return;const l=view.draw[selected];pushHistory(false);
  if(type==='number'){let n=Number(v)||0;
   if(k==='s'){const max=l.t==='text'?10:(l.t==='icon'?8:4);n=Math.max(1,Math.min(max,n))}
   if(k==='w'||k==='h')n=Math.max(1,Math.min(240,n));
   if(k==='r')n=Math.max(l.t==='circle'?1:0,Math.min(240,n));
-  if(k==='metric')n=Math.max(-1,Math.min(2,n));
+  if(k==='metric')n=Math.max(-1,Math.min(4,n));
   l[k]=n;
  } else l[k]=v;
- draw();renderLayers();syncJson()}
+ draw();renderLayers();syncJson();if(l.t==='bitmap')renderBitmapGrid(l)}
 function renderProps(){
  const box=$('props');if(!box)return;
  if(selected<0||!view.draw[selected]){box.innerHTML='Pick a component or a layer.';return}
  const l=view.draw[selected];
  let h='<label>X</label><input type="number" value="'+l.x+'" oninput="setProp(\'x\',this.value,\'number\')">';
  h+='<label>Y</label><input type="number" value="'+l.y+'" oninput="setProp(\'y\',this.value,\'number\')">';
+ h+='<div class="row" style="margin-top:8px"><button class="sec small" onclick="align(\'left\')" title="Align left">L</button><button class="sec small" onclick="align(\'hcenter\')" title="Centre horizontally">C</button><button class="sec small" onclick="align(\'right\')" title="Align right">R</button></div>';
+ h+='<div class="row" style="margin-top:4px"><button class="sec small" onclick="align(\'top\')" title="Align top">T</button><button class="sec small" onclick="align(\'vcenter\')" title="Centre vertically">M</button><button class="sec small" onclick="align(\'bottom\')" title="Align bottom">B</button></div>';
+ h+='<div class="row" style="margin-top:4px"><button class="sec small" onclick="moveToEnd(true)">Front</button><button class="sec small" onclick="moveToEnd(false)">Back</button></div>';
  h+='<label>Colour</label><input type="color" value="'+(l.c||'#ffffff')+'" oninput="setProp(\'c\',this.value)">';
  if(l.t==='text'){h+='<label>Text</label><textarea oninput="setProp(\'v\',this.value)">'+esc(l.v||'')+'</textarea><label>Size (1-10)</label><input type="number" min="1" max="10" value="'+(l.s||1)+'" oninput="setProp(\'s\',this.value,\'number\')"><label>Align</label><select onchange="setProp(\'a\',this.value)"><option value="l"'+(l.a==='l'?' selected':'')+'>Left</option><option value="c"'+(l.a==='c'?' selected':'')+'>Centre</option><option value="r"'+(l.a==='r'?' selected':'')+'>Right</option></select>'}
  if(l.t==='rect'||l.t==='rrect'){h+='<label>Width</label><input type="number" value="'+(l.w||0)+'" oninput="setProp(\'w\',this.value,\'number\')"><label>Height</label><input type="number" value="'+(l.h||0)+'" oninput="setProp(\'h\',this.value,\'number\')">';if(l.t==='rrect')h+='<label>Corner radius</label><input type="number" min="0" max="120" value="'+(l.r||0)+'" oninput="setProp(\'r\',this.value,\'number\')">'}
  if(l.t==='circle')h+='<label>Radius</label><input type="number" min="1" max="240" value="'+(l.r||1)+'" oninput="setProp(\'r\',this.value,\'number\')">';
  if(l.t==='line'){h+='<label>X2</label><input type="number" value="'+(l.x2||0)+'" oninput="setProp(\'x2\',this.value,\'number\')"><label>Y2</label><input type="number" value="'+(l.y2||0)+'" oninput="setProp(\'y2\',this.value,\'number\')">'}
  if(l.t==='icon'){h+='<label>Icon</label><select onchange="setProp(\'v\',this.value)">'+ICONS.map(n=>'<option value="'+n+'"'+(l.v===n?' selected':'')+'>'+n+'</option>').join('')+'</select><label>Scale (1-8)</label><input type="number" min="1" max="8" value="'+(l.s||1)+'" oninput="setProp(\'s\',this.value,\'number\')"><label>Align</label><select onchange="setProp(\'a\',this.value)"><option value="l"'+(l.a==='l'?' selected':'')+'>Left</option><option value="c"'+(l.a==='c'?' selected':'')+'>Centre</option><option value="r"'+(l.a==='r'?' selected':'')+'>Right</option></select>'}
- if(l.t==='bitmap'){h+='<label>Width</label><input type="number" min="1" max="48" value="'+(l.w||8)+'" oninput="setProp(\'w\',this.value,\'number\')"><label>Height</label><input type="number" min="1" max="48" value="'+(l.h||8)+'" oninput="setProp(\'h\',this.value,\'number\')"><label>Scale (1-4)</label><input type="number" min="1" max="4" value="'+(l.s||1)+'" oninput="setProp(\'s\',this.value,\'number\')"><label>Hex data (MSB first)</label><textarea oninput="setProp(\'d\',this.value)">'+esc(l.d||'')+'</textarea>'}
- if(l.t==='usage'){h+='<label>Width</label><input type="number" value="'+(l.w||224)+'" oninput="setProp(\'w\',this.value,\'number\')"><label>Height</label><input type="number" value="'+(l.h||82)+'" oninput="setProp(\'h\',this.value,\'number\')"><label>Provider</label><select onchange="setProp(\'provider\',this.value)"><option value="claude"'+(l.provider==='claude'?' selected':'')+'>claude</option><option value="chatgpt"'+(l.provider==='chatgpt'?' selected':'')+'>chatgpt</option><option value="deepseek"'+(l.provider==='deepseek'?' selected':'')+'>deepseek</option></select><label>Metric (-1 = all)</label><input type="number" min="-1" max="2" value="'+(l.metric!=null?l.metric:-1)+'" oninput="setProp(\'metric\',this.value,\'number\')">'}
- box.innerHTML=h;
+ if(l.t==='bitmap'){h+='<label>Width</label><input type="number" min="1" max="48" value="'+(l.w||8)+'" oninput="setProp(\'w\',this.value,\'number\')"><label>Height</label><input type="number" min="1" max="48" value="'+(l.h||8)+'" oninput="setProp(\'h\',this.value,\'number\')"><label>Scale (1-4)</label><input type="number" min="1" max="4" value="'+(l.s||1)+'" oninput="setProp(\'s\',this.value,\'number\')"><label>Hex data (MSB first)</label><textarea oninput="setProp(\'d\',this.value)">'+esc(l.d||'')+'</textarea><label>Pixel grid</label><canvas id="bitmapGrid" width="240" height="240" onclick="toggleBitmapCell(event)" style="width:100%;height:auto;background:#0b0e13;border:1px solid var(--bd);border-radius:8px;image-rendering:pixelated;cursor:pointer"></canvas><div class="hint">Click a cell to toggle it.</div>'}
+ if(l.t==='usage'){h+='<label>Width</label><input type="number" value="'+(l.w||224)+'" oninput="setProp(\'w\',this.value,\'number\')"><label>Height</label><input type="number" value="'+(l.h||82)+'" oninput="setProp(\'h\',this.value,\'number\')"><label>Provider</label><select onchange="setProp(\'provider\',this.value)"><option value="claude"'+(l.provider==='claude'?' selected':'')+'>claude</option><option value="chatgpt"'+(l.provider==='chatgpt'?' selected':'')+'>chatgpt</option><option value="deepseek"'+(l.provider==='deepseek'?' selected':'')+'>deepseek</option></select><label>Metric (-1 = all)</label><input type="number" min="-1" max="4" value="'+(l.metric!=null?l.metric:-1)+'" oninput="setProp(\'metric\',this.value,\'number\')">'}
+ box.innerHTML=h;if(l.t==='bitmap')renderBitmapGrid(l);
 }
 
 function usageFor(id){const u=(usageData||SAMPLE_USAGE).providers.find(p=>p.id===id);return u||null}
@@ -234,6 +255,57 @@ function drawUsage(ctx,l){
 }
 function roundRect(ctx,x,y,w,h,r){if(w<=0||h<=0)return;r=Math.max(0,Math.min(r,w/2,h/2));ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath()}
 function bitmapBits(hex,w,h){const bits=[];for(let i=0;i<w*h;i++){const byte=parseInt((hex||'').slice((i>>3)*2,(i>>3)*2+2),16)||0;bits.push((byte>>(7-(i&7)))&1)}return bits}
+function bitsToHex(bits){let out='';for(let i=0;i<bits.length;i+=8){let n=0;for(let j=0;j<8;j++)n=(n<<1)|(bits[i+j]?1:0);out+=n.toString(16).padStart(2,'0').toUpperCase()}return out}
+function renderBitmapGrid(l){
+ const c=$('bitmapGrid');if(!c)return;const ctx=c.getContext('2d');const w=Math.max(1,l.w||8),h=Math.max(1,l.h||8),cell=Math.max(1,Math.floor(240/Math.max(w,h))),gw=w*cell,gh=h*cell,ox=Math.floor((240-gw)/2),oy=Math.floor((240-gh)/2);
+ ctx.fillStyle='#0b0e13';ctx.fillRect(0,0,240,240);const bits=bitmapBits(l.d||'',w,h);
+ for(let y=0;y<h;y++)for(let x=0;x<w;x++){ctx.fillStyle=bits[y*w+x]?(l.c||'#3fb950'):'#1b2430';ctx.fillRect(ox+x*cell,oy+y*cell,cell-1,cell-1)}
+ ctx.strokeStyle='#2a3544';ctx.lineWidth=1;for(let x=0;x<=w;x++){ctx.beginPath();ctx.moveTo(ox+x*cell,oy);ctx.lineTo(ox+x*cell,oy+gh);ctx.stroke()}for(let y=0;y<=h;y++){ctx.beginPath();ctx.moveTo(ox,oy+y*cell);ctx.lineTo(ox+gw,oy+y*cell);ctx.stroke()}
+ c._grid={ox,oy,cell,w,h};
+}
+function toggleBitmapCell(e){
+ if(selected<0)return;const l=view.draw[selected];if(!l||l.t!=='bitmap')return;const c=$('bitmapGrid'),r=c.getBoundingClientRect(),g=c._grid;if(!g)return;
+ const x=Math.floor((e.clientX-r.left)*240/r.width),y=Math.floor((e.clientY-r.top)*240/r.height),cx=Math.floor((x-g.ox)/g.cell),cy=Math.floor((y-g.oy)/g.cell);
+ if(cx<0||cx>=g.w||cy<0||cy>=g.h)return;pushHistory(true);const bits=bitmapBits(l.d||'',g.w,g.h);bits[cy*g.w+cx]=bits[cy*g.w+cx]?0:1;l.d=bitsToHex(bits);draw();syncJson();renderBitmapGrid(l);
+}
+function drawIconPreview(ctx,name,x,y,s,color){
+ const box=(gx,gy,w,h)=>ctx.fillRect(x+gx*s,y+gy*s,w*s,h*s);
+ const hline=(x1,x2,gy)=>box(x1,gy,x2-x1+1,1);
+ const vline=(gx,y1,y2)=>box(gx,y1,1,y2-y1+1);
+ const disc=(cx,cy,r)=>{ctx.beginPath();ctx.arc(x+cx*s,y+cy*s,r*s,0,Math.PI*2);ctx.fill()};
+ const tri=(x1,y1,x2,y2,x3,y3)=>{ctx.beginPath();ctx.moveTo(x+x1*s,y+y1*s);ctx.lineTo(x+x2*s,y+y2*s);ctx.lineTo(x+x3*s,y+y3*s);ctx.closePath();ctx.fill()};
+ const diag=(x1,y1,x2,y2)=>{ctx.beginPath();ctx.moveTo(x+x1*s,y+y1*s);ctx.lineTo(x+x2*s,y+y2*s);ctx.stroke()};
+ const rbox=(gx,gy,w,h,r)=>{roundRect(ctx,x+gx*s,y+gy*s,w*s,h*s,r*s);ctx.fill()};
+ const cloud=()=>{disc(9,13,4);disc(15,12,5);box(5,13,14,6)};
+ const flake=(fx,fy)=>{hline(fx-1,fx+1,fy);vline(fx,fy-1,fy+1)};
+ ctx.save();ctx.fillStyle=color;ctx.strokeStyle=color;ctx.lineWidth=s;ctx.lineCap='round';
+ switch(name){
+  case 'thermometer':box(10,2,4,14);disc(12,17,5);break;
+  case 'humidity':tri(12,2,6,12,18,12);disc(12,14,6);break;
+  case 'sun':disc(12,12,5);hline(1,4,12);hline(20,23,12);vline(12,1,4);vline(12,20,23);diag(4,4,6,6);diag(18,18,20,20);diag(20,4,18,6);diag(4,20,6,18);break;
+  case 'cloud':cloud();break;
+  case 'rain':cloud();diag(8,19,7,22);diag(12,19,11,22);diag(16,19,15,22);break;
+  case 'snow':cloud();flake(8,20);flake(12,21);flake(16,20);break;
+  case 'wind':hline(2,14,7);vline(14,5,7);hline(6,21,12);vline(21,12,14);hline(2,14,17);vline(14,17,19);break;
+  case 'home':tri(12,3,2,12,22,12);box(5,12,14,3);box(5,15,5,6);box(14,15,5,6);break;
+  case 'door-open':hline(5,19,4);vline(5,4,21);vline(19,4,21);tri(7,6,7,19,15,15);tri(7,6,15,15,15,9);disc(9,12,1);break;
+  case 'door-closed':hline(5,19,4);vline(5,4,21);vline(19,4,21);hline(8,16,7);hline(8,16,18);vline(8,7,18);vline(16,7,18);disc(14,13,1);break;
+  case 'window-open':hline(3,21,4);hline(3,21,20);vline(3,4,20);vline(21,4,20);tri(6,7,6,17,17,13);tri(6,7,17,13,17,11);break;
+  case 'window-closed':hline(3,21,4);hline(3,21,20);vline(3,4,20);vline(21,4,20);vline(12,4,20);hline(3,21,12);break;
+  case 'motion':disc(15,4,2);diag(14,7,11,13);diag(13,9,18,11);diag(13,9,9,12);diag(11,13,16,18);diag(11,13,6,18);break;
+  case 'plug':vline(10,3,8);vline(14,3,8);rbox(7,9,10,9,3);vline(12,18,22);break;
+  case 'battery':hline(2,20,8);hline(2,20,16);vline(2,8,16);vline(20,8,16);box(21,10,2,5);box(4,10,12,5);break;
+  case 'alert':diag(12,3,3,20);diag(12,3,21,20);hline(3,21,20);vline(12,9,14);disc(12,17,1);break;
+  case 'check':diag(4,13,10,19);diag(10,19,20,6);break;
+  case 'x':diag(5,5,19,19);diag(19,5,5,19);break;
+  case 'arrow-up':vline(12,4,20);diag(12,3,5,10);diag(12,3,19,10);break;
+  case 'arrow-down':vline(12,4,20);diag(5,14,12,21);diag(19,14,12,21);break;
+  default:
+   ctx.setLineDash([3,3]);ctx.strokeRect(x,y,24*s,24*s);ctx.setLineDash([]);
+   ctx.fillStyle='#8b96a5';ctx.font='8px monospace';ctx.textAlign='center';ctx.fillText(name||'?',x+12*s,y+12*s);
+ }
+ ctx.restore();
+}
 function drawText(ctx,text,x,y,s,align,color){
  text=String(text||'');const cw=6*s;
  const start=align==='c'?x-(text.length*cw)/2:(align==='r'?x-text.length*cw:x);
@@ -251,11 +323,11 @@ function draw(){
   else if(l.t==='circle'){ctx.beginPath();ctx.arc(l.x,l.y,l.r||1,0,Math.PI*2);ctx.fill()}
   else if(l.t==='line'){ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(l.x,l.y);ctx.lineTo(l.x2||0,l.y2||0);ctx.stroke()}
   else if(l.t==='text'){drawText(ctx,expand(l.v),l.x,l.y,l.s||1,l.a,l.c||'#ffffff')}
-  else if(l.t==='icon'){const s=l.s||1,w=24*s;const x=l.a==='c'?l.x-w/2:(l.a==='r'?l.x-w:l.x);ctx.strokeStyle='#3fb950';ctx.setLineDash([3,3]);ctx.strokeRect(x,l.y,w,w);ctx.setLineDash([]);ctx.fillStyle='#8b96a5';ctx.font='8px monospace';ctx.textAlign='center';ctx.fillText(l.v||'?',x+w/2,l.y+w/2-4)}
+  else if(l.t==='icon'){const s=l.s||1,w=24*s;const x=l.a==='c'?l.x-w/2:(l.a==='r'?l.x-w:l.x);drawIconPreview(ctx,l.v||'',x,l.y,s,l.c||'#ffffff')}
   else if(l.t==='bitmap'){const s=l.s||1,w=l.w||8,h=l.h||8;const bits=bitmapBits(l.d,w,h);const x=l.a==='c'?l.x-(w*s)/2:(l.a==='r'?l.x-w*s:l.x);ctx.fillStyle=l.c||'#3fb950';for(let py=0;py<h;py++)for(let px=0;px<w;px++)if(bits[py*w+px])ctx.fillRect(x+px*s,l.y+py*s,s,s)}
   else if(l.t==='usage')drawUsage(ctx,l);
  });
- if(selected>=0&&view.draw[selected]){const b=bounds(view.draw[selected]);ctx.strokeStyle='#2f81f7';ctx.lineWidth=1;ctx.setLineDash([4,3]);ctx.strokeRect(b.x,b.y,b.w,b.h);ctx.setLineDash([])}
+ if(selected>=0&&view.draw[selected]){const l=view.draw[selected],b=bounds(l);ctx.strokeStyle='#2f81f7';ctx.lineWidth=1;ctx.setLineDash([4,3]);ctx.strokeRect(b.x,b.y,b.w,b.h);ctx.setLineDash([]);if(resizable(l)){ctx.fillStyle='#2f81f7';handles(b).forEach(p=>ctx.fillRect(p.x-2,p.y-2,5,5))}}
 }
 function bounds(l){
  if(l.t==='fill')return{x:0,y:0,w:240,h:240};
@@ -266,24 +338,49 @@ function bounds(l){
  if(l.t==='icon'){const s=l.s||1,w=24*s;return{x:l.a==='c'?l.x-w/2:(l.a==='r'?l.x-w:l.x),y:l.y,w,h:w}}
  return{x:l.x,y:l.y,w:10,h:10}
 }
+function resizable(l){return ['rect','rrect','circle','text','icon','bitmap','usage'].includes(l.t)}
+function handles(b){return [{k:'nw',x:b.x,y:b.y},{k:'n',x:b.x+b.w/2,y:b.y},{k:'ne',x:b.x+b.w,y:b.y},{k:'e',x:b.x+b.w,y:b.y+b.h/2},{k:'se',x:b.x+b.w,y:b.y+b.h},{k:'s',x:b.x+b.w/2,y:b.y+b.h},{k:'sw',x:b.x,y:b.y+b.h},{k:'w',x:b.x,y:b.y+b.h/2}]}
+function handleAt(x,y,b){if(!b)return null;for(const p of handles(b))if(Math.abs(x-p.x)<=6&&Math.abs(y-p.y)<=6)return p.k;return null}
 function hit(x,y){for(let i=view.draw.length-1;i>=0;i--){const b=bounds(view.draw[i]);if(x>=b.x&&x<b.x+b.w&&y>=b.y&&y<b.y+b.h)return i}return -1}
 const canvas=$('screen');
+function canvasPoint(e){const r=canvas.getBoundingClientRect();return{x:(e.clientX-r.left)*240/r.width,y:(e.clientY-r.top)*240/r.height}}
+function resizeLayer(l,d,x,y){
+ const o=d.orig,k=d.h,dx=Math.round(x-d.x0),dy=Math.round(y-d.y0);
+ if(l.t==='circle'){l.r=Math.max(1,Math.round(Math.hypot(x-o.x,y-o.y)));return}
+ if(l.t==='text'){let nh=(o.s||1)*8;if(k.includes('n'))nh-=dy;if(k.includes('s'))nh+=dy;l.s=Math.max(1,Math.min(10,Math.round(nh/8)));return}
+ if(l.t==='icon'){let nh=(o.s||1)*24;if(k.includes('n'))nh-=dy;if(k.includes('s'))nh+=dy;l.s=Math.max(1,Math.min(8,Math.round(nh/24)));return}
+ const sx=l.t==='bitmap'?(o.s||1):1,cdx=dx/sx,cdy=dy/sx;
+ let nx=o.x,ny=o.y,nw=o.w||1,nh=o.h||1;
+ if(k.includes('w')){nx=o.x+dx;nw=(o.w||1)-cdx}
+ if(k.includes('e'))nw=(o.w||1)+cdx;
+ if(k.includes('n')){ny=o.y+dy;nh=(o.h||1)-cdy}
+ if(k.includes('s'))nh=(o.h||1)+cdy;
+ if(nw<1){nx+=Math.round((nw-1)*sx);nw=1}
+ if(nh<1){ny+=Math.round((nh-1)*sx);nh=1}
+ l.x=Math.round(nx);l.y=Math.round(ny);l.w=Math.round(nw);l.h=Math.round(nh);
+}
 canvas.addEventListener('pointerdown',e=>{
- const r=canvas.getBoundingClientRect();const x=(e.clientX-r.left)*240/r.width,y=(e.clientY-r.top)*240/r.height;const i=hit(x,y);
- selectLayer(i);if(i>=0){drag={i,dx:x-view.draw[i].x,dy:y-view.draw[i].y};canvas.setPointerCapture(e.pointerId)}
+ const p=canvasPoint(e);
+ if(selected>=0&&view.draw[selected]){const b=bounds(view.draw[selected]),h=handleAt(p.x,p.y,b);if(h){drag={mode:'resize',h,x0:p.x,y0:p.y,orig:clone(view.draw[selected]),moved:false};canvas.setPointerCapture(e.pointerId);return}}
+ const i=hit(p.x,p.y);selectLayer(i);if(i>=0){drag={mode:'move',i,dx:p.x-view.draw[i].x,dy:p.y-view.draw[i].y,moved:false};canvas.setPointerCapture(e.pointerId)}
 });
 canvas.addEventListener('pointermove',e=>{
- if(!drag)return;const r=canvas.getBoundingClientRect();const x=(e.clientX-r.left)*240/r.width,y=(e.clientY-r.top)*240/r.height;const l=view.draw[drag.i];if(!l)return;l.x=Math.round(x-drag.dx);l.y=Math.round(y-drag.dy);draw();renderProps();syncJson();
+ if(!drag)return;const p=canvasPoint(e);const l=drag.mode==='move'?view.draw[drag.i]:view.draw[selected];if(!l)return;
+ if(!drag.moved){pushHistory(true);drag.moved=true}
+ if(drag.mode==='move'){l.x=Math.round(p.x-drag.dx);l.y=Math.round(p.y-drag.dy)}
+ else resizeLayer(l,drag,p.x,p.y);
+ draw();renderProps();syncJson();
 });
-canvas.addEventListener('pointerup',()=>{drag=null});
+canvas.addEventListener('pointerup',()=>{if(drag&&drag.moved){draw();renderLayers();syncJson()}drag=null});
 canvas.addEventListener('pointercancel',()=>{drag=null});
+document.addEventListener('keydown',e=>{const tag=(e.target.tagName||'').toLowerCase();if(tag==='input'||tag==='textarea'||tag==='select')return;if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'){e.preventDefault();e.shiftKey?redo():undo()}else if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='y'){e.preventDefault();redo()}else if((e.key==='Delete'||e.key==='Backspace')&&selected>=0){e.preventDefault();deleteLayer()}});
 
 function syncJson(){const el=$('json');if(el)el.value=JSON.stringify(exportView(),null,2)}
-function applyJson(){try{const v=JSON.parse($('json').value);if(!v||typeof v!=='object'||!Array.isArray(v.draw))throw new Error('Expected an object with a draw array');view.bg=v.bg||'#000000';view.ttl=Number(v.ttl)||15;view.draw=v.draw.map(l=>Object.assign({id:uid++},l));selected=view.draw.length?0:-1;$('bg').value=view.bg;$('ttl').value=view.ttl;draw();renderLayers();renderProps();toast('JSON applied')}catch(e){toast('Invalid JSON: '+e.message)}}
+function applyJson(){try{const v=JSON.parse($('json').value);if(!v||typeof v!=='object'||!Array.isArray(v.draw))throw new Error('Expected an object with a draw array');pushHistory(true);view.bg=v.bg||'#000000';view.ttl=Number(v.ttl)||15;view.priority=Number(v.priority)||0;view.draw=v.draw.map(l=>Object.assign({id:uid++},l));selected=view.draw.length?0:-1;$('bg').value=view.bg;$('ttl').value=view.ttl;$('priority').value=view.priority;draw();renderLayers();renderProps();toast('JSON applied')}catch(e){toast('Invalid JSON: '+e.message)}}
 function copyJson(){navigator.clipboard&&navigator.clipboard.writeText($('json').value).then(()=>toast('Copied')).catch(()=>toast('Copy failed'))}
 function downloadJson(){const blob=new Blob([$('json').value],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='view.json';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
 function loadExample(){$('json').value=JSON.stringify(DEMO_VIEW);applyJson();toast('Example loaded')}
-function clearView(){if(!confirm('Clear the canvas?'))return;view={bg:'#000000',ttl:15,draw:[]};selected=-1;$('bg').value=view.bg;$('ttl').value=view.ttl;draw();renderLayers();renderProps();syncJson();toast('Cleared')}
+function clearView(){if(!confirm('Clear the canvas?'))return;pushHistory(true);view={bg:'#000000',ttl:15,priority:0,draw:[]};selected=-1;$('bg').value=view.bg;$('ttl').value=view.ttl;$('priority').value=view.priority;draw();renderLayers();renderProps();syncJson();toast('Cleared')}
 function saveLocal(){localStorage.setItem('smalltv-view',JSON.stringify(view));toast('Saved locally')}
 function loadLocal(){try{const v=JSON.parse(localStorage.getItem('smalltv-view')||'null');if(!v)throw new Error('Nothing saved');$('json').value=JSON.stringify(v,null,2);applyJson()}catch(e){toast(e.message)}}
 

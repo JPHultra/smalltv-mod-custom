@@ -7,6 +7,7 @@ reported as {"ok": false}, so the device keeps its previous metrics and shows
 the error state instead of blanking the card.
 
 Adapters:
+  claude         Claude Code's OAuth usage endpoint, using ~/.claude/.credentials.json
   claude-legacy  the old clawdmeter {s,sr,w,wr,st,ok} payload
   codex          the ChatGPT/Codex subscription usage endpoint, using ~/.codex/auth.json
   deepseek       DeepSeek balance, plus optional token usage from a proxy
@@ -26,13 +27,43 @@ Example:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime
 import json
+import math
 import os
 import sys
 import time
 import urllib.error
 import urllib.request
+
+try:
+    import fcntl
+except ImportError:  # Windows: no advisory file lock; atomic replace still applies.
+    fcntl = None
+
+
+@contextlib.contextmanager
+def file_lock(path, timeout=10.0):
+    """Advisory lock for the auth files; the Codex/Claude refresh path is serialized."""
+    if fcntl is None:
+        yield
+        return
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        deadline = time.time() + timeout
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.time() >= deadline:
+                    raise TimeoutError("timed out waiting for the auth file lock")
+                time.sleep(0.1)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
 
 
 def path_get(obj, path):
@@ -51,12 +82,14 @@ def numeric(value):
     if isinstance(value, bool) or value is None:
         return None
     if isinstance(value, (int, float)):
-        return float(value)
+        number = float(value)
+        return number if math.isfinite(number) else None
     if isinstance(value, str):
         try:
-            return float(value.strip())
+            number = float(value.strip())
         except ValueError:
             return None
+        return number if math.isfinite(number) else None
     return None
 
 
@@ -184,6 +217,19 @@ def window_label(seconds):
     return f"{max(1, seconds // 60)}m"
 
 
+def codex_window_metric(window, prefix=""):
+    if not isinstance(window, dict):
+        return None
+    label = window_label(window.get("limit_window_seconds"))
+    if prefix:
+        label = f"{prefix[:5]} {label}"[:11]
+    return make_metric(
+        label,
+        window.get("used_percent"),
+        (numeric(window.get("reset_after_seconds")) or 0) / 60,
+    )
+
+
 def map_codex_usage(payload, spec):
     if not isinstance(payload, dict):
         raise ValueError("expected a JSON object")
@@ -192,19 +238,35 @@ def map_codex_usage(payload, spec):
         raise ValueError("missing rate_limit")
     metrics = []
     for key in ("primary_window", "secondary_window"):
-        window = rate.get(key)
-        if not isinstance(window, dict):
-            continue
-        metric = make_metric(
-            window_label(window.get("limit_window_seconds")),
-            window.get("used_percent"),
-            (numeric(window.get("reset_after_seconds")) or 0) / 60,
-        )
+        metric = codex_window_metric(rate.get(key))
         if metric:
             metrics.append(metric)
     if not metrics:
         raise ValueError("no rate-limit windows")
+
     plan = str(payload.get("plan_type", ""))
+    if spec.get("includePlan", True):
+        metrics.append(make_metric("plan", None, 0, plan or "unknown"))
+
+    credits = payload.get("credits")
+    if spec.get("includeCredits", False) and isinstance(credits, dict):
+        balance = credits.get("balance")
+        if credits.get("has_credits") or (balance not in (None, "", "0", 0)):
+            value = "unlimited" if credits.get("unlimited") else (str(balance) if balance not in (None, "") else "credits")
+            metrics.append(make_metric("credits", None, 0, value))
+
+    if spec.get("includeAdditional", False):
+        for additional in payload.get("additional_rate_limits") or []:
+            if not isinstance(additional, dict):
+                continue
+            details = additional.get("rate_limit") or {}
+            name = str(additional.get("limit_name") or additional.get("metered_feature") or "extra")
+            for key in ("primary_window", "secondary_window"):
+                metric = codex_window_metric(details.get(key), name)
+                if metric:
+                    metrics.append(metric)
+
+    metrics = [metric for metric in metrics if metric][:5]
     return {
         "id": str(spec["id"]),
         "name": str(spec.get("name", "Codex")),
@@ -218,7 +280,11 @@ def read_codex_auth(spec):
     path = os.path.expanduser(spec.get("authFile", "~/.codex/auth.json"))
     with open(path, encoding="utf-8") as handle:
         auth = json.load(handle)
-    tokens = auth.get("tokens") or {}
+    if not isinstance(auth, dict):
+        raise ValueError("Codex auth is not a JSON object")
+    tokens = auth.get("tokens")
+    if not isinstance(tokens, dict):
+        tokens = {}
     access = tokens.get("access_token")
     account = tokens.get("account_id")
     if not access or not account:
@@ -235,12 +301,22 @@ def write_codex_auth(path, auth):
 
 
 def refresh_codex_auth(path, auth, spec, timeout):
+    with file_lock(path + ".lock"):
+        return _refresh_codex_locked(path, auth, spec, timeout)
+
+
+def _refresh_codex_locked(path, auth, spec, timeout):
     # Another Codex process may have refreshed first; prefer its token.
     with open(path, encoding="utf-8") as handle:
         current = json.load(handle)
-    tokens = current.get("tokens") or {}
+    if not isinstance(current, dict):
+        current = {}
+    tokens = current.get("tokens")
+    if not isinstance(tokens, dict):
+        tokens = {}
     current_refresh = tokens.get("refresh_token")
-    old_refresh = (auth.get("tokens") or {}).get("refresh_token")
+    original_tokens = auth.get("tokens") if isinstance(auth, dict) else {}
+    old_refresh = original_tokens.get("refresh_token") if isinstance(original_tokens, dict) else None
     if current_refresh and current_refresh != old_refresh and tokens.get("access_token"):
         return tokens["access_token"], tokens.get("account_id")
 
@@ -309,6 +385,168 @@ def collect_codex(spec, timeout):
 
 
 # ---------------------------------------------------------------------------
+# Claude Code subscription usage
+# ---------------------------------------------------------------------------
+CLAUDE_DEFAULT_CREDENTIALS = "~/.claude/.credentials.json"
+CLAUDE_DEFAULT_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+CLAUDE_DEFAULT_TOKEN_URL = "https://platform.claude.com/v1/oauth/token"
+CLAUDE_OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+CLAUDE_USER_AGENT = "claude-code/2.1.146"
+CLAUDE_REFRESH_MARGIN = 300
+
+
+def minutes_until(iso_timestamp):
+    if not iso_timestamp:
+        return 0
+    try:
+        text = str(iso_timestamp).replace("Z", "+00:00")
+        when = datetime.datetime.fromisoformat(text)
+        now = datetime.datetime.now(datetime.timezone.utc)
+        return max(0, int(round((when - now).total_seconds() / 60)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def write_claude_credentials(path, credentials):
+    temporary = path + ".smalltv-tmp"
+    with open(temporary, "w", encoding="utf-8") as handle:
+        json.dump(credentials, handle, indent=2)
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, path)
+
+
+def refresh_claude_token(path, credentials, oauth, spec, timeout):
+    refresh = oauth.get("refreshToken")
+    if not refresh:
+        raise ValueError("Claude token expired and has no refresh token; run `claude setup-token`")
+    with file_lock(path + ".lock"):
+        try:
+            with open(path, encoding="utf-8") as handle:
+                current = json.load(handle)
+        except (OSError, ValueError, json.JSONDecodeError):
+            current = credentials
+        if not isinstance(current, dict):
+            current = credentials
+        current_oauth = current.get("claudeAiOauth")
+        if not isinstance(current_oauth, dict):
+            current_oauth = {}
+        if current_oauth.get("accessToken") and current_oauth.get("accessToken") != oauth.get("accessToken"):
+            return current_oauth["accessToken"]
+
+        body = json.dumps({
+            "grant_type": "refresh_token",
+            "client_id": spec.get("clientId", CLAUDE_OAUTH_CLIENT_ID),
+            "refresh_token": refresh,
+        }).encode("utf-8")
+        request = urllib.request.Request(
+            spec.get("tokenUrl", CLAUDE_DEFAULT_TOKEN_URL),
+            data=body,
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": spec.get("userAgent", CLAUDE_USER_AGENT),
+            },
+        )
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            refreshed = json.load(response)
+        access = refreshed.get("access_token")
+        if not access:
+            raise ValueError("Claude token refresh returned no access token")
+        current_oauth["accessToken"] = access
+        if refreshed.get("refresh_token"):
+            current_oauth["refreshToken"] = refreshed["refresh_token"]
+        if "expires_in" in refreshed:
+            current_oauth["expiresAt"] = int((time.time() + float(refreshed["expires_in"])) * 1000)
+        elif "expires_at" in refreshed:
+            current_oauth["expiresAt"] = int(float(refreshed["expires_at"]) * 1000)
+        current["claudeAiOauth"] = current_oauth
+        write_claude_credentials(path, current)
+        return access
+
+
+def read_claude_token(spec):
+    path = os.path.expanduser(spec.get("authFile", CLAUDE_DEFAULT_CREDENTIALS))
+    env_name = spec.get("tokenEnv", "CLAUDE_CODE_OAUTH_TOKEN")
+    if os.environ.get(env_name):
+        return path, None, os.environ[env_name].strip()
+    with open(path, encoding="utf-8") as handle:
+        credentials = json.load(handle)
+    if not isinstance(credentials, dict):
+        raise ValueError("Claude credentials are not a JSON object")
+    oauth = credentials.get("claudeAiOauth")
+    if not isinstance(oauth, dict):
+        oauth = {}
+    access = oauth.get("accessToken")
+    if not access:
+        raise ValueError("Claude credentials have no access token; run `claude setup-token` or set CLAUDE_CODE_OAUTH_TOKEN")
+    expires = oauth.get("expiresAt")
+    if isinstance(expires, (int, float)) and time.time() >= (expires / 1000.0 - CLAUDE_REFRESH_MARGIN):
+        access = refresh_claude_token(path, credentials, oauth, spec, 20)
+    return path, credentials, access
+
+
+def map_claude_usage(payload, spec):
+    if not isinstance(payload, dict):
+        raise ValueError("expected a JSON object")
+    five = payload.get("five_hour")
+    seven = payload.get("seven_day")
+    five = five if isinstance(five, dict) else {}
+    seven = seven if isinstance(seven, dict) else {}
+    metrics = [
+        make_metric("5h", five.get("utilization"), minutes_until(five.get("resets_at"))),
+        make_metric("7d", seven.get("utilization"), minutes_until(seven.get("resets_at"))),
+    ]
+    metrics = [metric for metric in metrics if metric]
+    if not metrics:
+        raise ValueError("no five_hour/seven_day utilization")
+    status = "allowed"
+    limits = payload.get("limits")
+    for limit in limits if isinstance(limits, list) else []:
+        if isinstance(limit, dict) and limit.get("kind") == "session" and limit.get("severity"):
+            status = str(limit["severity"])
+            break
+    return {
+        "id": str(spec["id"]),
+        "name": str(spec.get("name", "Claude")),
+        "ok": True,
+        "status": status[:15],
+        "metrics": metrics,
+    }
+
+
+def fetch_claude_usage(spec, timeout):
+    path, credentials, token = read_claude_token(spec)
+    url = spec.get("url", CLAUDE_DEFAULT_USAGE_URL)
+    headers = {
+        "Authorization": "Bearer " + token,
+        "anthropic-version": "2023-06-01",
+        "anthropic-beta": "oauth-2025-04-20",
+        "Accept": "application/json",
+        "User-Agent": spec.get("userAgent", CLAUDE_USER_AGENT),
+    }
+    for attempt in (1, 2):
+        request = urllib.request.Request(url, headers=headers)
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return json.load(response)
+        except urllib.error.HTTPError as error:
+            oauth = (credentials or {}).get("claudeAiOauth") or {}
+            if attempt == 1 and error.code in (401, 403) and oauth.get("refreshToken"):
+                error.close()
+                token = refresh_claude_token(path, credentials, oauth, spec, timeout)
+                headers["Authorization"] = "Bearer " + token
+                continue
+            error.close()
+            raise
+    raise ValueError("Claude usage request failed")
+
+
+def collect_claude(spec, timeout):
+    return map_claude_usage(fetch_claude_usage(spec, timeout), spec)
+
+
+# ---------------------------------------------------------------------------
 # DeepSeek balance (+ optional token usage from a local proxy)
 # ---------------------------------------------------------------------------
 DEEPSEEK_BALANCE_URL = "https://api.deepseek.com/user/balance"
@@ -342,12 +580,11 @@ def fetch_deepseek_balance(spec, timeout):
 def map_deepseek_balance(payload, spec, usage_source=None):
     if not isinstance(payload, dict):
         raise ValueError("expected a JSON object")
-    infos = payload.get("balance_infos")
-    if not isinstance(infos, list) or not infos:
+    infos = [item for item in (payload.get("balance_infos") or []) if isinstance(item, dict)]
+    if not infos:
         raise ValueError("missing balance_infos")
     currency = spec.get("currency")
-    info = next((item for item in infos if item.get("currency") == currency), infos[0]) \
-        if currency else infos[0]
+    info = next((item for item in infos if item.get("currency") == currency), infos[0]) if currency else infos[0]
     total = info.get("total_balance")
     if numeric(total) is None:
         raise ValueError("missing total_balance")
@@ -403,6 +640,8 @@ def fetch_json(url, timeout, headers=None):
 
 def collect(spec, timeout):
     adapter = spec.get("adapter", "generic")
+    if adapter == "claude":
+        return collect_claude(spec, timeout)
     if adapter == "codex":
         return collect_codex(spec, timeout)
     if adapter == "deepseek":
@@ -422,7 +661,8 @@ def build_payload(config, timeout):
             error.close()
             print(f"{spec.get('id', '?')}: {error}", file=sys.stderr)
             providers.append(provider_error(spec))
-        except (OSError, ValueError, urllib.error.URLError, json.JSONDecodeError) as error:
+        except (OSError, ValueError, TypeError, AttributeError, KeyError,
+                urllib.error.URLError, json.JSONDecodeError) as error:
             print(f"{spec.get('id', '?')}: {error}", file=sys.stderr)
             providers.append(provider_error(spec))
     return {"providers": providers}
@@ -449,7 +689,7 @@ def validate(config):
         if not isinstance(spec, dict) or not spec.get("id"):
             raise ValueError("every provider needs an id")
         adapter = spec.get("adapter", "generic")
-        if adapter not in ADAPTERS and adapter not in ("codex", "deepseek"):
+        if adapter not in ADAPTERS and adapter not in ("claude", "codex", "deepseek"):
             raise ValueError(f"{spec['id']}: unknown adapter {adapter}")
         if adapter in ADAPTERS and not spec.get("url"):
             raise ValueError(f"{spec['id']}: {adapter} providers need a url")
@@ -463,6 +703,8 @@ def validate(config):
                 spec["apiKeyEnv"] = "DEEPSEEK_API_KEY"
         if adapter == "codex":
             spec.setdefault("authFile", "~/.codex/auth.json")
+        if adapter == "claude":
+            spec.setdefault("authFile", CLAUDE_DEFAULT_CREDENTIALS)
 
 
 def main():
