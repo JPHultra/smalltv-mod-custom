@@ -41,6 +41,8 @@ The token is a write credential for `/api/dashboard`, `/api/view` and
 - **Load example** starts from the sample dashboard; **Clear** starts empty.
 - Text supports `{HH}`, `{hh}`, `{MM}`, `{SS}`, `{DD}`, `{MON}`, `{MONTH}`,
   `{WD}`, `{WEEKDAY}` and `{YYYY}`.
+- The preview uses the same 5×7 pixel and anti-aliased font data as the
+  firmware, so text metrics match the device.
 - Icons are drawn as placeholder boxes in the editor; the device renders the
   real vector icon.
 - Usage components read the latest provider snapshot pushed by the daemon. A

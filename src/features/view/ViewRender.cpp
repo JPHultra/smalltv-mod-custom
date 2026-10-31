@@ -8,6 +8,7 @@
 #include "UsageClient.h"
 #include "ViewIcons.h"
 #include "font/glcdfont.h"
+#include "fonts/NotoSansMonoAA.h"
 
 // ---------------------------------------------------------------------------
 // Text tokens. A text primitive may contain {HH}, {MM}, ...; the same tokens
@@ -85,11 +86,10 @@ static void textAnchor(const char* text, uint8_t size, uint8_t align, int x, int
                                   : x;
 }
 
-// Draw the built-in 5x7 font pixel by pixel. Arduino_GFX's scaled drawChar
-// skips a whole glyph row when it does not fit the target, which leaves raster
-// seams when text is rendered through a strip canvas. This clips every pixel.
-static void drawGlyphString(Arduino_GFX* gfx, const char* text, int x, int y,
-                            uint8_t size, uint16_t color) {
+// Legacy 5x7 fallback, used when the anti-aliased font is unavailable (for
+// example if the strip canvas could not be allocated, or for sizes above 6).
+static void drawLegacyGlyphString(Arduino_GFX* gfx, const char* text, int x, int y,
+                                  uint8_t size, uint16_t color) {
   if (!text || !*text) return;
   const uint8_t s = size ? size : 1;
   int cx = x, cy = y;
@@ -108,6 +108,11 @@ static void drawGlyphString(Arduino_GFX* gfx, const char* text, int x, int y,
     cx += 6 * s;
   }
 }
+
+class ViewStripCanvas;
+static ViewStripCanvas* g_textCanvas = nullptr;
+static void drawGlyphString(Arduino_GFX* gfx, const char* text, int x, int y,
+                            uint8_t size, uint16_t color);
 
 static void drawTextPrim(Arduino_GFX* gfx, const ViewScreen& screen,
                          const ViewPrim& p, uint16_t color) {
@@ -272,7 +277,49 @@ class ViewStripCanvas : public Arduino_Canvas {
   explicit ViewStripCanvas(Arduino_G* output)
       : Arduino_Canvas(TFT_WIDTH, VIEW_STRIP_H, output, 0, 0) {}
   void setOutputY(int16_t y) { _output_y = y; }
+
+  // Blend an anti-aliased glyph pixel with the strip's current pixel.
+  void blendPixel(int x, int y, uint16_t fg, uint8_t alpha) {
+    if (alpha == 0 || x < 0 || x >= TFT_WIDTH || y < 0 || y >= VIEW_STRIP_H) return;
+    uint16_t* fb = getFramebuffer();
+    if (!fb) return;
+    uint16_t* dst = &fb[y * TFT_WIDTH + x];
+    if (alpha >= 255) { *dst = fg; return; }
+    const uint32_t inv = 255 - alpha;
+    uint32_t r = (((fg >> 11) & 0x1F) * alpha + ((*dst >> 11) & 0x1F) * inv + 127) / 255;
+    uint32_t g = (((fg >> 5) & 0x3F) * alpha + ((*dst >> 5) & 0x3F) * inv + 127) / 255;
+    uint32_t b = ((fg & 0x1F) * alpha + (*dst & 0x1F) * inv + 127) / 255;
+    *dst = (uint16_t)((r << 11) | (g << 5) | b);
+  }
 };
+
+static void drawGlyphString(Arduino_GFX* gfx, const char* text, int x, int y,
+                            uint8_t size, uint16_t color) {
+  if (!text || !*text) return;
+  const uint8_t s = size ? size : 1;
+  const ViewAaFont* font = (g_textCanvas && gfx == g_textCanvas) ? viewAaFont(s) : nullptr;
+  if (!font) { drawLegacyGlyphString(gfx, text, x, y, s, color); return; }
+
+  const int cw = font->width;
+  const int ch = font->height;
+  int cx = x, cy = y;
+  for (const char* p = text; *p; ++p) {
+    const unsigned char c = (unsigned char)*p;
+    if (c == '\r') continue;
+    if (c == '\n') { cx = x; cy += ch; continue; }
+    const int code = (c >= 32 && c <= 126) ? c : 63;
+    const uint8_t* glyph = font->data + (uint16_t)(code - 32) * font->bytes;
+    for (int py = 0; py < ch; py++) {
+      for (int px = 0; px < cw; px++) {
+        const int bit = py * cw + px;
+        const uint8_t packed = pgm_read_byte(&glyph[bit >> 1]);
+        const uint8_t a = (px & 1) ? (packed & 0x0F) : (packed >> 4);
+        if (a) g_textCanvas->blendPixel(cx + px, cy + py, color, (uint8_t)(a * 17));
+      }
+    }
+    cx += cw;
+  }
+}
 
 static void drawPrims(const ViewScreen& screen, Arduino_GFX* gfx, int yOffset) {
   for (uint8_t i = 0; i < screen.primCount; i++) {
@@ -346,7 +393,9 @@ static bool renderRegion(const ViewScreen& screen, int y0, int y1) {
   for (int y = start; y < end; y += VIEW_STRIP_H) {
     canvas.setOutputY(y);
     canvas.fillScreen(gfxTint(screen.bg));
+    g_textCanvas = &canvas;
     drawPrims(screen, &canvas, y);
+    g_textCanvas = nullptr;
     canvas.flush();
   }
   return true;
