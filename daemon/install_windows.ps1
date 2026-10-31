@@ -1,6 +1,7 @@
 param(
   [string]$DeviceUrl = "",
-  [switch]$Uninstall
+  [switch]$Uninstall,
+  [switch]$AtStartup
 )
 $ErrorActionPreference = "Stop"
 $TaskName = "SmallTVUsage"
@@ -45,12 +46,26 @@ $action = New-ScheduledTaskAction `
   -Execute $pythonw `
   -Argument "`"$DaemonDir\usage_daemon.py`" --config `"$Config`"" `
   -WorkingDirectory $Repo
-$trigger = New-ScheduledTaskTrigger -AtLogOn
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable `
   -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 
-Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
-  -Settings $settings -Description "SmallTV usage daemon" -Force | Out-Null
+if ($AtStartup) {
+  $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+  if (-not $isAdmin) {
+    throw "Run this script as Administrator for -AtStartup."
+  }
+  $cred = Get-Credential -Message "Windows account used to run the SmallTV usage daemon at startup"
+  if (-not $cred) { throw "A Windows account is required for -AtStartup." }
+  $trigger = New-ScheduledTaskTrigger -AtStartup
+  Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
+    -Settings $settings -Description "SmallTV usage daemon" -Force `
+    -User $cred.UserName -Password $cred.GetNetworkCredential().Password | Out-Null
+  Write-Host "Installed $TaskName to run at startup as $($cred.UserName)."
+} else {
+  $trigger = New-ScheduledTaskTrigger -AtLogOn
+  Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
+    -Settings $settings -Description "SmallTV usage daemon" -Force | Out-Null
+  Write-Host "Installed $TaskName to run at login."
+}
 Start-ScheduledTask -TaskName $TaskName
-Write-Host "Installed and started scheduled task $TaskName."
 Write-Host "Run 'daemon\setup_windows.bat' to enter provider credentials."

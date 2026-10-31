@@ -521,8 +521,13 @@ daemon\install_windows.bat -DeviceUrl http://192.168.1.50
 ```
 
 This creates the `SmallTVUsage` Task Scheduler job, running `pythonw.exe` at
-login. Remove it with `daemon\install_windows.bat -Uninstall`. Run
-`daemon\setup_windows.bat` to open the credential setup page.
+login with no console and no browser. To start it before login, run the same
+command from an elevated Command Prompt with `-AtStartup`; it asks for the
+Windows account password and stores it in Task Scheduler.
+
+Remove it with `daemon\install_windows.bat -Uninstall`. Run
+`daemon\setup_windows.bat` only for the initial credential page; the browser is
+not involved when the daemon starts.
 
 ## 8. Notifications over the webhook
 

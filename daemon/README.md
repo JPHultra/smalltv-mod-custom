@@ -87,15 +87,24 @@ or, to set the device while creating the config:
 py -3 daemon\setup_ui.py --config daemon\usage-daemon.json --device http://smalltv.local
 ```
 
-The browser opens automatically. To keep the daemon running at login, install a
-Task Scheduler job:
+The browser is only for the initial credential setup. To start the daemon
+automatically at login without a browser, install a Task Scheduler job:
 
 ```bat
 daemon\install_windows.bat -DeviceUrl http://smalltv.local
 ```
 
-Remove it with `daemon\install_windows.bat -Uninstall`. The scheduled task runs
-`pythonw.exe`, so it has no console window. The Linux systemd service below is
+For a machine that should start it before anyone logs in, run an elevated
+Command Prompt:
+
+```bat
+daemon\install_windows.bat -DeviceUrl http://smalltv.local -AtStartup
+```
+
+`-AtStartup` asks for the Windows account password so Task Scheduler can run the
+job before login; the password is stored by Windows, not in this repository.
+Remove the job with `daemon\install_windows.bat -Uninstall`. Both modes run
+`pythonw.exe` with no console and no browser. The Linux systemd service below is
 not used on Windows.
 
 | Adapter | Source |
