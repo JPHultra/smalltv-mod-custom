@@ -24,9 +24,10 @@ the JSON with **Download JSON** and paste it there.
 1. On the device, open **View**, set an **Editor token**, and save.
 2. In the editor, enter the device address (`http://smalltv.local` or its IP)
    and the same token.
-3. Use **Load** to pull the installed dashboard, **Save dashboard** to replace
-   it, **Test overlay** to show it transiently, and **Fetch usage** to preview
-   live provider data.
+3. Use **Load** to pull the installed dashboard and its live usage, **Save
+   dashboard** to replace it, **Test overlay** to show it transiently, and
+   **Fetch usage** to refresh the usage preview. Until usage is fetched, the
+   usage cards use sample values and the canvas says so below the preview.
 
 The token is a write credential for `/api/dashboard`, `/api/view` and
 `/api/usage`; it is not the web UI password and is not returned by the API.

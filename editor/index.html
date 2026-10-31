@@ -92,6 +92,7 @@ input[type=color]{width:100%;height:38px;background:#0b0e13;border:1px solid var
   <div>
    <canvas id="screen" width="480" height="480" aria-label="240x240 dashboard preview"></canvas>
    <div class="hint" style="margin-top:8px">Drag to move; square handles resize. Ctrl/Cmd+Z undo, Shift+Ctrl/Cmd+Z redo.</div>
+   <div class="hint" id="usageHint" style="margin-top:4px">Usage preview: sample data until Fetch usage.</div>
   </div>
  </div>
 
@@ -381,18 +382,19 @@ function syncJson(){const el=$('json');if(el)el.value=JSON.stringify(exportView(
 function applyJson(){try{const v=JSON.parse($('json').value);if(!v||typeof v!=='object'||!Array.isArray(v.draw))throw new Error('Expected an object with a draw array');pushHistory(true);view.bg=v.bg||'#000000';view.ttl=Number(v.ttl)||15;view.priority=Number(v.priority)||0;view.draw=v.draw.map(l=>Object.assign({id:uid++},l));selected=view.draw.length?0:-1;$('bg').value=view.bg;$('ttl').value=view.ttl;$('priority').value=view.priority;draw();renderLayers();renderProps();toast('JSON applied')}catch(e){toast('Invalid JSON: '+e.message)}}
 function copyJson(){navigator.clipboard&&navigator.clipboard.writeText($('json').value).then(()=>toast('Copied')).catch(()=>toast('Copy failed'))}
 function downloadJson(){const blob=new Blob([$('json').value],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='view.json';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
-function loadExample(){$('json').value=JSON.stringify(DEMO_VIEW);applyJson();toast('Example loaded')}
-function clearView(){if(!confirm('Clear the canvas?'))return;pushHistory(true);view={bg:'#000000',ttl:15,priority:0,draw:[]};selected=-1;$('bg').value=view.bg;$('ttl').value=view.ttl;$('priority').value=view.priority;draw();renderLayers();renderProps();syncJson();toast('Cleared')}
+function loadExample(){$('json').value=JSON.stringify(DEMO_VIEW);applyJson();usageHint('Usage preview: sample data');toast('Example loaded')}
+function clearView(){if(!confirm('Clear the canvas?'))return;pushHistory(true);view={bg:'#000000',ttl:15,priority:0,draw:[]};selected=-1;$('bg').value=view.bg;$('ttl').value=view.ttl;$('priority').value=view.priority;draw();renderLayers();renderProps();syncJson();usageHint('Usage preview: sample data');toast('Cleared')}
 function saveLocal(){localStorage.setItem('smalltv-view',JSON.stringify(view));toast('Saved locally')}
 function loadLocal(){try{const v=JSON.parse(localStorage.getItem('smalltv-view')||'null');if(!v)throw new Error('Nothing saved');$('json').value=JSON.stringify(v,null,2);applyJson()}catch(e){toast(e.message)}}
 
 async function api(path,opt){const base=$('deviceUrl').value.trim().replace(/\/$/,'');const token=$('token').value;if(!base)throw new Error('Set the device URL');if(location.protocol==='https:'&&base.startsWith('http:'))throw new Error('This HTTPS page cannot reach an HTTP device (mixed content). Use a local HTTP copy of the editor or the device View tab.');const sep=path.includes('?')?'&':'?';const url=base+path+sep+'token='+encodeURIComponent(token);const r=await fetch(url,opt);const text=await r.text();if(!r.ok)throw new Error(text||('HTTP '+r.status));return text}
 function status(m,warn){const el=$('deviceStatus');el.textContent=m;el.className='status'+(warn?' warn':'')}
-async function loadDevice(){try{status('Loading...');const text=await api('/api/dashboard');$('json').value=text;applyJson();status('Loaded from device')}catch(e){status('Load failed: '+e.message,true)}}
+async function loadDevice(){try{status('Loading...');const text=await api('/api/dashboard');$('json').value=text;applyJson();status('Loaded from device');await fetchUsage()}catch(e){status('Load failed: '+e.message,true)}}
 async function pushDevice(){try{status('Saving...');await api('/api/dashboard',{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify(exportView())});status('Dashboard saved')}catch(e){status('Save failed: '+e.message,true)}}
 async function testOverlay(){try{status('Showing overlay...');await api('/api/view',{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify(exportView())});status('Overlay shown')}catch(e){status('Overlay failed: '+e.message,true)}}
 async function clearOverlay(){try{await api('/api/view/clear',{method:'POST'});status('Overlay cleared')}catch(e){status('Clear failed: '+e.message,true)}}
-async function fetchUsage(){try{status('Fetching usage...');const text=await api('/api/usage');usageData=JSON.parse(text);draw();status('Usage fetched')}catch(e){status('Usage failed: '+e.message,true)}}
+function usageHint(m){const e=$('usageHint');if(e)e.textContent=m}
+async function fetchUsage(){try{status('Fetching usage...');const text=await api('/api/usage');usageData=JSON.parse(text);draw();usageHint('Usage preview: live device data');status('Usage fetched')}catch(e){usageHint('Usage preview: sample data (Fetch usage failed)');status('Usage failed: '+e.message,true)}}
 
 $('json').value=JSON.stringify(exportView(),null,2);
 draw();renderLayers();
