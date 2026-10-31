@@ -39,15 +39,11 @@ cp daemon/usage-daemon.example.json daemon/usage-daemon.json
 python3 daemon/setup_ui.py --config daemon/usage-daemon.json
 ```
 
-The setup UI prints a local URL and a one-time setup token:
-
-```text
-SmallTV usage setup: http://127.0.0.1:8790/
-Setup token: <generated-on-startup>
-```
-
-Open the URL, enter the token, and paste the Claude, Codex and/or DeepSeek
-credentials. The page:
+The setup UI opens your browser automatically and prints the same URL, with a
+one-time setup token already attached. If no browser opens, use the printed URL
+or start it with `--no-open` and copy the token. Paste the Claude, Codex and/or
+DeepSeek credentials, then use **Save all credentials** (or a card's Save
+button). Each card's **Test** button saves that card first. The page:
 
 - never reads `~/.claude`, `~/.codex` or environment variables;
 - accepts pasted credentials JSON from any machine, or individual fields;

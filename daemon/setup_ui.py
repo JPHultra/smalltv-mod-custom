@@ -14,6 +14,7 @@ import json
 import secrets
 import sys
 import urllib.error
+import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -182,6 +183,7 @@ def main():
     parser.add_argument("--port", type=int, default=8790, help="port (default 8790)")
     parser.add_argument("--timeout", type=float, default=10, help="provider test timeout")
     parser.add_argument("--token", help="fixed setup token instead of a generated one")
+    parser.add_argument("--no-open", action="store_true", help="do not open a browser")
     args = parser.parse_args()
 
     try:
@@ -193,9 +195,16 @@ def main():
 
     host, port = server.server_address[:2]
     shown = "127.0.0.1" if host in ("0.0.0.0", "::") else host
-    print(f"SmallTV usage setup: http://{shown}:{port}/")
+    url = f"http://{shown}:{port}/?token={server.setup_token}"
+    print(f"SmallTV usage setup: {url}")
     print(f"Setup token: {server.setup_token}")
-    print("Open the page, enter the token, fill the provider fields, and press Save.")
+    print("Fill the provider fields, then press Save all (or Save on one card).")
+    if not args.no_open:
+        try:
+            if not webbrowser.open(url, new=2):
+                print("Could not open a browser; paste the URL above.", file=sys.stderr)
+        except Exception as error:
+            print(f"Could not open a browser ({error}); paste the URL above.", file=sys.stderr)
     if host not in ("127.0.0.1", "::1"):
         print("warning: bound beyond localhost; anyone who can reach this port and has the token can update credentials.", file=sys.stderr)
     try:

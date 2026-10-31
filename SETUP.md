@@ -307,14 +307,10 @@ The example stores provider credentials in
 python3 daemon/setup_ui.py --config daemon/usage-daemon.json
 ```
 
-It prints a URL and a generated setup token:
-
-```text
-SmallTV usage setup: http://127.0.0.1:8790/
-Setup token: <generated-on-startup>
-```
-
-Open the URL, enter the token, and fill the provider cards. The page:
+It opens your browser automatically and prints the same URL with a generated
+setup token. If it does not, copy the printed URL. Fill the provider cards and
+press **Save all credentials** (or Save on one card). Test buttons save that
+card before testing. The page:
 
 - never reads `~/.claude`, `~/.codex` or environment variables on this host;
 - accepts pasted Claude/Codex credentials JSON from any machine, or manual

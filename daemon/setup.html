@@ -51,6 +51,12 @@ code{font-family:ui-monospace,Menlo,monospace;font-size:12px}
  <div class="card">
   <div class="hint" id="storeInfo">Loading...</div>
  </div>
+ <div class="card">
+  <h2>Save everything</h2>
+  <p class="hint">Fill any provider cards below, then use this single button. Blank fields keep their previous values. Each card's Test button also saves that card first.</p>
+  <div class="row"><button type="button" onclick="saveAll()">Save all credentials</button></div>
+  <div id="allResult" class="result"></div>
+ </div>
 
  <section class="card" data-provider="claude">
   <h2>Claude Code <span id="claude_badge" class="badge off">not set</span></h2>
@@ -149,15 +155,31 @@ function parsePaste(provider){
   toast('Fields filled; press Save');
  }catch(error){toast('Invalid JSON: '+error.message)}
 }
+async function persist(provider){
+ const values=fieldsFor(provider);if(!Object.keys(values).length)return false;
+ const data=await api('/api/credentials',{method:'POST',body:JSON.stringify({provider,...values})});
+ mark(provider,data.status&&data.status.configured);
+ for(const field of FIELDS[provider])$(provider+'_'+field).value='';
+ return true;
+}
 async function saveProvider(provider){
- const values=fieldsFor(provider);if(!Object.keys(values).length)return toast('Nothing to save');
  try{
-  const data=await api('/api/credentials',{method:'POST',body:JSON.stringify({provider,...values})});
-  mark(provider,data.status&&data.status.configured);
-  for(const field of FIELDS[provider])$(provider+'_'+field).value='';
+  if(!await persist(provider))return toast('Nothing to save');
   $(provider+'_result').textContent='Saved. Blank fields keep the previous value.';
   toast('Saved');
  }catch(error){$(provider+'_result').textContent='Save failed: '+error.message}
+}
+async function saveAll(){
+ const saved=[],failed=[];
+ for(const provider of Object.keys(FIELDS)){
+  if(!Object.keys(fieldsFor(provider)).length)continue;
+  try{await persist(provider);$(provider+'_result').textContent='Saved.';saved.push(provider)}
+  catch(error){$(provider+'_result').textContent='Save failed: '+error.message;failed.push(provider)}
+ }
+ const out=$('allResult');
+ if(saved.length)out.textContent='Saved: '+saved.join(', ')+(failed.length?'. Failed: '+failed.join(', '):'.');
+ else out.textContent=failed.length?'Nothing saved.':'Nothing to save; fill at least one provider card.';
+ toast(failed.length?'Some providers failed':'Saved');
 }
 async function clearProvider(provider){
  if(!confirm('Clear all saved '+provider+' credentials?'))return;
@@ -171,6 +193,9 @@ async function clearProvider(provider){
 async function testProvider(provider){
  const out=$(provider+'_result');out.textContent='Testing...';
  try{
+  if(Object.keys(fieldsFor(provider)).length){
+   try{await persist(provider)}catch(error){out.textContent='Save failed: '+error.message;return}
+  }
   const data=await api('/api/test',{method:'POST',body:JSON.stringify({provider})});
   const p=data.provider||{};
   if(!p.ok){out.textContent='Test failed: '+(data.error||p.error||p.status||'unavailable');return}
