@@ -133,6 +133,8 @@ input[type=color]{width:100%;height:38px;background:#0b0e13;border:1px solid var
 
 <script>
 const ICONS=['thermometer','humidity','sun','cloud','rain','snow','wind','home','door-open','door-closed','window-open','window-closed','motion','plug','battery','alert','check','x','arrow-up','arrow-down'];
+const PIXEL_FONT_B64='AAAAAAAAAF8AAAAHAAcAFH8UfxQkKn8qEiMTCGRiNklWIFAACAcDAAAcIkEAAEEiHAAqHH8cKggIPggIAIBwMAAICAgICAAAYGAAIBAIBAI+UUlFPgBCf0AAcklJSUYhQUlNMxgUEn8QJ0VFRTk8SklJMUEhEQkHNklJSTZGSUkpHgAAFAAAAEA0AAAACBQiQRQUFBQUAEEiFAgCAVkJBj5BXVlOfBIREnx/SUlJNj5BQUEif0FBQT5/SUlJQX8JCQkBPkFBUXN/CAgIfwBBf0EAIEBBPwF/CBQiQX9AQEBAfwIcAn9/BAgQfz5BQUE+fwkJCQY+QVEhXn8JGSlGJklJSTIDAX8BAz9AQEA/HyBAIB8/QDhAP2MUCBRjAwR4BANhWUlNQwB/QUFBAgQIECAAQUFBfwQCAQIEQEBAQEAAAwcIACBUVHhAfyhERDg4REREKDhERCh/OFRUVBgACH4JAhikpJx4fwgEBHgARH1AACBAQD0AfxAoRAAAQX9AAHwEeAR4fAgEBHg4REREOPwYJCQYGCQkGPx8CAQECEhUVFQkBAQ/RCQ8QEAgfBwgQCAcPEAwQDxEKBAoREyQkJB8RGRUTEQACDZBAAAAdwAAAEE2CAACAQIEAg==';
+const PIXEL_FONT=Uint8Array.from(atob(PIXEL_FONT_B64),c=>c.charCodeAt(0));
 const DEMO_VIEW={bg:'#0b1420',ttl:15,priority:0,draw:[
  {t:'text',x:120,y:6,s:5,c:'#e9edf4',a:'c',v:'{HH}:{MM}'},
  {t:'text',x:120,y:48,s:2,c:'#86e2bf',a:'c',v:'{WEEKDAY} {YYYY}-{MON}-{DD}'},
@@ -229,10 +231,9 @@ function drawUsageRows(ctx,l,u){
  const w=l.w||224, hh=l.h||82, top=l.y+20, rowH=(hh-20)/u.metrics.length;
  u.metrics.forEach((m,i)=>{
   const ry=top+i*rowH, large=rowH>=24, pct=Math.max(0,Math.min(100,Number(m.pct)||0));
-  ctx.fillStyle='#8b96a5';ctx.font='9px monospace';ctx.textAlign='left';ctx.fillText(m.label,l.x+12,ry);
+  drawPixelText(ctx,m.label,l.x+12,ry,1,'#8b96a5');
   const right=m.value?String(m.value):Math.round(pct)+'%';
-  const fs=large?(right.length>6?10:14):(right.length>6?8:10);
-  ctx.fillStyle='#ffffff';ctx.font='bold '+fs+'px monospace';ctx.textAlign='right';ctx.fillText(right,l.x+w-12,ry-(large?2:0));
+  drawPixelText(ctx,right,l.x+w-textWidth(right,large?2:1)-12,ry-(large?2:0),large?2:1,'#ffffff');
   if(pct>0){const by=ry+(large?13:9), bw=w-24, bh=large?6:4;
    ctx.fillStyle='#2a2a28';roundRect(ctx,l.x+12,by,bw,bh,bh/2);ctx.fill();
    ctx.fillStyle=pct>=90?'#f85149':(pct>=75?'#d97757':'#788c5d');ctx.save();roundRect(ctx,l.x+12,by,Math.max(0,bw*pct/100),bh,bh/2);ctx.fill();ctx.restore();}
@@ -241,20 +242,23 @@ function drawUsageRows(ctx,l,u){
 function drawUsage(ctx,l){
  const u=usageFor(l.provider);
  ctx.fillStyle='#1f1f1e';roundRect(ctx,l.x,l.y,l.w||224,l.h||82,8);ctx.fill();
- ctx.fillStyle=l.c||'#d97757';ctx.font='bold 12px monospace';ctx.textBaseline='top';ctx.textAlign='left';ctx.fillText(u?u.name:l.provider||'?',l.x+8,l.y+7);
- if(!u||!u.metrics||!u.metrics.length){ctx.fillStyle='#8b96a5';ctx.font='10px monospace';ctx.fillText('waiting',l.x+12,l.y+30);return}
+ drawPixelText(ctx,u?u.name:l.provider||'?',l.x+8,l.y+6,2,l.c||'#d97757');
+ if(!u||!u.metrics||!u.metrics.length){drawPixelText(ctx,'waiting',l.x+12,l.y+30,2,'#8b96a5');return}
  const all=(l.metric===undefined||l.metric===null||Number(l.metric)<0);
  if(all&&u.metrics.length>1){drawUsageRows(ctx,l,u);return}
  const m=u.metrics[all?0:Math.min(Number(l.metric)||0,u.metrics.length-1)];
- if(!m){ctx.fillStyle='#8b96a5';ctx.font='10px monospace';ctx.fillText('waiting',l.x+12,l.y+30);return}
- ctx.fillStyle='#8b96a5';ctx.font='10px monospace';ctx.textAlign='right';ctx.fillText(m.label,l.x+(l.w||224)-8,l.y+8);
+ if(!m){drawPixelText(ctx,'waiting',l.x+12,l.y+30,2,'#8b96a5');return}
+ drawPixelText(ctx,m.label,l.x+(l.w||224)-textWidth(m.label,2)-16,l.y+8,2,'#8b96a5');
  const hasValue=m.value!==undefined&&m.value!==null&&String(m.value).length>0;
- const big=hasValue?String(m.value):Math.round(m.pct)+'%';
- const hh=l.h||82, fs=big.length>8?(hh>=56?14:10):(hh>=74?28:(hh>=56?21:14));
- ctx.fillStyle='#ffffff';ctx.font='bold '+fs+'px monospace';ctx.textAlign='left';ctx.fillText(big,l.x+12,l.y+20);
+ let big=hasValue?String(m.value):Math.round(m.pct)+'%';
+ const hh=l.h||82, w=l.w||224;
+ let size=hh>=74?4:(hh>=56?3:2);
+ while(size>1&&textWidth(big,size)>w-24)size--;
+ if(textWidth(big,1)>w-24&&w>24){const maxChars=Math.max(1,Math.floor((w-24)/6));if(maxChars<big.length)big=big.slice(0,maxChars)}
+ drawPixelText(ctx,big,l.x+12,l.y+20,size,'#ffffff');
  if(m.pct>0||!hasValue){const by=l.y+hh-14,bw=(l.w||224)-24;ctx.fillStyle='#2a2a28';roundRect(ctx,l.x+12,by,bw,8,4);ctx.fill();
   ctx.fillStyle=m.pct>=90?'#f85149':(m.pct>=75?'#d97757':'#788c5d');ctx.save();roundRect(ctx,l.x+12,by,Math.max(0,bw*m.pct/100),8,4);ctx.fill();ctx.restore();}
- if(hh>=80&&(!hasValue||m.resetMin>0)){ctx.fillStyle='#8b96a5';ctx.font='9px monospace';ctx.fillText('Resets in '+m.resetMin+'m',l.x+12,l.y+hh-26)}
+ if(hh>=80&&(!hasValue||m.resetMin>0)){drawPixelText(ctx,'Resets in '+m.resetMin+'m',l.x+12,l.y+hh-26,1,'#8b96a5')}
 }
 function roundRect(ctx,x,y,w,h,r){if(w<=0||h<=0)return;r=Math.max(0,Math.min(r,w/2,h/2));ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath()}
 function bitmapBits(hex,w,h){const bits=[];for(let i=0;i<w*h;i++){const byte=parseInt((hex||'').slice((i>>3)*2,(i>>3)*2+2),16)||0;bits.push((byte>>(7-(i&7)))&1)}return bits}
@@ -309,11 +313,29 @@ function drawIconPreview(ctx,name,x,y,s,color){
  }
  ctx.restore();
 }
+function textWidth(text,size){return String(text==null?'':text).length*6*(size||1)}
+function drawPixelText(ctx,text,x,y,s,color){
+ text=String(text||'');s=s||1;ctx.fillStyle=color;
+ let cx=x;
+ for(const ch of text){
+  let code=ch.charCodeAt(0);if(code<32||code>126)code=63;
+  const base=(code-32)*5;
+  for(let i=0;i<5;i++){
+   const line=PIXEL_FONT[base+i];
+   for(let j=0;j<8;j++){
+    if(line&(1<<j)){
+     if(s===1)ctx.fillRect(cx+i,y+j,1,1);
+     else ctx.fillRect(cx+i*s,y+j*s,s,s);
+    }
+   }
+  }
+  cx+=6*s;
+ }
+}
 function drawText(ctx,text,x,y,s,align,color){
  text=String(text||'');const cw=6*s;
  const start=align==='c'?x-(text.length*cw)/2:(align==='r'?x-text.length*cw:x);
- ctx.font=(8*s)+'px "Courier New",monospace';ctx.textAlign='left';ctx.textBaseline='top';ctx.fillStyle=color;
- for(let i=0;i<text.length;i++)ctx.fillText(text[i],start+i*cw,y);
+ drawPixelText(ctx,text,start,y,s,color);
 }
 function draw(){
  const c=$('screen'),ctx=c.getContext('2d');ctx.setTransform(2,0,0,2,0,0);
