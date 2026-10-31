@@ -8,7 +8,6 @@
 #include "Gfx.h"
 #include "OtaUpdate.h"
 #include "Clock.h"
-#include "WgClient.h"
 #include "SettingsTransaction.h"
 #include "features/view/ViewMode.h"
 #include "features/view/ViewOverlay.h"
@@ -133,11 +132,6 @@ static void handleGetConfig() {
   JsonObject feat = root["features"].to<JsonObject>();
   feat["view"]   = (bool)WITH_VIEW;
   feat["usage"]  = (bool)WITH_USAGE;
-#if defined(SMALLTV_WIREGUARD)
-  feat["wireguard"] = true;
-#else
-  feat["wireguard"] = false;
-#endif
 #ifdef BTN_PIN
   feat["button"] = true;
 #else
@@ -182,7 +176,6 @@ static void handleStatus() {
   o["night"] = clockNightActive();
   o["nightHeld"] = clockNightHeld();
   o["clockFresh"] = clockTrusted();
-  wgStatusJson(o["wg"].to<JsonObject>());
 
   JsonObject u = o["usage"].to<JsonObject>();
   usageStatusJson(u);
@@ -211,17 +204,6 @@ static String netFingerprint(const Settings& s) {
   return f;
 }
 
-static String wgFingerprint(const Settings& s) {
-  String f(s.wg.enabled ? '1' : '0');
-  f += s.wg.privateKey;    f += '\x01';
-  f += s.wg.peerPublicKey; f += '\x01';
-  f += s.wg.endpointHost;  f += '\x01';
-  f += String(s.wg.endpointPort); f += '\x01';
-  f += s.wg.address;       f += '\x01';
-  f += s.wg.allowedIps;    f += '\x01';
-  f += String(s.wg.keepalive);
-  return f;
-}
 
 static void sendParseError(DeserializationError err) {
   if (err == DeserializationError::NoMemory)
@@ -242,7 +224,6 @@ static void handlePostConfig() {
   }
 
   String oldNet = netFingerprint(*S);
-  String oldWg = wgFingerprint(*S);
 
   if (!applyAndSaveSettings(*S,
         [&](Settings& settings) { settingsApplyJson(settings, doc.as<JsonObjectConst>()); doc.clear(); },
@@ -256,15 +237,13 @@ static void handlePostConfig() {
   gfxApplyColors(*S);
   appInvalidate();
 
-  bool wgChanged = (wgFingerprint(*S) != oldWg) || wgHeld();
-  bool wifiChanged = netFingerprint(*S) != oldNet;
+  const bool wifiChanged = netFingerprint(*S) != oldNet;
 
   JsonDocument res;
   res["ok"] = true;
   res["reboot"] = wifiChanged;
   sendJson(res);
 
-  if (wgChanged) wgReapply(*S);
   if (wifiChanged) scheduleReboot(800);
 }
 

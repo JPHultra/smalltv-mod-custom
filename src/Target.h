@@ -4,8 +4,8 @@
 //   -D SMALLTV_ESP8266   original SmallTV, ESP-12F
 //   -D SMALLTV_ESP32C2   knockoff SmallTV, ESP32-C2 / ESP8684
 //   -D SMALLTV_ESP32     classic ESP32 (NM-TV-154, SmallTV Pro)
-// The board and variant macros (SMALLTV_ESP32_PRO, SMALLTV_ESP32_WG,
-// SMALLTV_LEAN) are defined alongside a chip macro and never replace it.
+// The board and variant macros (SMALLTV_ESP32_PRO, SMALLTV_LEAN) are defined
+// alongside a chip macro and never replace it.
 //
 // The rest of the firmware tests the family macros defined here instead of
 // listing chip macros:

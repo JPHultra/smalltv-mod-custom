@@ -10,7 +10,7 @@
 // Firmware identity
 // ---------------------------------------------------------------------------
 #define FW_NAME     "smalltv-mod"
-#define FW_VERSION  "4.0.4-custom"
+#define FW_VERSION  "4.0.5-custom"
 
 #define REPO_URL      "https://github.com/JPHultra/smalltv-mod-custom"
 #define REPO_OWNER    "JPHultra"
@@ -18,18 +18,15 @@
 // Release asset the GitHub self-updater pulls, and the short variant name shown
 // in the web UI. A device keeps its own variant across a self-update.
 //
-// Order matters: this is an #if defined() chain, and both SMALLTV_ESP32_PRO and
-// SMALLTV_ESP32_WG are defined alongside SMALLTV_ESP32 rather than instead of
-// it, so they have to be tested first.
+// Order matters: this is an #if defined() chain, and SMALLTV_ESP32_PRO is
+// defined alongside SMALLTV_ESP32 rather than instead of it, so it has to be
+// tested first.
 #if defined(SMALLTV_ESP32C2)
   #define UPDATE_ASSET "smalltv-mod-firmware-c2.bin"
   #define FW_VARIANT   "c2"
 #elif defined(SMALLTV_ESP32_PRO)
   #define UPDATE_ASSET "smalltv-mod-firmware-esp32-pro.bin"
   #define FW_VARIANT   "esp32-pro"
-#elif defined(SMALLTV_ESP32_WG)
-  #define UPDATE_ASSET "smalltv-mod-firmware-esp32-wg.bin"
-  #define FW_VARIANT   "esp32-wg"
 #elif defined(SMALLTV_ESP32)
   #define UPDATE_ASSET "smalltv-mod-firmware-esp32.bin"
   #define FW_VARIANT   "esp32"
@@ -77,15 +74,6 @@
 #define MAX_AUTH_PASS_LEN 64
 #define DEFAULT_AUTH_USER "admin"
 #define AUTH_REALM        "SmallTV"
-
-// WireGuard. Compiled only where the image has room for it (see platformio.ini);
-// the settings persist on every board so a config survives a variant swap.
-#define MAX_WG_KEY_LEN    48
-#define MAX_WG_HOST_LEN   64
-#define MAX_WG_ADDR_LEN   24
-#define MAX_WG_ALLOWED_LEN 80
-#define DEFAULT_WG_PORT        51820
-#define DEFAULT_WG_KEEPALIVE      25
 
 // ---------------------------------------------------------------------------
 // The dashboard draw list and the transient overlay.

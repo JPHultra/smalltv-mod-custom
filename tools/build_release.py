@@ -33,7 +33,7 @@ ROOT = Path(__file__).resolve().parent.parent
 GROUPS = [
     ("ESP8266", ["smalltv", "smalltv_loader"]),
     ("ESP32-C2, custom SDKConfig", ["smalltv_c2"]),
-    ("classic ESP32, custom SDKConfig", ["smalltv_esp32", "smalltv_esp32_wg"]),
+    ("classic ESP32, custom SDKConfig", ["smalltv_esp32"]),
     ("classic ESP32, stock SDKConfig", ["smalltv_esp32_8mb"]),
 ]
 
@@ -48,10 +48,6 @@ ASSETS = {
         ("firmware.bin", "smalltv-mod-firmware-esp32.bin"),
         ("firmware.factory.bin", "smalltv-mod-firmware-esp32.factory.bin"),
     ],
-    "smalltv_esp32_wg": [
-        ("firmware.bin", "smalltv-mod-firmware-esp32-wg.bin"),
-        ("firmware.factory.bin", "smalltv-mod-firmware-esp32-wg.factory.bin"),
-    ],
     "smalltv_esp32_8mb": [
         ("firmware.bin", "smalltv-mod-firmware-esp32-pro.bin"),
         ("firmware.factory.bin", "smalltv-mod-firmware-esp32-pro.factory.bin"),
@@ -60,7 +56,7 @@ ASSETS = {
 }
 
 # The loader has no OTA slot to measure.
-SIZE_ENVS = {"smalltv", "smalltv_c2", "smalltv_esp32", "smalltv_esp32_wg", "smalltv_esp32_8mb"}
+SIZE_ENVS = {"smalltv", "smalltv_c2", "smalltv_esp32", "smalltv_esp32_8mb"}
 
 CONSTRAINTS = "platformio==6.1.19\npioarduino==6.1.19\n"
 

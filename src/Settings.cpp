@@ -101,50 +101,6 @@ void AuthSettings::fromJson(JsonObjectConst o) {
 }
 
 // ===========================================================================
-// WireGuard slice
-// ===========================================================================
-void WgSettings::setDefaults() {
-  enabled = false;
-  privateKey = "";
-  peerPublicKey = "";
-  endpointHost = "";
-  endpointPort = DEFAULT_WG_PORT;
-  address = "";
-  allowedIps = "";
-  keepalive = DEFAULT_WG_KEEPALIVE;
-}
-
-void WgSettings::toJson(JsonObject o, bool includeSecrets) const {
-  o["enabled"]        = enabled;
-  o["peerPublicKey"]  = peerPublicKey;
-  o["endpointHost"]   = endpointHost;
-  o["endpointPort"]   = endpointPort;
-  o["address"]        = address;
-  o["allowedIps"]     = allowedIps;
-  o["keepalive"]      = keepalive;
-  o["privateKeySet"]  = privateKey.length() > 0;
-  if (includeSecrets) o["privateKey"] = privateKey;
-}
-
-void WgSettings::fromJson(JsonObjectConst o) {
-  if (o["enabled"].is<bool>())              enabled = o["enabled"];
-  if (o["peerPublicKey"].is<const char*>()) peerPublicKey = o["peerPublicKey"].as<String>();
-  if (o["endpointHost"].is<const char*>())  endpointHost = o["endpointHost"].as<String>();
-  if (o["endpointPort"].is<int>())          endpointPort = constrain((int)o["endpointPort"], 1, 65535);
-  if (o["address"].is<const char*>())       address = o["address"].as<String>();
-  if (o["allowedIps"].is<const char*>())    allowedIps = o["allowedIps"].as<String>();
-  if (o["keepalive"].is<int>())             keepalive = constrain((int)o["keepalive"], 0, 3600);
-  if (o["privateKey"].is<const char*>()) {
-    String p = o["privateKey"].as<String>();
-    if (p.length()) privateKey = p;
-  }
-  if (peerPublicKey.length() >= MAX_WG_KEY_LEN)   peerPublicKey.remove(MAX_WG_KEY_LEN - 1);
-  if (privateKey.length()    >= MAX_WG_KEY_LEN)   privateKey.remove(MAX_WG_KEY_LEN - 1);
-  if (endpointHost.length()  >= MAX_WG_HOST_LEN)  endpointHost.remove(MAX_WG_HOST_LEN - 1);
-  if (allowedIps.length()    >= MAX_WG_ALLOWED_LEN) allowedIps.remove(MAX_WG_ALLOWED_LEN - 1);
-}
-
-// ===========================================================================
 // Panel colour slice
 // ===========================================================================
 void DisplaySettings::setDefaults() {
@@ -243,7 +199,6 @@ void Settings::setDefaults() {
 
   clock.setDefaults();
   display.setDefaults();
-  wg.setDefaults();
   auth.setDefaults();
   button.setDefaults();
   view.setDefaults();
@@ -318,7 +273,6 @@ void settingsToJson(const Settings& s, JsonObject root, bool includeSecrets) {
 
   s.clock.toJson(root["clock"].to<JsonObject>());
   s.display.toJson(root["display"].to<JsonObject>());
-  s.wg.toJson(root["wg"].to<JsonObject>(), includeSecrets);
   s.auth.toJson(root["auth"].to<JsonObject>(), includeSecrets);
   s.button.toJson(root["button"].to<JsonObject>());
   s.view.toJson(root["view"].to<JsonObject>(), includeSecrets);
@@ -368,7 +322,6 @@ void settingsApplyJson(Settings& s, JsonObjectConst root) {
 
   if (root["clock"].is<JsonObjectConst>())   s.clock.fromJson(root["clock"].as<JsonObjectConst>());
   if (root["display"].is<JsonObjectConst>()) s.display.fromJson(root["display"].as<JsonObjectConst>());
-  if (root["wg"].is<JsonObjectConst>())      s.wg.fromJson(root["wg"].as<JsonObjectConst>());
   if (root["auth"].is<JsonObjectConst>())    s.auth.fromJson(root["auth"].as<JsonObjectConst>());
   if (root["button"].is<JsonObjectConst>())  s.button.fromJson(root["button"].as<JsonObjectConst>());
   if (root["view"].is<JsonObjectConst>())    s.view.fromJson(root["view"].as<JsonObjectConst>());

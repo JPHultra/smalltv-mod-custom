@@ -1,19 +1,11 @@
 Import("env")
 import os
-import shutil
 import subprocess
 
 # Windows: SCons's default cmd.exe-based SPAWN can mis-tokenize quoted/long
 # build-tool command lines, dropping args. This re-tokenizes and dispatches directly.
 PROJECT_DIR = env.subst("$PROJECT_DIR")
 
-# libsodium's port files are compiled into .pio/build/port, outside the env
-# build directory, and that directory is shared by every target. After the
-# RISC-V C2 build, an Xtensa ESP32 link would otherwise pick up C2 objects and
-# fail with "relocations in generic ELF". Clear it once per env.
-_port = os.path.join(PROJECT_DIR, ".pio", "build", "port")
-if os.path.isdir(_port):
-    shutil.rmtree(_port, ignore_errors=True)
 
 
 def _tokenize(cmdline):

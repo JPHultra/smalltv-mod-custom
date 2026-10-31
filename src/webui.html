@@ -78,25 +78,6 @@ small.hint{display:block;color:var(--mut);margin-top:4px;font-size:12px}
    <label>Hostname</label><input id="hostname" type="text" placeholder="smalltv">
    <small class="hint">Reachable as <code>http://&lt;hostname&gt;.local</code>. Saving a new name reboots the device.</small>
   </div>
-  <div class="card" id="wgCard"><h2>WireGuard VPN</h2>
-   <div id="wgStatus" class="muted" style="margin-bottom:10px">-</div>
-   <div class="chk"><input id="wgEnabled" type="checkbox"><label>Enable the tunnel</label></div>
-   <label>This device's private key</label>
-   <input id="wgPrivateKey" type="password" autocomplete="off" placeholder="(unchanged)">
-   <label>Peer public key</label>
-   <input id="wgPeerPublicKey" type="text" autocomplete="off" placeholder="server public key">
-   <div class="row">
-    <div><label>Endpoint host</label><input id="wgEndpointHost" type="text" placeholder="vpn.example.com"></div>
-    <div style="flex:0 0 110px"><label>Port</label><input id="wgEndpointPort" type="number" min="1" max="65535"></div>
-   </div>
-   <label>Tunnel address</label>
-   <input id="wgAddress" type="text" placeholder="10.6.0.12/32">
-   <label>Allowed IPs</label>
-   <input id="wgAllowedIps" type="text" placeholder="10.6.0.0/24">
-   <label>Keepalive (s, 0 = off)</label>
-   <input id="wgKeepalive" type="number" min="0" max="3600">
-   <small class="hint">The tunnel needs the clock, so NTP starts whenever it is enabled. The private key stays on the device and in its settings export; this page never reads it back.</small>
-  </div>
   <div class="card"><h2>Setup hotspot (AP)</h2>
    <label>AP name</label><input id="apSsid" type="text">
    <label>AP password <span class="muted">(min 8 chars)</span></label>
@@ -198,7 +179,7 @@ small.hint{display:block;color:var(--mut);margin-top:4px;font-size:12px}
    <button class="btn sec" onclick="location.href='/api/export'">Export settings</button>
    <input id="cfgFile" type="file" accept=".json,application/json" style="margin-top:10px">
    <div style="margin-top:10px"><button class="btn" onclick="importCfg()">Import &amp; reboot</button></div>
-   <small class="hint">The export includes WiFi passwords and the WireGuard private key in clear text.</small>
+   <small class="hint">The export includes WiFi passwords and the editor token in clear text.</small>
   </div>
   <div class="card"><h2>Password</h2>
    <div class="chk"><input id="authEnabled" type="checkbox"><label>Ask for a password to open this page</label></div>
@@ -270,7 +251,6 @@ function resetColors(){setGain('rGain','rgVal',100);setGain('gGain','ggVal',100)
 
 function loadConfig(){return j('/api/config').then(function(c){C=c;var f=c.features||{};
  if(f.usage===false)hideTab('usage');
- if(f.wireguard===false){var wc=$('wgCard');if(wc)wc.remove()}
  if(f.button!==true){var bc=$('buttonCard');if(bc)bc.remove()}
  var chipName={esp8266:'ESP8266',esp32c2:'ESP32-C2',esp32:'ESP32'}[c.chip]||'';
  var chE=$('chip');if(chE&&chipName){chE.textContent=chipName;chE.style.display='inline-block'}
@@ -286,8 +266,6 @@ function loadConfig(){return j('/api/config').then(function(c){C=c;var f=c.featu
  if(ck.tz&&!(ck.tz in TZMAP)){var ts=$('tz');if(ts){var o=document.createElement('option');o.value=ck.tz;o.textContent=ck.tz;ts.appendChild(o)}}
  sv('tz',ck.tz||'');sc('nightEnabled',!!ck.nightEnabled);sv('nightStart',ck.nightStart||'22:00');sv('nightEnd',ck.nightEnd||'07:00');
  sv('nightLevel',ck.nightLevel!=null?ck.nightLevel:0);$('nlVal')&&($('nlVal').textContent=(ck.nightLevel!=null?ck.nightLevel:0));
- var w=c.wg||{};sc('wgEnabled',!!w.enabled);sv('wgPeerPublicKey',w.peerPublicKey);sv('wgEndpointHost',w.endpointHost);sv('wgEndpointPort',w.endpointPort||51820);sv('wgAddress',w.address);sv('wgAllowedIps',w.allowedIps);sv('wgKeepalive',w.keepalive!=null?w.keepalive:25);
- var pk=$('wgPrivateKey');if(pk)pk.placeholder=w.privateKeySet?'(unchanged)':'paste the private key';
  var b=c.button||{};sv('btnShort',b.shortAction!=null?b.shortAction:3);sv('btnLong',b.longAction!=null?b.longAction:4);sv('btnSens',b.sensitivity!=null?b.sensitivity:85);$('btnSensVal')&&($('btnSensVal').textContent=(b.sensitivity!=null?b.sensitivity:85));
  var v=c.view||{};sv('pollUrl',v.pollUrl);sv('pollSec',v.pollSec!=null?v.pollSec:0);sv('ttlSec',v.ttlSec!=null?v.ttlSec:15);sv('pollAuthHeader',v.pollAuthHeader);var pav=$('pollAuthValue');if(pav){pav.value='';pav.placeholder=v.pollAuthSet?'(unchanged)':'(optional)'}
  var et=$('editorToken');if(et){et.value='';et.placeholder=v.tokenSet?'(unchanged)':'(optional)'}
@@ -302,7 +280,6 @@ function collect(){var o={hostname:gv('hostname'),apSsid:gv('apSsid'),wifi:colle
  display:{colorOrder:gv('colorOrder')||'auto',invert:gc('colorInvert'),rGain:parseInt(gv('rGain'))||100,gGain:parseInt(gv('gGain'))||100,bGain:parseInt(gv('bGain'))||100},
  view:{pollUrl:gv('pollUrl'),pollSec:parseInt(gv('pollSec'))||0,ttlSec:parseInt(gv('ttlSec'))||15,pollAuthHeader:gv('pollAuthHeader')}};
  if(gc('apOpen'))o.apPass='';else{var p=gv('apPass');if(p)o.apPass=p}
- if($('wgCard')){var w={enabled:gc('wgEnabled'),peerPublicKey:gv('wgPeerPublicKey'),endpointHost:gv('wgEndpointHost'),endpointPort:parseInt(gv('wgEndpointPort'))||51820,address:gv('wgAddress'),allowedIps:gv('wgAllowedIps'),keepalive:parseInt(gv('wgKeepalive'))||0};var pk=gv('wgPrivateKey');if(pk)w.privateKey=pk;o.wg=w}
  if($('buttonCard')){o.button={shortAction:parseInt(gv('btnShort')),longAction:parseInt(gv('btnLong')),sensitivity:parseInt(gv('btnSens'))||85}}
  if($('authEnabled')){var a={enabled:gc('authEnabled'),user:gv('authUser')||'admin'};var ap=gv('authPass');if(ap)a.pass=ap;o.auth=a}
  var ck=$('tz');if(ck){var tz=gv('tz');var posix=(tz in TZMAP)?TZMAP[tz]:((C.clock&&C.clock.tz===tz&&C.clock.tzPosix)?C.clock.tzPosix:'UTC0');
@@ -329,7 +306,7 @@ function loadStatus(){j('/api/status').then(function(s){
  var fv=$('footVer');if(fv)fv.textContent=' v'+s.version;
  if(s.repo){var fr=$('footRepo');if(fr)fr.href=s.repo}
  var cn=$('clockNow');if(cn){var ns=s.night?' - night mode active':(s.nightHeld?' - waiting for NTP':'');cn.textContent='Clock: '+(s.synced?(s.time||'synced')+(s.tz?' ('+s.tz+')':''):'waiting for NTP...')+ns}
- $('statusBox').innerHTML=kv('Firmware',s.fw+' '+s.version+(s.variant?' ('+s.variant+')':''))+kv('Network',s.ssid||'-')+kv('IP',s.ip||'-')+kv('mDNS','http://'+(C.hostname||'smalltv')+'.local')+kv('Signal',s.rssi?s.rssi+' dBm':'-')+(s.wifiFail?kv('Last join failure',s.wifiFail):'')+kv('Free heap',s.heap+' B'+(s.maxblk?' ('+s.maxblk+' B largest block)':''))+kv('Uptime',fmtUp(s.uptime))+kv('Last reset',s.reset||'-')+((s.wg&&s.wg.compiledIn)?kv('VPN',s.wg.held?'held':(s.wg.up?'up':(s.wg.enabled?'connecting':'off'))):'');
+ $('statusBox').innerHTML=kv('Firmware',s.fw+' '+s.version+(s.variant?' ('+s.variant+')':''))+kv('Network',s.ssid||'-')+kv('IP',s.ip||'-')+kv('mDNS','http://'+(C.hostname||'smalltv')+'.local')+kv('Signal',s.rssi?s.rssi+' dBm':'-')+(s.wifiFail?kv('Last join failure',s.wifiFail):'')+kv('Free heap',s.heap+' B'+(s.maxblk?' ('+s.maxblk+' B largest block)':''))+kv('Uptime',fmtUp(s.uptime))+kv('Last reset',s.reset||'-');
  $('viewStatus').innerHTML=kv('Dashboard',s.view&&s.view.loaded?'loaded':'missing')+kv('Overlay',s.view&&s.view.overlay?'showing':'idle')+kv('Poller',s.view&&s.view.poll?'on':'off')+((s.view&&s.view.error)?kv('View error',esc(s.view.error)):'')+((s.view&&s.view.pollError)?kv('Poll error',esc(s.view.pollError)):'');
  var ub=$('usageBox');if(ub)ub.innerHTML=usageHtml(s.usage);
 }).catch(function(){})}

@@ -15,14 +15,13 @@ New here? Follow [SETUP.md](SETUP.md) for the complete build, flash, dashboard, 
 | `smalltv` | SmallTV / SmallTV-ultra, ESP8266 |
 | `smalltv_c2` | SmallTV ESP32-C2 / ESP8684 |
 | `smalltv_esp32` | NM-TV-154, classic ESP32 |
-| `smalltv_esp32_wg` | NM-TV-154 with WireGuard |
 | `smalltv_esp32_8mb` | SmallTV Pro, 8 MB classic ESP32 |
 | `smalltv_loader` | one-time ESP8266 loader for the Ultra |
 
 ## Build
 
 The fast path builds every release image in the order that minimizes pioarduino
-framework rebuilds, stages the ten assets in `dist/`, and runs the local 8 KB
+framework rebuilds, stages the eight assets in `dist/`, and runs the local 8 KB
 slot gate:
 
 ```sh
@@ -46,7 +45,7 @@ classic-stock builds. The individual commands still work:
 ```sh
 pio run -e smalltv
 pio run -e smalltv_c2
-pio run -e smalltv_esp32 -e smalltv_esp32_wg
+pio run -e smalltv_esp32
 pio run -e smalltv_esp32_8mb
 ```
 
@@ -91,7 +90,7 @@ git push origin vX.Y.Z
 gh release create vX.Y.Z dist/* --title "vX.Y.Z" --notes "Release notes"
 ```
 
-The ten `dist/` assets are attached to the release by `gh`; keep their names
+The eight `dist/` assets are attached to the release by `gh`; keep their names
 unchanged because the firmware's `UPDATE_ASSET` values point at them.
 
 ## Dashboard

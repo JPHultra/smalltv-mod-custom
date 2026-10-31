@@ -42,22 +42,6 @@ struct AuthSettings {
   void fromJson(JsonObjectConst o);
 };
 
-// ---- WireGuard slice (device-wide) -----------------------------------------
-struct WgSettings {
-  bool     enabled;
-  String   privateKey;
-  String   peerPublicKey;
-  String   endpointHost;
-  uint16_t endpointPort;
-  String   address;
-  String   allowedIps;
-  uint16_t keepalive;
-
-  void setDefaults();
-  void toJson(JsonObject o, bool includeSecrets) const;
-  void fromJson(JsonObjectConst o);
-};
-
 // ---- Panel colour slice (device-wide) --------------------------------------
 struct DisplaySettings {
   uint8_t colorOrder;
@@ -113,7 +97,6 @@ struct Settings {
 
   ClockSettings   clock;
   DisplaySettings display;
-  WgSettings      wg;
   AuthSettings    auth;
   ButtonSettings  button;
   ViewSettings    view;

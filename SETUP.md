@@ -69,7 +69,7 @@ with the ESP32 framework.
 ## 3. Build the firmware
 
 The fast path builds every release target in framework-friendly order, stages
-the ten assets in `dist/`, and runs the 8 KB OTA-slot gate:
+the eight assets in `dist/`, and runs the 8 KB OTA-slot gate:
 
 ```sh
 python tools/build_release.py
@@ -93,8 +93,6 @@ smalltv-mod-firmware-c2.bin               # ESP32-C2 app
 smalltv-mod-firmware-c2.factory.bin       # ESP32-C2 first install
 smalltv-mod-firmware-esp32.bin            # NM-TV-154 app
 smalltv-mod-firmware-esp32.factory.bin    # NM-TV-154 first install
-smalltv-mod-firmware-esp32-wg.bin         # NM-TV-154 + WireGuard app
-smalltv-mod-firmware-esp32-wg.factory.bin # NM-TV-154 + WireGuard first install
 smalltv-mod-firmware-esp32-pro.bin        # SmallTV Pro app / stock-UI install
 smalltv-mod-firmware-esp32-pro.factory.bin# SmallTV Pro first install / recovery
 ```
@@ -105,7 +103,6 @@ Manual per-env builds still work:
 pio run -e smalltv
 pio run -e smalltv_c2
 pio run -e smalltv_esp32
-pio run -e smalltv_esp32_wg
 pio run -e smalltv_esp32_8mb
 pio run -e smalltv_loader
 ```
@@ -173,7 +170,6 @@ python -m esptool --chip esp32 --port "$PORT" --baud 921600 \
   write_flash 0x0 dist/smalltv-mod-firmware-esp32.factory.bin
 ```
 
-For the WireGuard image, use `smalltv-mod-firmware-esp32-wg.factory.bin`.
 
 ### SmallTV Pro (classic ESP32, 8 MB)
 
@@ -212,7 +208,6 @@ Optional on this screen:
 
 - **WiFi password** for the web UI, under **System**. Off by default. There is
   no recovery other than reflashing.
-- **WireGuard** under **WiFi** on C2, Pro and the `-wg` image.
 - **Night mode** and timezone under **Display**.
 - **Button** actions under **Display** on classic-ESP32 boards.
 
@@ -605,7 +600,7 @@ The device self-update is pointed at `JPHultra/smalltv-mod-custom` in
 `src/config.h`. Releases are built and published from this PC; there are no
 GitHub Actions.
 
-1. Edit `FW_VERSION` in `src/config.h` (currently `4.0.4-custom`) to the new version.
+1. Edit `FW_VERSION` in `src/config.h` (currently `4.0.5-custom`) to the new version.
 2. Build all targets and stage the assets:
 
 ```sh
@@ -623,7 +618,7 @@ git tag v4.0.1
 git push origin v4.0.1
 ```
 
-4. Attach the ten `dist/` assets to the tag:
+4. Attach the eight `dist/` assets to the tag:
 
 ```sh
 gh release create v4.0.1 dist/* --title "v4.0.1" --notes "Release notes"
@@ -648,13 +643,6 @@ If the repo moves, update:
 
 ## 11. Optional features
 
-### WireGuard
-
-Available on the C2, Pro and the `-wg` NM-TV-154 image. In **WiFi ->
-WireGuard VPN**, set the private key, peer public key, endpoint, tunnel address,
-allowed IPs and keepalive. Save, then watch the status line. The tunnel needs the
-clock, so enabling it starts NTP.
-
 ### Physical button
 
 Classic-ESP32 boards expose a capacitive button. Configure short/long actions
@@ -674,7 +662,7 @@ upload. The daemon push endpoint `/api/usage` stays open. There is no recovery.
 ### Settings backup
 
 **System -> Export settings** writes `config.json`, including WiFi passwords,
-the WireGuard private key and the editor token. **Import** applies and reboots.
+editor token and other secrets. **Import** applies and reboots.
 
 ## 12. Verify the repository
 
@@ -722,7 +710,6 @@ builds.
 |---|---|
 | `pio: command not found` | Activate `.venv`, or pass `--pio /path/to/pio` |
 | `No module named 'SCons.Tool.FortranCommon'` | Use PlatformIO 6.1.19; the build script sets the constraints. Do not build with a newer pioarduino core |
-| `relocations in generic ELF (EM: 243)` when linking WireGuard | Stale shared libsodium port objects. `rm -rf .pio/build/port`, then rebuild; `extra_script.py` normally clears it per env |
 | Editor **Load/Save** fails at `https://...` | Mixed content. Use a local HTTP copy of the editor or the device **View** tab |
 | Editor 403 / authentication | Set **Editor token** in the device **View** tab and enter the same token; use the device IP or exact hostname |
 | Device shows “Push a view from the editor” | No `/view.json`. Push a dashboard or paste `examples/view.json` |
@@ -768,10 +755,10 @@ case/                 3D-printed case
 
 ## 15. Security notes
 
-- The web UI is plain HTTP. Keep it on the LAN or use WireGuard; do not forward
-  port 80 to the internet.
-- The settings export contains WiFi passwords, the WireGuard private key and the
-  editor token.
+- The web UI is plain HTTP. Keep it on the LAN; do not forward port 80 to the
+  internet.
+- The settings export contains WiFi passwords, the editor token and other
+  secrets.
 - Claude/Codex/DeepSeek credentials stay on the daemon host in
   `~/.config/smalltv/credentials.json` (mode 0600). The setup UI never reads
   local auth files or environment variables; the daemon sends only usage
