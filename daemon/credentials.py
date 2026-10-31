@@ -39,9 +39,14 @@ MAX_EXPIRES_AT = 10**15
 
 
 def credentials_path(path=None):
-    return os.path.abspath(os.path.expanduser(
-        path or os.environ.get("SMALLTV_CREDENTIALS") or DEFAULT_CREDENTIALS_PATH
-    ))
+    if path:
+        return os.path.abspath(os.path.expanduser(path))
+    if os.environ.get("SMALLTV_CREDENTIALS"):
+        return os.path.abspath(os.path.expanduser(os.environ["SMALLTV_CREDENTIALS"]))
+    if os.name == "nt":
+        base = os.environ.get("APPDATA") or os.path.expanduser("~")
+        return os.path.abspath(os.path.join(base, "smalltv", "credentials.json"))
+    return os.path.abspath(os.path.expanduser(DEFAULT_CREDENTIALS_PATH))
 
 
 def _clean_value(key, value):

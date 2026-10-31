@@ -43,11 +43,14 @@ The setup UI opens your browser automatically and prints the same URL, with a
 one-time setup token already attached. If no browser opens, use the printed URL
 or start it with `--no-open` and copy the token. Paste the Claude, Codex and/or
 DeepSeek credentials, then use **Save all credentials** (or a card's Save
-button). Each card's **Test** button saves that card first. The page:
+button). Each card's **Test** button saves that card first. On Windows, use
+`daemon\setup_windows.bat` (or `py -3 daemon\setup_ui.py --config
+daemon\usage-daemon.json`). The page:
 
 - never reads `~/.claude`, `~/.codex` or environment variables;
 - accepts pasted credentials JSON from any machine, or individual fields;
-- saves to `~/.config/smalltv/credentials.json` with mode `0600`;
+- saves to `~/.config/smalltv/credentials.json` on Linux/macOS, or
+  `%APPDATA%\smalltv\credentials.json` on Windows, with mode `0600`;
 - never displays saved secrets back, logs them, or puts them in `/api/status`;
 - has a **Test** button for each provider (the test does not push to the device).
 
@@ -69,6 +72,31 @@ setup UI takes effect without restarting it.
 The setup UI is localhost-only by default. `--bind 0.0.0.0` is available for a
 daemon in a VM/container, but then anyone who can reach the port and knows the
 setup token can update credentials.
+
+### Windows
+
+From PowerShell or Command Prompt in the repository root:
+
+```bat
+daemon\setup_windows.bat
+```
+
+or, to set the device while creating the config:
+
+```bat
+py -3 daemon\setup_ui.py --config daemon\usage-daemon.json --device http://smalltv.local
+```
+
+The browser opens automatically. To keep the daemon running at login, install a
+Task Scheduler job:
+
+```bat
+daemon\install_windows.bat -DeviceUrl http://smalltv.local
+```
+
+Remove it with `daemon\install_windows.bat -Uninstall`. The scheduled task runs
+`pythonw.exe`, so it has no console window. The Linux systemd service below is
+not used on Windows.
 
 | Adapter | Source |
 |---|---|

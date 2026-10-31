@@ -184,10 +184,12 @@ credentials are entered through the local setup UI:
 python3 daemon/setup_ui.py --config daemon/usage-daemon.json
 ```
 
-It prints a URL and setup token; the page never reads `~/.claude`, `~/.codex` or
+On Windows use `daemon\setup_windows.bat`. It opens a browser and setup token
+automatically; the page never reads `~/.claude`, `~/.codex` or
 environment variables, and saves only submitted fields to
-`~/.config/smalltv/credentials.json` (mode `0600`). The daemon re-reads that
-store each cycle. A metric may carry a `value` string (for example `110 CNY` or
+`~/.config/smalltv/credentials.json` on Linux/macOS or
+`%APPDATA%\smalltv\credentials.json` on Windows (mode `0600`). The daemon
+re-reads that store each cycle. A metric may carry a `value` string (for example `110 CNY` or
 `1.2M tokens`) instead of a percentage. `daemon/push_usage.py` remains for a
 single pre-built document, a URL, or demo data. The firmware only needs the
 normalized contract; provider credentials stay on the daemon host.

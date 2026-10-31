@@ -2,7 +2,6 @@
   "device": "http://smalltv.local",
   "interval": 60,
   "timeout": 10,
-  "credentialsFile": "~/.config/smalltv/credentials.json",
   "providers": [
     {
       "id": "claude",

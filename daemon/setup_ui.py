@@ -12,6 +12,7 @@ import copy
 import hmac
 import json
 import secrets
+import shutil
 import sys
 import urllib.error
 import webbrowser
@@ -175,9 +176,26 @@ def load_config(path):
     return config
 
 
+def ensure_config(path, device=None):
+    """Create the daemon config from the example on first run; optionally set device."""
+    if not path:
+        return {"providers": []}
+    config_path = Path(path)
+    if not config_path.exists():
+        example = Path(__file__).with_name("usage-daemon.example.json")
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(example, config_path)
+    config = load_config(str(config_path))
+    if device:
+        config["device"] = device.strip()
+        config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    return config
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", help="daemon JSON config (provider URLs/options)")
+    parser.add_argument("--device", help="set the device URL when creating/updating the config")
     parser.add_argument("--credentials", help="override the credentials JSON path")
     parser.add_argument("--bind", default="127.0.0.1", help="bind address (default 127.0.0.1)")
     parser.add_argument("--port", type=int, default=8790, help="port (default 8790)")
@@ -187,7 +205,7 @@ def main():
     args = parser.parse_args()
 
     try:
-        config = load_config(args.config)
+        config = ensure_config(args.config, args.device)
         store = CredentialsStore(args.credentials or config.get("credentialsFile"))
         server = make_server(args.bind, args.port, store, config, args.timeout, args.token)
     except (OSError, ValueError) as error:

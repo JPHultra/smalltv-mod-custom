@@ -29,7 +29,7 @@ transient above it.
 
 ## 2. Requirements
 
-- Linux, macOS or WSL. These instructions use Linux paths; replace `/dev/ttyUSB0`
+- Linux, macOS, WSL, or Windows. Firmware build commands use Linux paths; replace `/dev/ttyUSB0`
   with your port (`/dev/ttyACM0`, `COM3`, ...).
 - Python 3.12 for PlatformIO. PlatformIO 6.1.19 does not reliably run on newer
   Pythons.
@@ -300,12 +300,17 @@ its `device` to your device URL:
 "device": "http://192.168.1.50"
 ```
 
-The example stores provider credentials in
-`~/.config/smalltv/credentials.json`. Enter them with the local setup UI:
+The example stores provider credentials in the platform config directory:
+`~/.config/smalltv/credentials.json` on Linux/macOS, or
+`%APPDATA%\smalltv\credentials.json` on Windows. Enter them with the local
+setup UI:
 
 ```sh
 python3 daemon/setup_ui.py --config daemon/usage-daemon.json
 ```
+
+On Windows use `daemon\setup_windows.bat`, or `py -3 daemon\setup_ui.py
+--config daemon\usage-daemon.json --device http://192.168.1.50`.
 
 It opens your browser automatically and prints the same URL with a generated
 setup token. If it does not, copy the printed URL. Fill the provider cards and
@@ -315,8 +320,10 @@ card before testing. The page:
 - never reads `~/.claude`, `~/.codex` or environment variables on this host;
 - accepts pasted Claude/Codex credentials JSON from any machine, or manual
   access/refresh/account fields;
-- saves only what you submit to `~/.config/smalltv/credentials.json` (mode
-  `0600`); blank fields keep the previous value;
+- saves only what you submit to the platform credential store
+  (`~/.config/smalltv/credentials.json` on Linux/macOS,
+  `%APPDATA%\smalltv\credentials.json` on Windows; mode `0600`); blank fields
+  keep the previous value;
 - never displays saved secrets back and never writes them to the daemon log;
 - has a **Test** button for each provider, which does not push to the device.
 
@@ -459,7 +466,7 @@ A metric can carry a `pct` (0-100), a `value` (for example `110 CNY` or
 `1.2M`), or both. The dashboard's usage cards show the value; `pct > 0` adds a
 fill bar.
 
-### 7.7 Optional: run them at login
+### 7.7 Optional: run them at login (Linux)
 
 Create user units. Adjust `%h/Projects/smalltv-mod-custom` if your checkout is
 elsewhere.
@@ -504,6 +511,18 @@ systemctl --user daemon-reload
 systemctl --user enable --now smalltv-deepseek-proxy.service smalltv-usage.service
 journalctl --user -u smalltv-usage -f
 ```
+
+### Windows login task
+
+From the repository root:
+
+```bat
+daemon\install_windows.bat -DeviceUrl http://192.168.1.50
+```
+
+This creates the `SmallTVUsage` Task Scheduler job, running `pythonw.exe` at
+login. Remove it with `daemon\install_windows.bat -Uninstall`. Run
+`daemon\setup_windows.bat` to open the credential setup page.
 
 ## 8. Notifications over the webhook
 
@@ -755,9 +774,9 @@ case/                 3D-printed case
   internet.
 - The settings export contains WiFi passwords, the editor token and other
   secrets.
-- Claude/Codex/DeepSeek credentials stay on the daemon host in
-  `~/.config/smalltv/credentials.json` (mode 0600). The setup UI never reads
-  local auth files or environment variables; the daemon sends only usage
+- Claude/Codex/DeepSeek credentials stay on the daemon host in the platform
+  credential store (0600 on Unix, `%APPDATA%` on Windows). The setup UI never
+  reads local auth files or environment variables; the daemon sends only usage
   numbers to the device.
 - The setup UI binds `127.0.0.1` and requires a generated setup token. If you
   bind it beyond localhost, treat the token like a password.
