@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""CI gates for smalltv-mod. Python stdlib only.
+"""Local release gates for smalltv-mod. Python stdlib only.
 
   size    Compare each env's firmware.bin with its OTA app slot and fail when
           the free space drops below a threshold.
   assets  Check that every UPDATE_ASSET string in src/config.h is a file name
-          that the workflow stages into dist/.
+          that tools/build_release.py stages into dist/.
 
 Run from the repo root:
 
@@ -149,18 +149,18 @@ def cmd_size(args):
 def cmd_assets(args):
     with open(args.config_h, encoding="utf-8") as f:
         wanted = re.findall(r'#\s*define\s+UPDATE_ASSET\s+"([^"]+)"', f.read())
-    with open(args.workflow, encoding="utf-8") as f:
-        staged = set(re.findall(r"^\s*copy\s+\S+\s+dist/(\S+)\s*$", f.read(), re.M))
-    # The release builder stages from its ASSETS table; take the release names
-    # from there too, so a workflow that delegates to the script is covered.
+    staged = set()
+    if args.workflow and os.path.exists(args.workflow):
+        with open(args.workflow, encoding="utf-8") as f:
+            staged = set(re.findall(r"^\s*copy\s+\S+\s+dist/(\S+)\s*$", f.read(), re.M))
+    # The release builder stages from its ASSETS table.
     with open(args.script, encoding="utf-8") as f:
         staged |= set(re.findall(r'"(smalltv-mod-[^"]+\.bin)"', f.read()))
     if not wanted:
         print("::error::asset check: no UPDATE_ASSET found in %s" % args.config_h)
         return 1
     if not staged:
-        print("::error::asset check: no dist/ asset names found in %s or %s"
-              % (args.workflow, args.script))
+        print("::error::asset check: no dist/ asset names found in %s" % args.script)
         return 1
     bad = False
     for a in wanted:
@@ -169,11 +169,9 @@ def cmd_assets(args):
         if not ok:
             bad = True
             print("::error::asset check: UPDATE_ASSET \"%s\" in %s is not staged "
-                  "into dist/ by %s or %s (staged: %s). A device on that variant "
-                  "would find no matching release asset and could never "
-                  "self-update."
-                  % (a, args.config_h, args.workflow, args.script,
-                     ", ".join(sorted(staged))))
+                  "into dist/ by %s (staged: %s). A device on that variant would "
+                  "find no matching release asset and could never self-update."
+                  % (a, args.config_h, args.script, ", ".join(sorted(staged))))
     return 1 if bad else 0
 
 
@@ -193,7 +191,8 @@ def main():
 
     a = sub.add_parser("assets", help="UPDATE_ASSET names vs dist/ staging")
     a.add_argument("--config-h", default="src/config.h")
-    a.add_argument("--workflow", default=".github/workflows/build.yml")
+    a.add_argument("--workflow", default=None,
+                   help="optional legacy workflow file to inspect as well")
     a.add_argument("--script", default="tools/build_release.py")
     a.set_defaults(fn=cmd_assets)
 

@@ -223,8 +223,15 @@ external visual editor or paste JSON into the device's **View** tab.
 
 ### Option A: visual editor on GitHub Pages
 
-The repository's `.github/workflows/editor.yml` deploys `editor/` to GitHub
-Pages when `main` changes. The URL is:
+Publish the editor from this PC:
+
+```sh
+tools/deploy_pages.sh
+```
+
+It copies `editor/` to the `gh-pages` branch, force-pushes that branch, and
+configures GitHub Pages to deploy from it. Run it again after editor changes.
+The URL is:
 
 ```text
 https://jphultra.github.io/smalltv-mod-custom/
@@ -595,26 +602,43 @@ UI shows the same data.
 ## 10. Updates and releases
 
 The device self-update is pointed at `JPHultra/smalltv-mod-custom` in
-`src/config.h`. To publish a release:
+`src/config.h`. Releases are built and published from this PC; there are no
+GitHub Actions.
 
-1. Merge the work into `main` (the workflows run on `main`/tags, not `rework`).
-2. Tag a version newer than `FW_VERSION` in `src/config.h` (currently `4.0.0`):
+1. Edit `FW_VERSION` in `src/config.h` (currently `4.0.0`) to the new version.
+2. Build all targets and stage the assets:
 
 ```sh
-git checkout main
-git merge rework
+python3 tools/build_release.py --pio /path/to/pio --jobs 8
+python3 tools/ci_checks.py assets
+```
+
+3. Commit the version change and tag it, for example `v4.0.1`:
+
+```sh
+git add src/config.h
+git commit -m "Bump FW_VERSION to 4.0.1"
 git push origin main
 git tag v4.0.1
 git push origin v4.0.1
 ```
 
-The `build` workflow builds all targets, stages the ten assets, checks the 8 KB
-slots, and attaches them to the release. The `editor` workflow deploys the
-editor to GitHub Pages.
+4. Attach the ten `dist/` assets to the tag:
 
-On the device, **System -> Update from GitHub** checks the latest release and
-downloads the asset matching its variant. Manual OTA uses the non-factory app
-image from `dist/` or the release page.
+```sh
+gh release create v4.0.1 dist/* --title "v4.0.1" --notes "Release notes"
+```
+
+5. If the editor changed, publish it separately:
+
+```sh
+tools/deploy_pages.sh
+```
+
+The firmware's `UPDATE_ASSET` names must match the release assets; do not rename
+the files in `dist/`. On the device, **System -> Update from GitHub** checks the
+latest release and downloads the asset matching its variant. Manual OTA uses the
+non-factory app image from `dist/` or the release page.
 
 If the repo moves, update:
 
@@ -728,6 +752,7 @@ tools/
   build_release.py    grouped release builder
   gzip_webui.py       web UI generator
   ci_checks.py        asset and size gates
+  deploy_pages.sh     manual editor publishing to gh-pages
 editor/               static visual dashboard editor
 daemon/
   usage_daemon.py     Claude/Codex/DeepSeek aggregator
@@ -739,7 +764,6 @@ daemon/
 examples/view.json    sample dashboard
 partitions/           ESP32 partition layouts
 case/                 3D-printed case
-.github/workflows/    firmware release + editor Pages deployment
 ```
 
 ## 15. Security notes

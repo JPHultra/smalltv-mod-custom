@@ -6,7 +6,7 @@ when the MCU or the custom_sdkconfig state changes. Building envs in an
 arbitrary order therefore pays that cost repeatedly. This script orders the
 envs by shared framework state, runs each target, stages the release asset
 immediately (so a later env cannot remove it), and runs the same 8 KB slot gate
-as CI.
+as the local release gate.
 
 Usage:
   python3 tools/build_release.py
