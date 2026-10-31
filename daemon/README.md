@@ -32,25 +32,53 @@ The legacy Claude-only shape is still accepted:
 {"s":29,"sr":142,"w":4,"wr":9876,"st":"normal","ok":true}
 ```
 
-## Aggregate providers
-
-`usage_daemon.py` fetches each provider, maps it to the contract above, and
-pushes all three together. Copy and edit the example, then run it:
+## Configure and run
 
 ```sh
 cp daemon/usage-daemon.example.json daemon/usage-daemon.json
+python3 daemon/setup_ui.py --config daemon/usage-daemon.json
+```
+
+The setup UI prints a local URL and a one-time setup token:
+
+```text
+SmallTV usage setup: http://127.0.0.1:8790/
+Setup token: <generated-on-startup>
+```
+
+Open the URL, enter the token, and paste the Claude, Codex and/or DeepSeek
+credentials. The page:
+
+- never reads `~/.claude`, `~/.codex` or environment variables;
+- accepts pasted credentials JSON from any machine, or individual fields;
+- saves to `~/.config/smalltv/credentials.json` with mode `0600`;
+- never displays saved secrets back, logs them, or puts them in `/api/status`;
+- has a **Test** button for each provider (the test does not push to the device).
+
+Use Save for a provider after filling its fields. A blank field keeps the
+previous value; Clear removes all credentials for that provider. Change the
+store with `--credentials PATH` or the config's `credentialsFile`.
+
+Run the daemon after setup:
+
+```sh
 python3 daemon/usage_daemon.py --config daemon/usage-daemon.json
 ```
 
-`daemon/usage-daemon.json` is ignored by git because it may contain API keys or
-local URLs. Use `--once` for one cycle and `--dry-run` to print the normalized
-document without pushing.
+`daemon/usage-daemon.json` is git-ignored because it may contain local URLs. Use
+`--once` for one cycle and `--dry-run` to print the normalized document without
+pushing. The daemon re-reads the credentials store each cycle, so saving in the
+setup UI takes effect without restarting it.
+
+The setup UI is localhost-only by default. `--bind 0.0.0.0` is available for a
+daemon in a VM/container, but then anyone who can reach the port and knows the
+setup token can update credentials.
 
 | Adapter | Source |
 |---|---|
-| `claude` | the Claude Code OAuth usage endpoint, using `~/.claude/.credentials.json` or `CLAUDE_CODE_OAUTH_TOKEN` |
+| `claude` | Claude Code's OAuth usage endpoint, using setup-UI credentials |
 | `claude-legacy` | the old `{s,sr,w,wr,st,ok}` payload from a local clawdmeter |
-| `codex` | the ChatGPT/Codex subscription usage endpoint, using `~/.codex/auth.json` |
+| `codex` | the ChatGPT/Codex subscription usage endpoint, using setup-UI credentials |
 | `deepseek` | the DeepSeek balance API, plus optional token usage from a local proxy |
 | `generic` | any JSON object, with dotted `statusPath`, `pctPath`, `resetPath`, `valuePath` |
 | `normalized` | a provider object already shaped like the contract |
@@ -60,54 +88,57 @@ keeps the previous values and shows the error state.
 
 ## Native Claude
 
-The `claude` adapter reads the Claude Code OAuth credentials that the CLI stores
-in `~/.claude/.credentials.json`, calls the OAuth usage endpoint, and maps the
-five-hour and weekly limits. It can also read the token from
-`CLAUDE_CODE_OAUTH_TOKEN`:
+The `claude` adapter calls the Claude Code OAuth usage endpoint and maps the
+five-hour and weekly limits. Enter the credentials in the setup UI. You can
+paste the JSON from a machine where Claude Code is logged in, for example:
 
 ```json
-{"id":"claude","name":"Claude","adapter":"claude","authFile":"~/.claude/.credentials.json"}
+{"claudeAiOauth":{"accessToken":"...","refreshToken":"...","expiresAt":0}}
 ```
 
-Run `claude setup-token` once if the credentials file has no usable access
-token, or export `CLAUDE_CODE_OAUTH_TOKEN`. If the access token has expired the
-daemon refreshes it with the stored refresh token and writes the new credentials
-back (mode 0600). The tokens are never sent to the device. The same refresh lock
-is shared with the Codex adapter so two daemon cycles cannot race.
+The JSON is parsed in your browser when you press **Fill from JSON**; it is only
+sent to the daemon when you press **Save**. The refresh token is used to renew
+an expired access token. The public Claude Code OAuth client id is built in and
+can be overridden in the Client id field.
 
-Run `python3 daemon/usage_daemon.py --config daemon/usage-daemon.json --once
---dry-run` to verify the normalized output without pushing.
+If you only have a long-lived `claude setup-token` value, paste it as the access
+token. No `claude` installation is required on the daemon host.
+
+`authFile` and `tokenEnv` remain explicit legacy fallbacks for an existing
+config; neither is used implicitly, and the setup UI never reads them.
 
 ## Codex / ChatGPT subscription
 
-The `codex` adapter reads the ChatGPT tokens that the Codex CLI already stores
-in `~/.codex/auth.json`, calls
-`https://chatgpt.com/backend-api/wham/usage`, and maps the 5-hour and weekly
-windows. The plan name is included by default as a `plan` metric. If the access
-token has expired it uses the stored refresh token against
-`https://auth.openai.com/oauth/token`, then writes the refreshed tokens back to
-the auth file (mode 0600). The email, account id and tokens are never sent to
-the device.
+The `codex` adapter calls `https://chatgpt.com/backend-api/wham/usage` and maps
+the 5-hour and weekly windows. The plan name is included by default as a `plan`
+metric. The setup UI accepts pasted Codex auth JSON or individual fields:
 
 ```json
-{"id":"chatgpt","name":"Codex","adapter":"codex","authFile":"~/.codex/auth.json",
+{"tokens":{"access_token":"...","refresh_token":"...","account_id":"..."}}
+```
+
+The JSON is parsed in the browser; only saved fields go to the daemon. An
+expired access token is renewed with the refresh token and account id. The
+public Codex OAuth client id is built in and can be overridden.
+
+```json
+{"id":"chatgpt","name":"Codex","adapter":"codex",
  "includePlan":true,"includeCredits":false,"includeAdditional":false}
 ```
 
 `includeCredits` adds the credits balance when the endpoint reports one, and
 `includeAdditional` adds any other rate-limit windows. The device shows at most
 five metrics per provider (`USAGE_MAX_METRICS`); the mapper caps the list at
-five. Run Codex at least once so the auth file exists. If Codex rotates the
-token while the daemon runs, the daemon re-reads the file before refreshing and
-uses the newer token.
+five. The explicit `authFile` config remains an optional legacy fallback; it is
+not used by default.
 
 ## DeepSeek
 
-The `deepseek` adapter reads an API key from `DEEPSEEK_API_KEY` (or
-`apiKeyEnv`/`apiKeyFile`) and fetches the official balance:
+Enter the DeepSeek API key in the setup UI. The `deepseek` adapter uses it for
+the official balance request:
 
 ```json
-{"id":"deepseek","name":"DeepSeek","adapter":"deepseek","apiKeyEnv":"DEEPSEEK_API_KEY"}
+{"id":"deepseek","name":"DeepSeek","adapter":"deepseek"}
 ```
 
 DeepSeek's public API returns balance but no aggregate token usage. To show token
@@ -124,16 +155,15 @@ The proxy forwards to `https://api.deepseek.com`, adds
 `usage` objects and Anthropic streaming `message_start`/`message_delta` usage,
 and serves `GET /usage` (and `POST /usage/reset`). The token counter persists in
 `~/.local/state/smalltv/deepseek-usage.json`; the API key is forwarded per
-request and is never written there. The `/usage` document includes the running
-total, `date`, `today` and per-day `days` buckets, so the dashboard can show a
-daily number instead of the all-time count.
+request from the DeepSeek client and is never written there. The `/usage`
+document includes the running total, `date`, `today` and per-day `days` buckets,
+so the dashboard can show a daily number instead of the all-time count.
 
 Add the usage source to the DeepSeek provider:
 
 ```json
 {
   "id":"deepseek","name":"DeepSeek","adapter":"deepseek",
-  "apiKeyEnv":"DEEPSEEK_API_KEY",
   "usageUrl":"http://127.0.0.1:8789/usage",
   "usagePath":"today.total_tokens",
   "usageLabel":"tokens today",
@@ -145,6 +175,9 @@ Use `"usagePath":"total_tokens"` if you prefer the all-time counter.
 `usageBudget` is optional: set it to a token budget and the card gets a fill bar;
 leave it at `0` to show the count only. If the proxy is not running, the balance
 still appears and the daemon logs the usage-source error.
+
+The explicit `apiKeyEnv` / `apiKeyFile` config remains an optional legacy
+fallback; the setup UI does not read the environment or those files.
 
 ## Push a JSON file
 

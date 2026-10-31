@@ -7,9 +7,9 @@ reported as {"ok": false}, so the device keeps its previous metrics and shows
 the error state instead of blanking the card.
 
 Adapters:
-  claude         Claude Code's OAuth usage endpoint, using ~/.claude/.credentials.json
+  claude         Claude Code's OAuth usage endpoint, using credentials from the setup UI
   claude-legacy  the old clawdmeter {s,sr,w,wr,st,ok} payload
-  codex          the ChatGPT/Codex subscription usage endpoint, using ~/.codex/auth.json
+  codex          the ChatGPT/Codex subscription usage endpoint, using setup-UI credentials
   deepseek       DeepSeek balance, plus optional token usage from a proxy
   generic        a JSON object plus dotted paths for each metric
   normalized     the provider already returns {id,name,ok,status,metrics}
@@ -27,7 +27,6 @@ Example:
 from __future__ import annotations
 
 import argparse
-import contextlib
 import datetime
 import json
 import math
@@ -37,33 +36,8 @@ import time
 import urllib.error
 import urllib.request
 
-try:
-    import fcntl
-except ImportError:  # Windows: no advisory file lock; atomic replace still applies.
-    fcntl = None
-
-
-@contextlib.contextmanager
-def file_lock(path, timeout=10.0):
-    """Advisory lock for the auth files; the Codex/Claude refresh path is serialized."""
-    if fcntl is None:
-        yield
-        return
-    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
-    try:
-        deadline = time.time() + timeout
-        while True:
-            try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except BlockingIOError:
-                if time.time() >= deadline:
-                    raise TimeoutError("timed out waiting for the auth file lock")
-                time.sleep(0.1)
-        yield
-    finally:
-        fcntl.flock(fd, fcntl.LOCK_UN)
-        os.close(fd)
+from credentials import CredentialsStore
+from fslock import file_lock
 
 
 def path_get(obj, path):
@@ -276,8 +250,25 @@ def map_codex_usage(payload, spec):
     }
 
 
-def read_codex_auth(spec):
-    path = os.path.expanduser(spec.get("authFile", "~/.codex/auth.json"))
+def read_codex_auth(spec, store=None):
+    if store is not None:
+        cred = store.get("codex")
+        access = cred.get("accessToken")
+        account = cred.get("accountId")
+        refresh = cred.get("refreshToken")
+        if account and refresh and not access:
+            access, account = refresh_codex_auth(
+                None, {"tokens": {"refresh_token": refresh}}, spec, 20, store,
+            )
+            return None, {"tokens": {"refresh_token": refresh}}, refresh, access, account
+        if access and account:
+            return None, {"tokens": {"refresh_token": refresh}}, refresh, access, account
+        if access or account or refresh:
+            raise ValueError("Codex credentials are incomplete; open the setup UI")
+    path = spec.get("authFile")
+    if not path:
+        raise ValueError("No Codex credentials; open the setup UI")
+    path = os.path.expanduser(path)
     with open(path, encoding="utf-8") as handle:
         auth = json.load(handle)
     if not isinstance(auth, dict):
@@ -300,9 +291,62 @@ def write_codex_auth(path, auth):
     os.replace(temporary, path)
 
 
-def refresh_codex_auth(path, auth, spec, timeout):
+def refresh_codex_auth(path, auth, spec, timeout, store=None):
+    if store is not None:
+        return _refresh_codex_store(store, auth, spec, timeout)
+    if not path:
+        raise ValueError("No Codex credential file to refresh; open the setup UI")
     with file_lock(path + ".lock"):
         return _refresh_codex_locked(path, auth, spec, timeout)
+
+
+def _request_codex_refresh(refresh, client_id, token_url, user_agent, timeout):
+    body = json.dumps({
+        "grant_type": "refresh_token",
+        "client_id": client_id,
+        "refresh_token": refresh,
+        "refresh_reason": "scheduled",
+    }).encode("utf-8")
+    request = urllib.request.Request(
+        token_url,
+        data=body,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": user_agent,
+        },
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.load(response)
+
+
+def _refresh_codex_store(store, auth, spec, timeout):
+    current = store.get("codex")
+    current_refresh = current.get("refreshToken")
+    original = auth.get("tokens") if isinstance(auth, dict) else {}
+    old_refresh = original.get("refresh_token") if isinstance(original, dict) else None
+    if current.get("accessToken") and current_refresh and current_refresh != old_refresh:
+        return current["accessToken"], current.get("accountId")
+    if not current_refresh:
+        raise ValueError("Codex credentials have no refresh token; open the setup UI")
+    refreshed = _request_codex_refresh(
+        current_refresh,
+        current.get("clientId") or spec.get("clientId", CODEX_CLIENT_ID),
+        current.get("tokenUrl") or spec.get("tokenUrl", CODEX_TOKEN_URL),
+        current.get("userAgent") or spec.get("userAgent", CODEX_USER_AGENT),
+        timeout,
+    )
+    access = refreshed.get("access_token")
+    if not access:
+        raise ValueError("Codex token refresh returned no access token")
+    update = {"accessToken": access}
+    if refreshed.get("refresh_token"):
+        update["refreshToken"] = refreshed["refresh_token"]
+    if refreshed.get("account_id"):
+        update["accountId"] = refreshed["account_id"]
+    store.update("codex", update)
+    return access, update.get("accountId", current.get("accountId"))
 
 
 def _refresh_codex_locked(path, auth, spec, timeout):
@@ -322,24 +366,13 @@ def _refresh_codex_locked(path, auth, spec, timeout):
 
     if not current_refresh:
         raise ValueError("Codex auth has no refresh token")
-    body = json.dumps({
-        "grant_type": "refresh_token",
-        "client_id": spec.get("clientId", CODEX_CLIENT_ID),
-        "refresh_token": current_refresh,
-        "refresh_reason": "scheduled",
-    }).encode("utf-8")
-    request = urllib.request.Request(
+    refreshed = _request_codex_refresh(
+        current_refresh,
+        spec.get("clientId", CODEX_CLIENT_ID),
         spec.get("tokenUrl", CODEX_TOKEN_URL),
-        data=body,
-        method="POST",
-        headers={
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "User-Agent": spec.get("userAgent", CODEX_USER_AGENT),
-        },
+        spec.get("userAgent", CODEX_USER_AGENT),
+        timeout,
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        refreshed = json.load(response)
     access = refreshed.get("access_token")
     if not access:
         raise ValueError("Codex token refresh returned no access token")
@@ -354,8 +387,8 @@ def _refresh_codex_locked(path, auth, spec, timeout):
     return access, tokens.get("account_id")
 
 
-def fetch_codex_usage(spec, timeout):
-    path, auth, refresh, access, account = read_codex_auth(spec)
+def fetch_codex_usage(spec, timeout, store=None):
+    path, auth, refresh, access, account = read_codex_auth(spec, store)
     url = spec.get("url", CODEX_DEFAULT_URL)
     headers = {
         "Authorization": "Bearer " + access,
@@ -371,7 +404,7 @@ def fetch_codex_usage(spec, timeout):
         except urllib.error.HTTPError as error:
             if attempt == 1 and error.code in (401, 403) and refresh:
                 error.close()
-                access, account = refresh_codex_auth(path, auth, spec, timeout)
+                access, account = refresh_codex_auth(path, auth, spec, timeout, store)
                 headers["Authorization"] = "Bearer " + access
                 headers["chatgpt-account-id"] = account
                 continue
@@ -380,14 +413,13 @@ def fetch_codex_usage(spec, timeout):
     raise ValueError("Codex usage request failed")
 
 
-def collect_codex(spec, timeout):
-    return map_codex_usage(fetch_codex_usage(spec, timeout), spec)
+def collect_codex(spec, timeout, store=None):
+    return map_codex_usage(fetch_codex_usage(spec, timeout, store), spec)
 
 
 # ---------------------------------------------------------------------------
 # Claude Code subscription usage
 # ---------------------------------------------------------------------------
-CLAUDE_DEFAULT_CREDENTIALS = "~/.claude/.credentials.json"
 CLAUDE_DEFAULT_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 CLAUDE_DEFAULT_TOKEN_URL = "https://platform.claude.com/v1/oauth/token"
 CLAUDE_OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
@@ -415,10 +447,69 @@ def write_claude_credentials(path, credentials):
     os.replace(temporary, path)
 
 
-def refresh_claude_token(path, credentials, oauth, spec, timeout):
-    refresh = oauth.get("refreshToken")
-    if not refresh:
-        raise ValueError("Claude token expired and has no refresh token; run `claude setup-token`")
+def _request_claude_refresh(refresh, client_id, token_url, user_agent, timeout):
+    body = json.dumps({
+        "grant_type": "refresh_token",
+        "client_id": client_id,
+        "refresh_token": refresh,
+    }).encode("utf-8")
+    request = urllib.request.Request(
+        token_url,
+        data=body,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": user_agent,
+        },
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.load(response)
+
+
+def _claude_expires_at(refreshed):
+    if "expires_in" in refreshed:
+        try:
+            return int((time.time() + float(refreshed["expires_in"])) * 1000)
+        except (TypeError, ValueError, OverflowError):
+            return None
+    if "expires_at" in refreshed:
+        try:
+            return int(float(refreshed["expires_at"]) * 1000)
+        except (TypeError, ValueError, OverflowError):
+            return None
+    return None
+
+
+def refresh_claude_token(path, credentials, oauth, spec, timeout, store=None):
+    if store is not None:
+        current = store.get("claude")
+        if current.get("accessToken") and current.get("accessToken") != oauth.get("accessToken"):
+            return current["accessToken"]
+        refresh = current.get("refreshToken") or oauth.get("refreshToken")
+        if not refresh:
+            raise ValueError("Claude token expired and has no refresh token; re-enter it in the setup UI")
+        refreshed = _request_claude_refresh(
+            refresh,
+            current.get("clientId") or spec.get("clientId", CLAUDE_OAUTH_CLIENT_ID),
+            current.get("tokenUrl") or spec.get("tokenUrl", CLAUDE_DEFAULT_TOKEN_URL),
+            current.get("userAgent") or spec.get("userAgent", CLAUDE_USER_AGENT),
+            timeout,
+        )
+        access = refreshed.get("access_token")
+        if not access:
+            raise ValueError("Claude token refresh returned no access token")
+        update = {"accessToken": access}
+        if refreshed.get("refresh_token"):
+            update["refreshToken"] = refreshed["refresh_token"]
+        expires = _claude_expires_at(refreshed)
+        if expires is not None:
+            update["expiresAt"] = expires
+        store.update("claude", update)
+        return access
+
+    if not path:
+        raise ValueError("No Claude credential file to refresh; open the setup UI")
     with file_lock(path + ".lock"):
         try:
             with open(path, encoding="utf-8") as handle:
@@ -432,44 +523,54 @@ def refresh_claude_token(path, credentials, oauth, spec, timeout):
             current_oauth = {}
         if current_oauth.get("accessToken") and current_oauth.get("accessToken") != oauth.get("accessToken"):
             return current_oauth["accessToken"]
-
-        body = json.dumps({
-            "grant_type": "refresh_token",
-            "client_id": spec.get("clientId", CLAUDE_OAUTH_CLIENT_ID),
-            "refresh_token": refresh,
-        }).encode("utf-8")
-        request = urllib.request.Request(
+        refresh = current_oauth.get("refreshToken") or oauth.get("refreshToken")
+        if not refresh:
+            raise ValueError("Claude token expired and has no refresh token; re-enter it in the setup UI")
+        refreshed = _request_claude_refresh(
+            refresh,
+            spec.get("clientId", CLAUDE_OAUTH_CLIENT_ID),
             spec.get("tokenUrl", CLAUDE_DEFAULT_TOKEN_URL),
-            data=body,
-            method="POST",
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-                "User-Agent": spec.get("userAgent", CLAUDE_USER_AGENT),
-            },
+            spec.get("userAgent", CLAUDE_USER_AGENT),
+            timeout,
         )
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            refreshed = json.load(response)
         access = refreshed.get("access_token")
         if not access:
             raise ValueError("Claude token refresh returned no access token")
         current_oauth["accessToken"] = access
         if refreshed.get("refresh_token"):
             current_oauth["refreshToken"] = refreshed["refresh_token"]
-        if "expires_in" in refreshed:
-            current_oauth["expiresAt"] = int((time.time() + float(refreshed["expires_in"])) * 1000)
-        elif "expires_at" in refreshed:
-            current_oauth["expiresAt"] = int(float(refreshed["expires_at"]) * 1000)
+        expires = _claude_expires_at(refreshed)
+        if expires is not None:
+            current_oauth["expiresAt"] = expires
         current["claudeAiOauth"] = current_oauth
         write_claude_credentials(path, current)
         return access
 
 
-def read_claude_token(spec):
-    path = os.path.expanduser(spec.get("authFile", CLAUDE_DEFAULT_CREDENTIALS))
-    env_name = spec.get("tokenEnv", "CLAUDE_CODE_OAUTH_TOKEN")
-    if os.environ.get(env_name):
-        return path, None, os.environ[env_name].strip()
+def read_claude_token(spec, store=None):
+    if store is not None:
+        cred = store.get("claude")
+        access = cred.get("accessToken")
+        refresh = cred.get("refreshToken")
+        if access:
+            expires = cred.get("expiresAt")
+            if isinstance(expires, (int, float)) and time.time() >= (expires / 1000.0 - CLAUDE_REFRESH_MARGIN):
+                if not refresh:
+                    raise ValueError("Claude token expired and has no refresh token; re-enter it in the setup UI")
+                access = refresh_claude_token(None, None, cred, spec, 20, store)
+            return None, None, access
+        if refresh:
+            return None, None, refresh_claude_token(None, None, cred, spec, 20, store)
+        if cred:
+            raise ValueError("Claude credentials are incomplete; open the setup UI")
+
+    env_name = spec.get("tokenEnv")
+    if env_name and os.environ.get(env_name):
+        return None, None, os.environ[env_name].strip()
+    path = spec.get("authFile")
+    if not path:
+        raise ValueError("No Claude credentials; open the setup UI")
+    path = os.path.expanduser(path)
     with open(path, encoding="utf-8") as handle:
         credentials = json.load(handle)
     if not isinstance(credentials, dict):
@@ -479,7 +580,7 @@ def read_claude_token(spec):
         oauth = {}
     access = oauth.get("accessToken")
     if not access:
-        raise ValueError("Claude credentials have no access token; run `claude setup-token` or set CLAUDE_CODE_OAUTH_TOKEN")
+        raise ValueError("Claude credentials have no access token; re-enter it in the setup UI")
     expires = oauth.get("expiresAt")
     if isinstance(expires, (int, float)) and time.time() >= (expires / 1000.0 - CLAUDE_REFRESH_MARGIN):
         access = refresh_claude_token(path, credentials, oauth, spec, 20)
@@ -515,8 +616,8 @@ def map_claude_usage(payload, spec):
     }
 
 
-def fetch_claude_usage(spec, timeout):
-    path, credentials, token = read_claude_token(spec)
+def fetch_claude_usage(spec, timeout, store=None):
+    path, credentials, token = read_claude_token(spec, store)
     url = spec.get("url", CLAUDE_DEFAULT_USAGE_URL)
     headers = {
         "Authorization": "Bearer " + token,
@@ -531,10 +632,13 @@ def fetch_claude_usage(spec, timeout):
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 return json.load(response)
         except urllib.error.HTTPError as error:
-            oauth = (credentials or {}).get("claudeAiOauth") or {}
+            if store is not None:
+                oauth = store.get("claude")
+            else:
+                oauth = (credentials or {}).get("claudeAiOauth") or {}
             if attempt == 1 and error.code in (401, 403) and oauth.get("refreshToken"):
                 error.close()
-                token = refresh_claude_token(path, credentials, oauth, spec, timeout)
+                token = refresh_claude_token(path, credentials, oauth, spec, timeout, store)
                 headers["Authorization"] = "Bearer " + token
                 continue
             error.close()
@@ -542,8 +646,8 @@ def fetch_claude_usage(spec, timeout):
     raise ValueError("Claude usage request failed")
 
 
-def collect_claude(spec, timeout):
-    return map_claude_usage(fetch_claude_usage(spec, timeout), spec)
+def collect_claude(spec, timeout, store=None):
+    return map_claude_usage(fetch_claude_usage(spec, timeout, store), spec)
 
 
 # ---------------------------------------------------------------------------
@@ -552,23 +656,27 @@ def collect_claude(spec, timeout):
 DEEPSEEK_BALANCE_URL = "https://api.deepseek.com/user/balance"
 
 
-def deepseek_key(spec):
+def deepseek_key(spec, store=None):
+    if store is not None:
+        key = store.get("deepseek").get("apiKey")
+        if key:
+            return key
     if spec.get("apiKey"):
         return str(spec["apiKey"]).strip()
-    env_name = spec.get("apiKeyEnv", "DEEPSEEK_API_KEY")
-    if os.environ.get(env_name):
+    env_name = spec.get("apiKeyEnv")
+    if env_name and os.environ.get(env_name):
         return os.environ[env_name].strip()
     if spec.get("apiKeyFile"):
         with open(os.path.expanduser(spec["apiKeyFile"]), encoding="utf-8") as handle:
             return handle.read().strip()
-    raise ValueError(f"no DeepSeek API key (set {env_name}, apiKeyFile or apiKey)")
+    raise ValueError("no DeepSeek API key; open the setup UI")
 
 
-def fetch_deepseek_balance(spec, timeout):
+def fetch_deepseek_balance(spec, timeout, store=None):
     request = urllib.request.Request(
         spec.get("url", DEEPSEEK_BALANCE_URL),
         headers={
-            "Authorization": "Bearer " + deepseek_key(spec),
+            "Authorization": "Bearer " + deepseek_key(spec, store),
             "Accept": "application/json",
             "User-Agent": "smalltv-usage-daemon",
         },
@@ -611,8 +719,8 @@ def map_deepseek_balance(payload, spec, usage_source=None):
     }
 
 
-def collect_deepseek(spec, timeout):
-    payload = fetch_deepseek_balance(spec, timeout)
+def collect_deepseek(spec, timeout, store=None):
+    payload = fetch_deepseek_balance(spec, timeout, store)
     usage_source = None
     if spec.get("usageUrl"):
         try:
@@ -638,25 +746,25 @@ def fetch_json(url, timeout, headers=None):
         return json.load(response)
 
 
-def collect(spec, timeout):
+def collect(spec, timeout, store=None):
     adapter = spec.get("adapter", "generic")
     if adapter == "claude":
-        return collect_claude(spec, timeout)
+        return collect_claude(spec, timeout, store)
     if adapter == "codex":
-        return collect_codex(spec, timeout)
+        return collect_codex(spec, timeout, store)
     if adapter == "deepseek":
-        return collect_deepseek(spec, timeout)
+        return collect_deepseek(spec, timeout, store)
     function = ADAPTERS.get(adapter)
     if function is None:
         raise ValueError(f"unknown adapter {adapter}")
     return function(fetch_json(spec["url"], timeout, spec.get("headers")), spec)
 
 
-def build_payload(config, timeout):
+def build_payload(config, timeout, store=None):
     providers = []
     for spec in config["providers"]:
         try:
-            providers.append(collect(spec, timeout))
+            providers.append(collect(spec, timeout, store))
         except urllib.error.HTTPError as error:
             error.close()
             print(f"{spec.get('id', '?')}: {error}", file=sys.stderr)
@@ -697,14 +805,8 @@ def validate(config):
             metrics = spec.get("metrics")
             if not isinstance(metrics, list) or not metrics:
                 raise ValueError(f"{spec['id']}: generic providers need metrics")
-        if adapter == "deepseek":
-            # The key is checked from the environment/file at collect time.
-            if not (spec.get("apiKey") or spec.get("apiKeyEnv") or spec.get("apiKeyFile")):
-                spec["apiKeyEnv"] = "DEEPSEEK_API_KEY"
-        if adapter == "codex":
-            spec.setdefault("authFile", "~/.codex/auth.json")
-        if adapter == "claude":
-            spec.setdefault("authFile", CLAUDE_DEFAULT_CREDENTIALS)
+        # Credentials come from the setup UI by default. authFile/tokenEnv/apiKeyEnv
+        # remain explicit legacy fallbacks; no implicit home-directory paths.
 
 
 def main():
@@ -715,12 +817,14 @@ def main():
     parser.add_argument("--timeout", type=float, help="override HTTP timeout in seconds")
     parser.add_argument("--once", action="store_true", help="push once and exit")
     parser.add_argument("--dry-run", action="store_true", help="print the document and exit")
+    parser.add_argument("--credentials", help="override the credentials JSON path")
     args = parser.parse_args()
 
     try:
         with open(args.config, encoding="utf-8") as handle:
             config = json.load(handle)
         validate(config)
+        store = CredentialsStore(args.credentials or config.get("credentialsFile"))
         device = (args.device or config.get("device") or "").strip()
         if not device:
             raise ValueError("no device URL in the config or --device")
@@ -730,11 +834,11 @@ def main():
         parser.exit(1, f"usage daemon: {error}\n")
 
     if args.dry_run:
-        print(json.dumps(build_payload(config, timeout), indent=2))
+        print(json.dumps(build_payload(config, timeout, store), indent=2))
         return 0
 
     while True:
-        document = build_payload(config, timeout)
+        document = build_payload(config, timeout, store)
         try:
             reply = push(device, document, timeout)
             print(f"{time.strftime('%H:%M:%S')} pushed: {reply}")

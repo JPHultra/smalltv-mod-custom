@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SmallTV usage setup</title>
+<style>
+:root{--bg:#0e1116;--card:#171c24;--mut:#8b96a5;--fg:#e6edf3;--acc:#3fb950;--acc2:#2f81f7;--red:#f85149;--bd:#262d38}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--fg);font-size:14px}
+header{padding:16px 20px;border-bottom:1px solid var(--bd);display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+header h1{font-size:18px;margin:0}
+header .hint{flex:1;min-width:220px}
+main{max-width:860px;margin:0 auto;padding:18px;display:grid;gap:16px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:16px}
+.card h2{font-size:14px;margin:0 0 10px;display:flex;align-items:center;gap:10px}
+.badge{font-size:11px;padding:3px 8px;border-radius:999px;background:#222b36;color:var(--mut);font-weight:600}
+.badge.on{background:#12351f;color:#6ee7a0}
+.badge.off{background:#2a1a1a;color:#ff9c9c}
+label{display:block;margin:9px 0 4px;font-size:12px;color:var(--mut)}
+input,textarea{width:100%;padding:8px 9px;background:#0b0e13;border:1px solid var(--bd);border-radius:8px;color:var(--fg);font-size:14px}
+textarea{min-height:70px;font-family:ui-monospace,Menlo,monospace;font-size:12px}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+button{font:inherit;background:var(--acc);color:#04130a;border:0;padding:8px 12px;border-radius:8px;font-weight:650;cursor:pointer}
+button.sec{background:#222b36;color:var(--fg)}
+button.danger{background:var(--red);color:#1a0606}
+button:disabled{opacity:.55;cursor:default}
+.hint{color:var(--mut);font-size:12px;line-height:1.45}
+.result{margin-top:10px;font-size:12px;color:var(--mut);white-space:pre-wrap;line-height:1.5}
+.gate{max-width:520px;margin:40px auto;padding:18px;background:var(--card);border:1px solid var(--bd);border-radius:12px}
+.toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#0b0e13;border:1px solid var(--bd);padding:10px 16px;border-radius:10px;opacity:0;transition:.2s;pointer-events:none}
+.toast.show{opacity:1}
+code{font-family:ui-monospace,Menlo,monospace;font-size:12px}
+</style>
+</head>
+<body>
+<header>
+ <h1>SmallTV usage setup</h1>
+ <div class="hint">Credentials stay on this daemon host. This page never reads <code>~/.claude</code>, <code>~/.codex</code> or environment variables.</div>
+</header>
+
+<div id="gate" class="gate" hidden>
+ <h2>Setup token</h2>
+ <p class="hint">Paste the setup token printed by <code>setup_ui.py</code>.</p>
+ <div id="gateMsg" class="hint"></div>
+ <input id="gateToken" type="password" autocomplete="off" placeholder="setup token">
+ <div class="row"><button onclick="useToken()">Open setup</button></div>
+</div>
+
+<main id="app" hidden>
+ <div class="card">
+  <div class="hint" id="storeInfo">Loading...</div>
+ </div>
+
+ <section class="card" data-provider="claude">
+  <h2>Claude Code <span id="claude_badge" class="badge off">not set</span></h2>
+  <p class="hint">Paste a Claude Code credentials JSON from any machine, or enter the OAuth fields manually. The JSON is only parsed in this browser; saving sends the selected fields to the daemon.</p>
+  <label>Paste credentials JSON</label>
+  <textarea id="claude_json" placeholder='{"claudeAiOauth":{"accessToken":"...","refreshToken":"...","expiresAt":0}}'></textarea>
+  <div class="row"><button class="sec" type="button" onclick="parsePaste('claude')">Fill from JSON</button></div>
+  <label>Access token</label><input id="claude_accessToken" type="password" autocomplete="off" placeholder="(unchanged)">
+  <label>Refresh token</label><input id="claude_refreshToken" type="password" autocomplete="off" placeholder="(unchanged)">
+  <label>Expiry (epoch milliseconds, optional)</label><input id="claude_expiresAt" type="number" min="0" placeholder="(unchanged)">
+  <label>Client id (optional; public app id)</label><input id="claude_clientId" type="text" autocomplete="off" placeholder="default Claude Code client">
+  <label>Token URL (optional)</label><input id="claude_tokenUrl" type="url" autocomplete="off" placeholder="default Claude token endpoint">
+  <label>User agent (optional)</label><input id="claude_userAgent" type="text" autocomplete="off" placeholder="default Claude Code user agent">
+  <div class="row">
+   <button type="button" onclick="saveProvider('claude')">Save</button>
+   <button class="sec" type="button" onclick="testProvider('claude')">Test</button>
+   <button class="danger" type="button" onclick="clearProvider('claude')">Clear</button>
+  </div>
+  <div id="claude_result" class="result"></div>
+ </section>
+
+ <section class="card" data-provider="codex">
+  <h2>Codex / ChatGPT <span id="codex_badge" class="badge off">not set</span></h2>
+  <p class="hint">Paste the Codex auth JSON from any machine, or enter the tokens and account id manually. The JSON is only parsed in this browser.</p>
+  <label>Paste auth JSON</label>
+  <textarea id="codex_json" placeholder='{"tokens":{"access_token":"...","refresh_token":"...","account_id":"..."}}'></textarea>
+  <div class="row"><button class="sec" type="button" onclick="parsePaste('codex')">Fill from JSON</button></div>
+  <label>Access token</label><input id="codex_accessToken" type="password" autocomplete="off" placeholder="(unchanged)">
+  <label>Refresh token</label><input id="codex_refreshToken" type="password" autocomplete="off" placeholder="(unchanged)">
+  <label>Account id</label><input id="codex_accountId" type="password" autocomplete="off" placeholder="(unchanged)">
+  <label>Client id (optional; public app id)</label><input id="codex_clientId" type="text" autocomplete="off" placeholder="default Codex client">
+  <label>Token URL (optional)</label><input id="codex_tokenUrl" type="url" autocomplete="off" placeholder="default Codex token endpoint">
+  <label>User agent (optional)</label><input id="codex_userAgent" type="text" autocomplete="off" placeholder="default Codex user agent">
+  <div class="row">
+   <button type="button" onclick="saveProvider('codex')">Save</button>
+   <button class="sec" type="button" onclick="testProvider('codex')">Test</button>
+   <button class="danger" type="button" onclick="clearProvider('codex')">Clear</button>
+  </div>
+  <div id="codex_result" class="result"></div>
+ </section>
+
+ <section class="card" data-provider="deepseek">
+  <h2>DeepSeek <span id="deepseek_badge" class="badge off">not set</span></h2>
+  <p class="hint">The API key is used for the balance request. Token-per-request usage still needs the local DeepSeek proxy configured in the daemon JSON.</p>
+  <label>API key</label><input id="deepseek_apiKey" type="password" autocomplete="off" placeholder="(unchanged)">
+  <div class="row">
+   <button type="button" onclick="saveProvider('deepseek')">Save</button>
+   <button class="sec" type="button" onclick="testProvider('deepseek')">Test</button>
+   <button class="danger" type="button" onclick="clearProvider('deepseek')">Clear</button>
+  </div>
+  <div id="deepseek_result" class="result"></div>
+ </section>
+</main>
+
+<div id="toast" class="toast"></div>
+<script>
+const FIELDS={
+ claude:['accessToken','refreshToken','expiresAt','clientId','tokenUrl','userAgent'],
+ codex:['accessToken','refreshToken','accountId','clientId','tokenUrl','userAgent'],
+ deepseek:['apiKey']
+};
+let setupToken=new URLSearchParams(location.search).get('token')||sessionStorage.getItem('smalltv-setup-token')||'';
+if(setupToken){sessionStorage.setItem('smalltv-setup-token',setupToken);history.replaceState(null,'',location.pathname)}
+function $(id){return document.getElementById(id)}
+function toast(m){const t=$('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2200)}
+function useToken(){const value=$('gateToken').value.trim();if(!value)return toast('Enter the setup token');setupToken=value;sessionStorage.setItem('smalltv-setup-token',value);$('gate').hidden=true;loadStatus()}
+function showGate(message){$('gate').hidden=false;$('app').hidden=true;$('gateMsg').textContent=message||''}
+async function api(path,options={}){
+ const response=await fetch(path,{...options,headers:{'Content-Type':'application/json','X-Setup-Token':setupToken,...(options.headers||{})}});
+ const text=await response.text();let data={};try{data=JSON.parse(text)}catch(e){}
+ if(!response.ok)throw new Error(data.error||text||('HTTP '+response.status));
+ return data;
+}
+function mark(provider,state){const badge=$(provider+'_badge');if(!badge)return;badge.className='badge '+(state?'on':'off');badge.textContent=state?'set':'not set'}
+async function loadStatus(){
+ if(!setupToken){showGate();return}
+ try{
+  const data=await api('/api/status');$('gate').hidden=true;$('app').hidden=false;
+  for(const [provider,info] of Object.entries(data.providers||{}))mark(provider,info.configured);
+  $('storeInfo').textContent='Credentials file: '+data.credentialsPath+' (mode 0600). Values are never echoed back.';
+ }catch(error){showGate('Could not open setup: '+error.message)}
+}
+function value(id){return ($(id)&&$(id).value||'').trim()}
+function fieldsFor(provider){const out={};for(const field of FIELDS[provider]){const v=value(provider+'_'+field);if(v)out[field]=v}return out}
+function fill(provider,values){for(const field of FIELDS[provider]){const v=values[field];if(v!==undefined&&v!==null&&String(v).trim()!=='')$(provider+'_'+field).value=String(v).trim()}}
+function parsePaste(provider){
+ try{
+  const raw=JSON.parse($(provider+'_json').value);
+  if(provider==='claude'){
+   const o=raw.claudeAiOauth||raw;
+   fill('claude',{accessToken:o.accessToken||o.access_token,refreshToken:o.refreshToken||o.refresh_token,expiresAt:o.expiresAt||o.expires_at,clientId:o.clientId,tokenUrl:o.tokenUrl,userAgent:o.userAgent});
+  }else{
+   const t=raw.tokens||raw;
+   fill('codex',{accessToken:t.access_token||t.accessToken,refreshToken:t.refresh_token||t.refreshToken,accountId:t.account_id||t.accountId,clientId:t.clientId,tokenUrl:t.tokenUrl,userAgent:t.userAgent});
+  }
+  toast('Fields filled; press Save');
+ }catch(error){toast('Invalid JSON: '+error.message)}
+}
+async function saveProvider(provider){
+ const values=fieldsFor(provider);if(!Object.keys(values).length)return toast('Nothing to save');
+ try{
+  const data=await api('/api/credentials',{method:'POST',body:JSON.stringify({provider,...values})});
+  mark(provider,data.status&&data.status.configured);
+  for(const field of FIELDS[provider])$(provider+'_'+field).value='';
+  $(provider+'_result').textContent='Saved. Blank fields keep the previous value.';
+  toast('Saved');
+ }catch(error){$(provider+'_result').textContent='Save failed: '+error.message}
+}
+async function clearProvider(provider){
+ if(!confirm('Clear all saved '+provider+' credentials?'))return;
+ try{
+  const data=await api('/api/credentials',{method:'POST',body:JSON.stringify({provider,clear:true})});
+  mark(provider,data.status&&data.status.configured);
+  $(provider+'_result').textContent='Cleared.';
+  toast('Cleared');
+ }catch(error){$(provider+'_result').textContent='Clear failed: '+error.message}
+}
+async function testProvider(provider){
+ const out=$(provider+'_result');out.textContent='Testing...';
+ try{
+  const data=await api('/api/test',{method:'POST',body:JSON.stringify({provider})});
+  const p=data.provider||{};
+  if(!p.ok){out.textContent='Test failed: '+(data.error||p.error||p.status||'unavailable');return}
+  const metrics=(p.metrics||[]).map(m=>m.label+': '+(m.value!==undefined?m.value:Math.round(m.pct)+'%')).join('  ');
+  out.textContent='Test OK'+(p.status?' ('+p.status+')':'')+(metrics?'\n'+metrics:'');
+ }catch(error){out.textContent='Test failed: '+error.message}
+}
+if(setupToken){$('gate').hidden=true;loadStatus()}else{showGate()}
+</script>
+</body>
+</html>

@@ -145,25 +145,35 @@ One local process normalizes the three providers and POSTs the document to
 
 `daemon/usage_daemon.py` aggregates the providers:
 
-- **Claude** via the native `claude` adapter (`~/.claude/.credentials.json` or
-  `CLAUDE_CODE_OAUTH_TOKEN`); the legacy `{s,sr,w,wr,st,ok}` adapter also works.
-- **Codex / ChatGPT subscription** via the `codex` adapter. It reads the tokens
-  the Codex CLI already stores in `~/.codex/auth.json`, refreshes them when
-  needed, and maps the 5-hour and weekly windows plus the plan name. Credits and
-  additional rate-limit windows are opt-in with `includeCredits` /
-  `includeAdditional`.
+- **Claude** via the native `claude` adapter. Paste a Claude Code credentials
+  JSON or access/refresh tokens in the setup UI; the legacy
+  `{s,sr,w,wr,st,ok}` adapter also works.
+- **Codex / ChatGPT subscription** via the `codex` adapter. Paste the Codex auth
+  JSON or access/refresh/account fields in the setup UI. It refreshes tokens,
+  maps the 5-hour and weekly windows plus the plan name, and optionally adds
+  credits/additional windows with `includeCredits` / `includeAdditional`.
 - **DeepSeek** via the `deepseek` adapter: official balance API plus optional
-  token usage from `daemon/deepseek_proxy.py`. DeepSeek has no aggregate usage
-  endpoint, so the proxy forwards API requests, counts OpenAI and Anthropic
-  usage, and serves running, daily and per-day totals to the daemon.
+  token usage from `daemon/deepseek_proxy.py`. Enter the API key in the setup UI.
+  DeepSeek has no aggregate usage endpoint, so the proxy forwards API requests,
+  counts OpenAI and Anthropic usage, and serves running, daily and per-day totals
+  to the daemon.
 - **Generic / normalized** sources via dotted JSON paths or a pre-shaped object.
 
 Copy `daemon/usage-daemon.example.json` to `daemon/usage-daemon.json`
-(git-ignored), point the providers at your sources, and run it. A metric may
-carry a `value` string (for example `110 CNY` or `1.2M tokens`) instead of a
-percentage. `daemon/push_usage.py` remains for a single pre-built document, a
-URL, or demo data. The firmware only needs the normalized contract; provider
-credentials stay on the PC.
+(git-ignored), point the providers at your sources, and run it. Provider
+credentials are entered through the local setup UI:
+
+```sh
+python3 daemon/setup_ui.py --config daemon/usage-daemon.json
+```
+
+It prints a URL and setup token; the page never reads `~/.claude`, `~/.codex` or
+environment variables, and saves only submitted fields to
+`~/.config/smalltv/credentials.json` (mode `0600`). The daemon re-reads that
+store each cycle. A metric may carry a `value` string (for example `110 CNY` or
+`1.2M tokens`) instead of a percentage. `daemon/push_usage.py` remains for a
+single pre-built document, a URL, or demo data. The firmware only needs the
+normalized contract; provider credentials stay on the daemon host.
 
 ## HTTP API
 

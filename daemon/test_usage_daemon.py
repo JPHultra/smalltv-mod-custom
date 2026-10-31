@@ -5,7 +5,9 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
+from credentials import CredentialsStore
 from usage_daemon import (
     claude_legacy,
     compact_number,
@@ -18,8 +20,12 @@ from usage_daemon import (
     path_get,
     collect_claude,
     collect_codex,
+    deepseek_key,
     map_claude_usage,
     provider_error,
+    read_claude_token,
+    read_codex_auth,
+    refresh_codex_auth,
     window_label,
 )
 
@@ -143,6 +149,49 @@ class UsageDaemonTests(unittest.TestCase):
         }
         out = map_codex_usage(payload, {"id": "chatgpt", "includeAdditional": True})
         self.assertEqual([m["label"] for m in out["metrics"]], ["5h", "plan", "extra 1m"])
+
+    def test_no_implicit_home_credentials(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+                os.environ, {"DEEPSEEK_API_KEY": "", "CLAUDE_CODE_OAUTH_TOKEN": ""}):
+            store = CredentialsStore(os.path.join(directory, "empty.json"))
+            with self.assertRaises(ValueError):
+                read_claude_token({"id": "claude"}, store)
+            with self.assertRaises(ValueError):
+                read_codex_auth({"id": "chatgpt"}, store)
+            with self.assertRaises(ValueError):
+                deepseek_key({"id": "deepseek"}, store)
+
+    def test_store_credentials_and_refresh(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = CredentialsStore(os.path.join(directory, "credentials.json"))
+            store.update("deepseek", {"apiKey": "sk-store"})
+            self.assertEqual(deepseek_key({"id": "deepseek"}, store), "sk-store")
+
+            store.update("claude", {
+                "accessToken": "old", "refreshToken": "old-refresh", "expiresAt": 1,
+            })
+            with patch("usage_daemon._request_claude_refresh", return_value={
+                    "access_token": "new", "refresh_token": "new-refresh",
+                    "expires_in": 3600}) as refresh:
+                self.assertEqual(read_claude_token({"id": "claude"}, store)[2], "new")
+                self.assertTrue(refresh.called)
+            self.assertEqual(store.get("claude")["accessToken"], "new")
+            self.assertEqual(store.get("claude")["refreshToken"], "new-refresh")
+
+            store.update("codex", {
+                "accessToken": "old", "refreshToken": "old-refresh", "accountId": "acct",
+            })
+            with patch("usage_daemon._request_codex_refresh", return_value={
+                    "access_token": "new"}) as refresh:
+                access, account = refresh_codex_auth(
+                    None, {"tokens": {"refresh_token": "old-refresh"}},
+                    {"id": "chatgpt"}, 5, store,
+                )
+                self.assertTrue(refresh.called)
+            self.assertEqual((access, account), ("new", "acct"))
+            self.assertEqual(store.get("codex")["accessToken"], "new")
+            _, _, _, access, account = read_codex_auth({"id": "chatgpt"}, store)
+            self.assertEqual((access, account), ("new", "acct"))
 
     def test_claude_refresh(self):
         payload = {

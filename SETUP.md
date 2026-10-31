@@ -37,9 +37,8 @@ transient above it.
 - `esptool` for USB flashing and backups.
 - Node 22+ only if you want to run the editor syntax check. The editor itself
   has no build step.
-- A Claude Code login (`~/.claude/.credentials.json`) or a
-  `CLAUDE_CODE_OAUTH_TOKEN` for native Claude usage.
-- A Codex login (`~/.codex/auth.json`) for Codex subscription usage.
+- Claude Code and/or Codex credentials to paste into the setup UI from any
+  machine; no local login is required on the daemon host.
 - A DeepSeek API key for the balance collector.
 - Optionally, a local
   [clawdmeter-daemon](https://github.com/giovi321/clawdmeter-daemon) if you want
@@ -286,85 +285,118 @@ stacks all metrics; `0`-`4` selects one. `priority` is the overlay priority (0-3
 
 ## 7. Usage: Claude, Codex, DeepSeek
 
-### 7.1 Configure the aggregator
+### 7.1 Configure the aggregator and credentials
 
 ```sh
 cp daemon/usage-daemon.example.json daemon/usage-daemon.json
 ```
 
-`daemon/usage-daemon.json` is git-ignored because it may contain API keys and
-local URLs. Set its `device` to your device URL:
+`daemon/usage-daemon.json` is git-ignored because it may contain local URLs. Set
+its `device` to your device URL:
 
 ```json
 "device": "http://192.168.1.50"
 ```
+
+The example stores provider credentials in
+`~/.config/smalltv/credentials.json`. Enter them with the local setup UI:
+
+```sh
+python3 daemon/setup_ui.py --config daemon/usage-daemon.json
+```
+
+It prints a URL and a generated setup token:
+
+```text
+SmallTV usage setup: http://127.0.0.1:8790/
+Setup token: <generated-on-startup>
+```
+
+Open the URL, enter the token, and fill the provider cards. The page:
+
+- never reads `~/.claude`, `~/.codex` or environment variables on this host;
+- accepts pasted Claude/Codex credentials JSON from any machine, or manual
+  access/refresh/account fields;
+- saves only what you submit to `~/.config/smalltv/credentials.json` (mode
+  `0600`); blank fields keep the previous value;
+- never displays saved secrets back and never writes them to the daemon log;
+- has a **Test** button for each provider, which does not push to the device.
+
+Use **Save** after filling a provider and **Clear** to remove all of its
+credentials. `--credentials PATH` or `credentialsFile` in the daemon config
+changes the store location. The setup UI is localhost-only by default; use
+`--bind 0.0.0.0` only for a VM/container and keep the setup token private.
 
 The device's `/api/usage` push endpoint is open by design (the daemon cannot
 carry the web UI password).
 
 ### 7.2 Claude
 
-The example uses the native Claude adapter:
+Add the native Claude provider; no credential file path is required:
 
 ```json
-{"id":"claude","name":"Claude","adapter":"claude","authFile":"~/.claude/.credentials.json"}
+{"id":"claude","name":"Claude","adapter":"claude"}
 ```
 
-Run `claude setup-token` once if the credentials file has no usable access
-token, or export `CLAUDE_CODE_OAUTH_TOKEN`. The adapter:
+In the setup UI, either paste the JSON from a machine where Claude Code is
+logged in:
 
-- reads the OAuth credentials from `~/.claude/.credentials.json`,
-- calls the Claude Code OAuth usage endpoint,
-- maps the 5-hour and weekly limits,
-- refreshes an expired access token and writes it back with mode `0600`.
+```json
+{"claudeAiOauth":{"accessToken":"...","refreshToken":"...","expiresAt":0}}
+```
 
-Tokens never leave the PC. The legacy `claude-legacy` adapter is still available
-for the old
+or enter the access token, refresh token and optional expiry manually. The JSON
+is parsed in your browser; only the fields you save reach the daemon. If you only
+have a long-lived `claude setup-token` value, paste it as the access token. The
+adapter refreshes an expired access token with the refresh token and the public
+Claude Code OAuth client id.
+
+The old `claude-legacy` adapter is still available for the old
 [clawdmeter-daemon](https://github.com/giovi321/clawdmeter-daemon) payload; if
 that daemon pushes to `/api/usage` directly, remove the aggregator's Claude entry
-to avoid duplicate updates.
+to avoid duplicate updates. `authFile` and `tokenEnv` are optional explicit
+legacy fallbacks; the setup UI never reads them.
 
 ### 7.3 Codex / ChatGPT subscription
 
-Run Codex once and log in, so it creates `~/.codex/auth.json`:
-
-```sh
-codex login
-```
-
-The adapter:
-
-- reads the ChatGPT access token and account id from that file,
-- calls `https://chatgpt.com/backend-api/wham/usage`,
-- maps the 5-hour and weekly windows plus the plan name,
-- refreshes the token through `https://auth.openai.com/oauth/token` if needed,
-- writes the refreshed tokens back with mode `0600`.
+Add the Codex provider; no `codex login` is required on the daemon host:
 
 ```json
-{"id":"chatgpt","name":"Codex","adapter":"codex","authFile":"~/.codex/auth.json",
+{"id":"chatgpt","name":"Codex","adapter":"codex",
  "includePlan":true,"includeCredits":false,"includeAdditional":false}
 ```
+
+In the setup UI, paste the Codex auth JSON from any machine:
+
+```json
+{"tokens":{"access_token":"...","refresh_token":"...","account_id":"..."}}
+```
+
+or enter the access token, refresh token and account id manually. The JSON is
+parsed in the browser; only the saved fields reach the daemon. The adapter calls
+`https://chatgpt.com/backend-api/wham/usage`, maps the 5-hour and weekly windows
+plus the plan name, and refreshes an expired access token through
+`https://auth.openai.com/oauth/token`.
 
 `includePlan` is on by default. `includeCredits` adds the credits balance when
 present; `includeAdditional` adds other rate-limit windows. The mapper caps a
 provider at five metrics (`USAGE_MAX_METRICS`), so a card can show all of them
 when it has enough height. This is the endpoint the Codex CLI itself uses; it is
 not a public documented API, so it can change. The daemon does not send the
-email, account id or tokens to the device.
+email, account id or tokens to the device. `authFile` is an optional explicit
+legacy fallback.
 
 ### 7.4 DeepSeek balance
 
-Set the key in the environment of the daemon:
-
-```sh
-export DEEPSEEK_API_KEY='sk-...'
-```
+Add the DeepSeek provider and enter its API key in the setup UI:
 
 ```json
-{"id":"deepseek","name":"DeepSeek","adapter":"deepseek","apiKeyEnv":"DEEPSEEK_API_KEY"}
+{"id":"deepseek","name":"DeepSeek","adapter":"deepseek"}
 ```
 
-Balance comes from `https://api.deepseek.com/user/balance`.
+Balance comes from `https://api.deepseek.com/user/balance`. The key is stored in
+the same `0600` credentials file; no environment variable is required.
+`apiKeyEnv` / `apiKeyFile` are optional explicit legacy fallbacks.
 
 ### 7.5 DeepSeek token usage
 
@@ -390,16 +422,15 @@ curl -X POST http://127.0.0.1:8789/usage/reset
 ```
 
 State lives in `~/.local/state/smalltv/deepseek-usage.json`. The API key is
-forwarded per request and never written there. `/usage` includes the running
-total, `date`, `today` and per-day `days` buckets, so you can show today's tokens
-instead of the all-time count.
+forwarded per request from the DeepSeek client and never written there. `/usage`
+includes the running total, `date`, `today` and per-day `days` buckets, so you
+can show today's tokens instead of the all-time count.
 
 Add the usage source to the provider:
 
 ```json
 {
   "id":"deepseek","name":"DeepSeek","adapter":"deepseek",
-  "apiKeyEnv":"DEEPSEEK_API_KEY",
   "usageUrl":"http://127.0.0.1:8789/usage",
   "usagePath":"today.total_tokens",
   "usageLabel":"tokens today",
@@ -417,7 +448,8 @@ down, balance still appears and the daemon logs the usage source error.
 python daemon/usage_daemon.py --config daemon/usage-daemon.json
 ```
 
-Useful checks:
+The daemon re-reads the credentials store each cycle, so saving in the setup UI
+takes effect without a restart. Useful checks:
 
 ```sh
 python daemon/usage_daemon.py --config daemon/usage-daemon.json --once --dry-run
@@ -459,7 +491,6 @@ After=network-online.target smalltv-deepseek-proxy.service
 
 [Service]
 WorkingDirectory=%h/Projects/smalltv-mod-custom
-EnvironmentFile=%h/.config/smalltv/usage.env
 ExecStart=%h/Projects/smalltv-mod-custom/.venv/bin/python daemon/usage_daemon.py --config daemon/usage-daemon.json
 Restart=on-failure
 
@@ -467,13 +498,8 @@ Restart=on-failure
 WantedBy=default.target
 ```
 
-`~/.config/smalltv/usage.env` (mode 600):
-
-```sh
-DEEPSEEK_API_KEY=sk-...
-```
-
-Enable:
+Provider credentials are read from the setup UI store; the service needs no
+`EnvironmentFile`. Enable:
 
 ```sh
 systemctl --user daemon-reload
@@ -676,11 +702,12 @@ builds.
 | Editor **Load/Save** fails at `https://...` | Mixed content. Use a local HTTP copy of the editor or the device **View** tab |
 | Editor 403 / authentication | Set **Editor token** in the device **View** tab and enter the same token; use the device IP or exact hostname |
 | Device shows “Push a view from the editor” | No `/view.json`. Push a dashboard or paste `examples/view.json` |
-| Claude provider is `unavailable` | Run `claude setup-token`, or set `CLAUDE_CODE_OAUTH_TOKEN`; the credentials file may have empty access/refresh tokens |
-| Codex provider is `unavailable` | Run Codex and log in so `~/.codex/auth.json` exists; the daemon refreshes an expired access token |
+| Claude provider is `unavailable` | Open `setup_ui.py`, paste a Claude Code credentials JSON or an access/refresh token, save, then Test |
+| Codex provider is `unavailable` | Open `setup_ui.py`, paste the Codex auth JSON or access/refresh/account fields, save, then Test |
+| Setup UI asks for a token | Restart `python3 daemon/setup_ui.py --config ...` and copy the newly printed token; it is not stored |
 | Codex card is short a metric | Set `includeCredits` / `includeAdditional` if you want them; the mapper caps a provider at five metrics |
 | Poll URL returns 401 | Set **Auth header** and **Auth value** in **View**; leave the value blank to keep the saved secret |
-| DeepSeek balance is `unavailable` | Set `DEEPSEEK_API_KEY` in the daemon's environment (or use `apiKeyFile`) |
+| DeepSeek balance is `unavailable` | Enter the API key in the setup UI and press Save, then Test |
 | DeepSeek token usage is missing/0 | The client is not using `http://127.0.0.1:8789`; start the proxy and set the provider's `usageUrl`; use `usagePath: "today.total_tokens"` for a daily number |
 | Usage card shows 0% and no value | The daemon is not sending a `value`/`pct`; check `/api/status` and `--dry-run` |
 | `smalltv.local` does not resolve | Use the IP or the actual `smalltv-xxxx.local` shown on screen |
@@ -704,6 +731,9 @@ tools/
 editor/               static visual dashboard editor
 daemon/
   usage_daemon.py     Claude/Codex/DeepSeek aggregator
+  setup_ui.py         local manual-entry credential UI
+  setup.html          setup page
+  credentials.py      atomic 0600 credential store
   deepseek_proxy.py   token-usage proxy
   push_usage.py       one-shot JSON pusher
 examples/view.json    sample dashboard
@@ -718,8 +748,12 @@ case/                 3D-printed case
   port 80 to the internet.
 - The settings export contains WiFi passwords, the WireGuard private key and the
   editor token.
-- The Codex auth file and the DeepSeek API key stay on the PC. The daemon sends
-  only usage numbers to the device.
+- Claude/Codex/DeepSeek credentials stay on the daemon host in
+  `~/.config/smalltv/credentials.json` (mode 0600). The setup UI never reads
+  local auth files or environment variables; the daemon sends only usage
+  numbers to the device.
+- The setup UI binds `127.0.0.1` and requires a generated setup token. If you
+  bind it beyond localhost, treat the token like a password.
 - The DeepSeek proxy binds `127.0.0.1` by default. If you bind it to `0.0.0.0`,
   anyone on the LAN can use the proxy and read the usage totals.
 - The editor token is a write credential for the view endpoints; treat it like
