@@ -26,8 +26,10 @@ HTML/WebView assets.
 - Firmware upload (`.bin`) with the in-app file browser
 - GitHub self-update, settings export/import, reboot and factory reset
 - Native file browser; no zenity/kdialog dependency
+- Flat graphite/amber desktop styling with vendored Inter fonts
 
-The app does not emulate Wi-Fi/OTA in firmware. It talks to real devices over
+The app does not emulate Wi-Fi/OTA in firmware. Fonts live in
+`emulator/assets/` and are included in the release packages. It talks to real devices over
 the network. The local preview uses a JSON fixture until you edit the dashboard.
 
 ## Build
@@ -51,7 +53,8 @@ make -C emulator
 ```
 
 Dear ImGui is vendored under `emulator/third_party/imgui/` (MIT), using the SDL2
-and SDL_Renderer2 backends.
+and SDL_Renderer2 backends. Inter is bundled under `emulator/assets/fonts/`
+(OFL).
 
 ## Run
 
@@ -60,16 +63,18 @@ emulator/build/smalltv-emulator --view examples/view.json \
   --usage daemon/usage.example.json
 ```
 
-Select a discovered device, enter the web UI password if the device uses one,
-and press **Connect**. The **Editor** tab edits the local dashboard; **Save
-device** writes it to the selected device.
+Select or enter a device in the Device workspace and connect. Device shows
+discovery, a scaled live preview, status/usage telemetry and maintenance
+actions; Design is the three-pane dashboard editor; Settings uses section
+navigation with two-column forms.
 
 Options:
 
 - `--view PATH` draw-list JSON loaded into the editor
 - `--usage PATH` normalized usage JSON for the local preview
 - `--time HH:MM` fixed clock; omit for the local clock
-- `--tab NAME` start on `dashboard`, `editor` or `settings`
+- `--tab NAME` start on `device`, `design` or `settings`
+- `--settings-tab NAME` start Settings on `wifi`, `display`, `view`, `system` or `json`
 - `--url URL` connect to a device at startup
 - `--user USER` / `--pass PASS` device web UI credentials
 - `--screenshot PATH` write a 240x240 P6 PPM and exit
@@ -77,11 +82,12 @@ Options:
 
 ## Native editor
 
-The canvas is the real firmware renderer at 2x. Click a layer to select it,
-drag to move, and drag the yellow corner handle to resize. The right panel has
-layer order, properties and device/file actions. **Add layer** inserts a new
-component at the canvas centre. The JSON panel lets you inspect or replace the
-draw list directly.
+The editor has three panes: layers on the left, a scaled real firmware render
+in the centre, and layer/view properties on the right. Device and file actions
+live in the inspector. Click a layer to select it, drag to move, and drag the
+yellow corner handle to resize. **Add layer** inserts a new component at the
+canvas centre. The JSON panel lets you inspect or replace the draw list
+directly.
 
 ## Release packages
 

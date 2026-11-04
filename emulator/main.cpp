@@ -28,8 +28,11 @@
 #include "UsageClient.h"
 #include "ViewModel.h"
 #include "ViewRender.h"
+#include "theme.h"
 
 namespace fs = std::filesystem;
+
+void gfxSetPreviewDisplay(int order, bool invert, int rGain, int gGain, int bGain);
 
 static bool local_time(std::time_t now, struct tm& out) {
   struct tm* local = std::localtime(&now);
@@ -86,7 +89,8 @@ static void usage() {
       << "  --view PATH       draw-list JSON (default examples/view.json)\n"
       << "  --usage PATH      normalized usage JSON (default daemon/usage.example.json)\n"
       << "  --time HH:MM      fixed clock time instead of the local clock\n"
-      << "  --tab NAME        start on dashboard, editor or settings\n"
+      << "  --tab NAME        start on device, design or settings\n"
+      << "  --settings-tab NAME start settings on wifi, display, view, system or json\n"
       << "  --url URL         connect to a device at startup\n"
       << "  --user USER       device web UI user\n"
       << "  --pass PASS       device web UI password\n"
@@ -125,13 +129,20 @@ static ImVec4 rgb_vec(uint32_t rgb) {
                 (rgb & 255) / 255.0f, 1.0f);
 }
 
+static bool g_formGrid = false;
+static void formNext() { if (g_formGrid) ImGui::TableNextColumn(); }
+
 static bool input_text_json(JsonObject o, const char* key, const char* label,
                             bool secret = false, const char* hint = nullptr) {
+  formNext();
   const char* cur = o[key] | "";
   char buf[1024];
   snprintf(buf, sizeof(buf), "%s", cur ? cur : "");
+  if (label && *label) ImGui::TextDisabled("%s", label);
+  const std::string id = std::string("##") + key + label;
   ImGuiInputTextFlags flags = secret ? ImGuiInputTextFlags_Password : 0;
-  if (ImGui::InputText(label, buf, sizeof(buf), flags)) {
+  ImGui::SetNextItemWidth(-1);
+  if (ImGui::InputText(id.c_str(), buf, sizeof(buf), flags)) {
     if (!secret || buf[0]) o[key] = buf;
     return true;
   }
@@ -141,8 +152,12 @@ static bool input_text_json(JsonObject o, const char* key, const char* label,
 
 static bool input_int_json(JsonObject o, const char* key, const char* label,
                            int lo, int hi, int fallback = 0) {
+  formNext();
   int value = o[key] | fallback;
-  if (ImGui::InputInt(label, &value)) {
+  if (label && *label) ImGui::TextDisabled("%s", label);
+  const std::string id = std::string("##") + key + label;
+  ImGui::SetNextItemWidth(-1);
+  if (ImGui::InputInt(id.c_str(), &value)) {
     value = std::max(lo, std::min(hi, value));
     o[key] = value;
     return true;
@@ -151,6 +166,7 @@ static bool input_int_json(JsonObject o, const char* key, const char* label,
 }
 
 static bool input_bool_json(JsonObject o, const char* key, const char* label) {
+  formNext();
   bool value = o[key] | false;
   if (ImGui::Checkbox(label, &value)) {
     o[key] = value;
@@ -267,7 +283,7 @@ struct FileDialog {
       refresh();
     }
     ImGui::SameLine();
-    if (ImGui::Button("Up")) {
+    if (theme::secondaryButton("Up")) {
       fs::path p(path);
       if (p.has_parent_path() && p.parent_path() != p) {
         path = p.parent_path().string();
@@ -275,7 +291,7 @@ struct FileDialog {
       }
     }
     ImGui::SameLine();
-    if (ImGui::Button("Home")) {
+    if (theme::secondaryButton("Home")) {
       path = fs::current_path().string();
       refresh();
     }
@@ -305,7 +321,7 @@ struct FileDialog {
       ImGui::InputText("File name", nameBuf, sizeof(nameBuf));
       filename = nameBuf;
     }
-    if (ImGui::Button(save ? "Save" : "Open")) {
+    if (theme::primaryButton(save ? "Save" : "Open")) {
       if (save) {
         if (!filename.empty()) pick((fs::path(path) / filename).string());
       } else if (!filename.empty()) {
@@ -313,7 +329,7 @@ struct FileDialog {
       }
     }
     ImGui::SameLine();
-    if (ImGui::Button("Cancel")) {
+    if (theme::secondaryButton("Cancel")) {
       active = false;
       ImGui::CloseCurrentPopup();
     }
@@ -333,6 +349,27 @@ static void upload_preview_texture() {
                     gfxDev()->width() * sizeof(uint16_t));
 }
 
+static std::string find_assets_dir() {
+  std::error_code ec;
+  std::vector<fs::path> candidates;
+  candidates.push_back(fs::current_path(ec) / "assets");
+  candidates.push_back(fs::current_path(ec) / "emulator" / "assets");
+#if SDL_VERSION_ATLEAST(2, 0, 1)
+  char* base = SDL_GetBasePath();
+  if (base) {
+    fs::path exe(base);
+    SDL_free(base);
+    candidates.push_back(exe / "assets");
+    candidates.push_back(exe / ".." / "assets");
+    candidates.push_back(exe / ".." / ".." / "emulator" / "assets");
+  }
+#endif
+  for (const auto& path : candidates) {
+    if (fs::exists(path / "fonts" / "Inter-Regular.ttf", ec)) return path.string();
+  }
+  return (fs::current_path(ec) / "emulator" / "assets").string();
+}
+
 struct App {
   DeviceManager manager;
   std::vector<EmuDevice> devices;
@@ -346,6 +383,7 @@ struct App {
   uint32_t toastUntil = 0;
   int tab = 0;
   int forceTab = -1;
+  int settingsTab = 0;
 
   JsonDocument cfg;
   bool cfgLoaded = false;
@@ -359,6 +397,7 @@ struct App {
 
   JsonDocument view;
   bool viewLoaded = false;
+  bool viewDirty = false;
   std::string viewError;
   bool previewDirty = true;
   int selected = -1;
@@ -373,6 +412,123 @@ struct App {
   std::string uploadError;
   std::string initialViewPath = "examples/view.json";
   FileDialog dialog;
+
+  bool beginPane(const char* id, ImVec2 size, bool scroll = true) {
+    if (size.x <= 0) size.x = ImGui::GetContentRegionAvail().x;
+    if (size.y <= 0) size.y = ImGui::GetContentRegionAvail().y;
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const ImVec2 b(p.x + size.x, p.y + size.y);
+    theme::panel(ImGui::GetWindowDrawList(), p, b, theme::surface(), theme::border());
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14, 12));
+    ImGui::BeginChild(id, size, ImGuiChildFlags_AlwaysUseWindowPadding,
+                      ImGuiWindowFlags_NoBackground |
+                          (scroll ? 0 : ImGuiWindowFlags_NoScrollbar));
+    return true;
+  }
+
+  void endPane() {
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
+  }
+
+  void paneTitle(const char* title, const char* trailing = nullptr) {
+    ImGui::PushFont(theme::fonts().heading);
+    ImGui::TextUnformatted(title);
+    ImGui::PopFont();
+    if (trailing) {
+      ImGui::SameLine();
+      ImGui::TextDisabled("%s", trailing);
+    }
+  }
+
+  void drawGrid(ImU32 color) {
+    const ImVec2 a = ImGui::GetWindowPos();
+    const ImVec2 b(a.x + ImGui::GetWindowSize().x, a.y + ImGui::GetWindowSize().y);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    for (float x = a.x + 20; x < b.x; x += 24) dl->AddLine(ImVec2(x, a.y), ImVec2(x, b.y), color);
+    for (float y = a.y + 20; y < b.y; y += 24) dl->AddLine(ImVec2(a.x, y), ImVec2(b.x, y), color);
+  }
+
+  void statusPill() {
+    const bool online = connected;
+    const ImU32 col = online ? theme::success() : theme::muted();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    dl->AddCircleFilled(ImVec2(p.x + 4, p.y + 9), 4.0f, col);
+    ImGui::Dummy(ImVec2(10, 0));
+    ImGui::SameLine();
+    ImGui::TextDisabled("%s", online ? "Online" : "Offline");
+  }
+
+  void topbar() {
+    const char* names[] = {"Device", "Design", "Settings"};
+    ImGui::PushFont(theme::fonts().heading);
+    ImGui::TextUnformatted("SmallTV");
+    ImGui::PopFont();
+    ImGui::SameLine(112);
+    for (int i = 0; i < 3; i++) {
+      ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(14, 9));
+      ImGui::PushStyleColor(ImGuiCol_Button, i == tab ? theme::surfaceAlt() : theme::surface());
+      ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::surfaceAlt());
+      ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme::surfaceAlt());
+      ImGui::PushStyleColor(ImGuiCol_Text, i == tab ? theme::accent() : theme::muted());
+      if (ImGui::Button(names[i], ImVec2(0, 30))) tab = i;
+      ImGui::PopStyleColor(4);
+      ImGui::PopStyleVar();
+      if (i == tab) {
+        const ImVec2 a = ImGui::GetItemRectMin();
+        const ImVec2 b = ImGui::GetItemRectMax();
+        ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(a.x + 10, b.y - 2),
+                                                  ImVec2(b.x - 10, b.y),
+                                                  theme::accent(), 1.0f);
+      }
+      ImGui::SameLine(0, 2);
+    }
+    ImGui::SameLine(0, 22);
+    statusPill();
+    ImGui::SameLine(0, 18);
+    ImGui::TextDisabled("%s", deviceUrl);
+    ImGui::SameLine(ImGui::GetContentRegionMax().x - 28.0f);
+    if (theme::secondaryButton("...")) ImGui::OpenPopup("##connection");
+    if (ImGui::BeginPopup("##connection")) {
+      ImGui::TextDisabled("CONNECTION");
+      ImGui::SetNextItemWidth(300);
+      ImGui::InputTextWithHint("##url", "device URL", deviceUrl, sizeof(deviceUrl));
+      ImGui::SetNextItemWidth(140);
+      ImGui::InputTextWithHint("##user", "web user", authUser, sizeof(authUser));
+      ImGui::SameLine();
+      ImGui::SetNextItemWidth(160);
+      ImGui::InputTextWithHint("##pass", "web password", authPass, sizeof(authPass), ImGuiInputTextFlags_Password);
+      if (theme::primaryButton("Connect")) { connect(); ImGui::CloseCurrentPopup(); }
+      ImGui::SameLine();
+      if (theme::secondaryButton("Scan")) scan();
+      ImGui::EndPopup();
+    }
+  }
+
+  void toastWindow() {
+    if (toast.empty() || SDL_GetTicks() >= toastUntil) return;
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + vp->Size.x - 380, vp->Pos.y + vp->Size.y - 52));
+    ImGui::SetNextWindowSize(ImVec2(360, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::Begin("##toast", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                     ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings |
+                     ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_AlwaysAutoResize |
+                     ImGuiWindowFlags_NoFocusOnAppearing);
+    const ImVec2 p = ImGui::GetWindowPos();
+    const ImVec2 sz = ImGui::GetWindowSize();
+    theme::panel(ImGui::GetWindowDrawList(), p, ImVec2(p.x + sz.x, p.y + sz.y),
+                 theme::surfaceAlt(), theme::border());
+    ImGui::GetWindowDrawList()->AddRectFilled(p, ImVec2(p.x + 3, p.y + sz.y), theme::accent());
+    ImGui::SetCursorPos(ImVec2(14, 10));
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 330);
+    ImGui::TextUnformatted(toast.c_str());
+    ImGui::PopTextWrapPos();
+    ImGui::End();
+    ImGui::PopStyleVar();
+  }
 
   void notify(const std::string& msg) {
     toast = msg;
@@ -393,6 +549,7 @@ struct App {
     loadConfig();
     loadStatus();
     loadUsage();
+    if (!viewDirty) loadViewFromDevice();
   }
 
   bool api(const std::string& method, const std::string& path,
@@ -436,6 +593,13 @@ struct App {
       return;
     }
     cfgLoaded = true;
+    JsonObject display = cfg["display"].as<JsonObject>();
+    const char* order = display["colorOrder"] | "auto";
+    gfxSetPreviewDisplay(!strcmp(order, "rgb") ? 1 : !strcmp(order, "bgr") ? 2 : 0,
+                         display["invert"] | false,
+                         display["rGain"] | 100, display["gGain"] | 100,
+                         display["bGain"] | 100);
+    previewDirty = true;
     std::string pretty;
     serializeJsonPretty(cfg, pretty);
     snprintf(cfgRaw, sizeof(cfgRaw), "%s", pretty.c_str());
@@ -447,6 +611,13 @@ struct App {
     serializeJson(cfg, body);
     DeviceResponse r;
     if (!api("POST", "/api/config", body, "application/json", r)) return false;
+    JsonObject display = cfg["display"].as<JsonObject>();
+    const char* order = display["colorOrder"] | "auto";
+    gfxSetPreviewDisplay(!strcmp(order, "rgb") ? 1 : !strcmp(order, "bgr") ? 2 : 0,
+                         display["invert"] | false,
+                         display["rGain"] | 100, display["gGain"] | 100,
+                         display["bGain"] | 100);
+    previewDirty = true;
     std::string pretty;
     serializeJsonPretty(cfg, pretty);
     snprintf(cfgRaw, sizeof(cfgRaw), "%s", pretty.c_str());
@@ -512,6 +683,7 @@ struct App {
     selected = -1;
     undoStack.clear();
     redoStack.clear();
+    viewDirty = false;
     syncJson();
     previewDirty = true;
     return true;
@@ -584,20 +756,33 @@ struct App {
   }
 
   // ---- settings forms ----------------------------------------------------
+  void formStart(const char* id) {
+    ImGui::BeginTable(id, 2, ImGuiTableFlags_SizingStretchSame);
+    g_formGrid = true;
+  }
+  void formEnd() {
+    ImGui::EndTable();
+    g_formGrid = false;
+  }
+
   void settingsWifi() {
     JsonObject o = cfg.as<JsonObject>();
+    formStart("##wifihead");
     input_text_json(o, "hostname", "Hostname");
     input_text_json(o, "apSsid", "AP SSID");
     input_text_json(o, "apPass", "AP password", true, "Leave blank to keep the current password");
     input_int_json(o, "httpTimeout", "HTTP timeout (ms)", 1000, 20000, 8000);
+    formEnd();
     ImGui::SeparatorText("WiFi networks");
     JsonArray wifi = o["wifi"].as<JsonArray>();
     if (wifi.isNull()) wifi = o["wifi"].to<JsonArray>();
     for (int i = 0; i < (int)wifi.size();) {
       JsonObject e = wifi[i];
       ImGui::PushID(i);
+      formStart("##network");
       input_text_json(e, "ssid", "SSID");
       input_text_json(e, "pass", "Password", true, "Blank keeps the current password");
+      formEnd();
       bool set = e["passSet"] | false;
       if (set) ImGui::TextDisabled("password is set");
       if (ImGui::Button("Remove")) { wifi.remove(i); ImGui::PopID(); continue; }
@@ -607,8 +792,16 @@ struct App {
     }
     static char ssid[96] = "";
     static char pass[96] = "";
-    ImGui::InputText("New SSID", ssid, sizeof(ssid));
-    ImGui::InputText("New password", pass, sizeof(pass), ImGuiInputTextFlags_Password);
+    formStart("##newwifi");
+    formNext();
+    ImGui::TextDisabled("New SSID");
+    ImGui::SetNextItemWidth(-1);
+    ImGui::InputText("##newssid", ssid, sizeof(ssid));
+    formNext();
+    ImGui::TextDisabled("New password");
+    ImGui::SetNextItemWidth(-1);
+    ImGui::InputText("##newpass", pass, sizeof(pass), ImGuiInputTextFlags_Password);
+    formEnd();
     if (ImGui::Button("Add network") && ssid[0]) {
       JsonObject e = wifi.add<JsonObject>();
       e["ssid"] = ssid;
@@ -645,36 +838,46 @@ struct App {
 
   void settingsDisplay() {
     JsonObject o = cfg.as<JsonObject>();
+    formStart("##displaybasic");
     input_int_json(o, "brightness", "Brightness", 0, 100, 80);
     input_bool_json(o, "autoBrightness", "Auto brightness (LDR)");
     input_bool_json(o, "backlightInverted", "Backlight inverted");
     input_int_json(o, "rotation", "Rotation (0-3)", 0, 3, 0);
+    formEnd();
     ImGui::SeparatorText("Panel colour");
     JsonObject d = o["display"].as<JsonObject>();
     if (d.isNull()) d = o["display"].to<JsonObject>();
     static const char* orders[] = {"auto", "rgb", "bgr"};
     const char* cur = d["colorOrder"] | "auto";
     int idx = !strcmp(cur, "rgb") ? 1 : !strcmp(cur, "bgr") ? 2 : 0;
+    formStart("##panel");
+    formNext();
+    ImGui::SetNextItemWidth(-1);
     if (ImGui::Combo("Colour order", &idx, orders, 3)) d["colorOrder"] = orders[idx];
     input_bool_json(d, "invert", "Invert");
     input_int_json(d, "rGain", "Red gain", 0, 255, 255);
     input_int_json(d, "gGain", "Green gain", 0, 255, 255);
     input_int_json(d, "bGain", "Blue gain", 0, 255, 255);
+    formEnd();
     ImGui::SeparatorText("Clock / night mode");
     JsonObject c = o["clock"].as<JsonObject>();
     if (c.isNull()) c = o["clock"].to<JsonObject>();
+    formStart("##clock");
     input_text_json(c, "tz", "Timezone");
     input_text_json(c, "tzPosix", "POSIX TZ");
     input_bool_json(c, "nightEnabled", "Night mode");
     input_text_json(c, "nightStart", "Night start (HH:MM)");
     input_text_json(c, "nightEnd", "Night end (HH:MM)");
     input_int_json(c, "nightLevel", "Night brightness", 0, 100, 15);
+    formEnd();
     ImGui::SeparatorText("Button");
     JsonObject b = o["button"].as<JsonObject>();
     if (b.isNull()) b = o["button"].to<JsonObject>();
+    formStart("##button");
     input_int_json(b, "sensitivity", "Sensitivity", 50, 99, 80);
     input_int_json(b, "shortAction", "Short action", 0, 8, 0);
     input_int_json(b, "longAction", "Long action", 0, 8, 0);
+    formEnd();
     if (ImGui::Button("Save settings")) saveConfig();
   }
 
@@ -682,12 +885,14 @@ struct App {
     JsonObject o = cfg.as<JsonObject>();
     JsonObject v = o["view"].as<JsonObject>();
     if (v.isNull()) v = o["view"].to<JsonObject>();
+    formStart("##viewform");
     input_text_json(v, "pollUrl", "Overlay poll URL");
     input_int_json(v, "pollSec", "Poll seconds (0 off)", 0, 86400, 0);
     input_int_json(v, "ttlSec", "Default overlay TTL", 1, 86400, 15);
     input_text_json(v, "pollAuthHeader", "Poll auth header");
     input_text_json(v, "pollAuthValue", "Poll auth value", true, "Blank keeps the current value");
     input_text_json(v, "editorToken", "Editor token", true, "Blank keeps the current token");
+    formEnd();
     if (ImGui::Button("Save settings")) saveConfig();
     ImGui::SeparatorText("Dashboard");
     if (ImGui::Button("Load from device")) loadViewFromDevice();
@@ -704,9 +909,11 @@ struct App {
     JsonObject a = o["auth"].as<JsonObject>();
     if (a.isNull()) a = o["auth"].to<JsonObject>();
     ImGui::SeparatorText("Web password");
+    formStart("##authform");
     input_bool_json(a, "enabled", "Require a password");
     input_text_json(a, "user", "User");
     input_text_json(a, "pass", "Password", true, "Blank keeps the current password");
+    formEnd();
     if (ImGui::Button("Save security settings")) saveConfig();
     ImGui::SeparatorText("Firmware");
     if (ImGui::Button("Choose .bin file...")) {
@@ -874,6 +1081,7 @@ struct App {
       l["c"] = "#ffffff";
     }
     selected = (int)draw.size() - 1;
+    viewDirty = true;
     previewDirty = true;
     syncJson();
   }
@@ -888,6 +1096,7 @@ struct App {
     dst["x"] = (src["x"] | 0) + 8;
     dst["y"] = (src["y"] | 0) + 8;
     selected = (int)draw.size() - 1;
+    viewDirty = true;
     previewDirty = true;
     syncJson();
   }
@@ -898,6 +1107,7 @@ struct App {
     pushUndo();
     draw.remove(selected);
     selected = std::min(selected, (int)draw.size() - 1);
+    viewDirty = true;
     previewDirty = true;
     syncJson();
   }
@@ -917,6 +1127,7 @@ struct App {
     draw[selected].set(db.as<JsonVariant>());
     draw[to].set(da.as<JsonVariant>());
     selected = to;
+    viewDirty = true;
     previewDirty = true;
     syncJson();
   }
@@ -928,6 +1139,7 @@ struct App {
     else if (!strcmp(mode, "top")) l["y"] = 4;
     else if (!strcmp(mode, "vcenter")) l["y"] = 120;
     else if (!strcmp(mode, "bottom")) l["y"] = 236;
+    viewDirty = true;
     previewDirty = true;
     syncJson();
   }
@@ -976,6 +1188,7 @@ struct App {
       char b[3];
       for (uint8_t v : out) { snprintf(b, sizeof(b), "%02X", v); hex += b; }
       l["d"] = hex.c_str();
+      viewDirty = true;
       previewDirty = true;
       syncJson();
     }
@@ -984,7 +1197,16 @@ struct App {
   void layerProperties() {
     JsonArray draw = view["draw"].as<JsonArray>();
     if (selected < 0 || selected >= (int)draw.size()) {
-      ImGui::TextDisabled("No layer selected");
+      ImGui::TextDisabled("Select a layer on the canvas or in the list.");
+      ImGui::Spacing();
+      ImGui::SeparatorText("View defaults");
+      JsonObject vo = view.as<JsonObject>();
+      color_edit_json(vo, "bg", "Background", "#0b1420");
+      input_int_json(vo, "pr", "Priority", 0, 255, 100);
+      input_int_json(vo, "ttl", "TTL (seconds)", 0, 86400, 15);
+      ImGui::TextDisabled("Layers: %d", (int)draw.size());
+      ImGui::Spacing();
+      ImGui::TextWrapped("Drag a layer to move it. Drag the bottom-right handle to resize.");
       return;
     }
     JsonObject l = draw[selected];
@@ -1060,20 +1282,91 @@ struct App {
     ImGui::SameLine();
     if (ImGui::Button("Bottom")) alignSelected(l, "bottom");
     if (changed) {
+      viewDirty = true;
       previewDirty = true;
       syncJson();
     }
   }
 
-  void editorCanvas() {
-    const float S = 2.0f;
-    ImGui::BeginChild("##canvaswrap", ImVec2(500, 540), true);
-    ImGui::Text("Dashboard canvas (240x240)");
+  void editorToolbar() {
+    if (theme::secondaryButton("Undo")) undo();
+    ImGui::SameLine();
+    if (theme::secondaryButton("Redo")) redo();
+    ImGui::SameLine();
+    if (theme::secondaryButton("Duplicate")) duplicateSelected();
+    ImGui::SameLine();
+    if (theme::secondaryButton("Delete")) deleteSelected();
+  }
+
+  void editorLayerPane() {
+    paneTitle("LAYERS");
+    ImGui::Spacing();
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::BeginCombo("##addlayer", "Add layer...")) {
+      const char* types[] = {"text", "rect", "rrect", "circle", "line", "icon", "bitmap", "usage", "fill"};
+      for (const char* t : types) if (ImGui::Selectable(t)) addLayer(t);
+      ImGui::EndCombo();
+    }
+    ImGui::Spacing();
+    JsonArray draw = view["draw"].as<JsonArray>();
+    ImGui::BeginChild("##layers", ImVec2(0, -42), true);
+    for (int i = (int)draw.size() - 1; i >= 0; i--) {
+      JsonObject l = draw[i];
+      char label[180];
+      const char* t = l["t"] | "?";
+      if (!strcmp(t, "text")) snprintf(label, sizeof(label), "%02d   TEXT   %s", i, (const char*)(l["v"] | ""));
+      else if (!strcmp(t, "usage")) snprintf(label, sizeof(label), "%02d   USAGE  %s", i, (const char*)(l["provider"] | ""));
+      else if (!strcmp(t, "icon")) snprintf(label, sizeof(label), "%02d   ICON   %s", i, (const char*)(l["v"] | ""));
+      else snprintf(label, sizeof(label), "%02d   %s", i, t);
+      if (ImGui::Selectable(label, selected == i, 0, ImVec2(0, 26))) selected = i;
+    }
+    ImGui::EndChild();
+    if (theme::secondaryButton("Up")) moveLayer(-1);
+    ImGui::SameLine();
+    if (theme::secondaryButton("Down")) moveLayer(1);
+    ImGui::SameLine();
+    if (theme::secondaryButton("Delete")) deleteSelected();
+  }
+
+  void editorActions() {
+    if (theme::secondaryButton("Load file", ImVec2(-1, 0))) {
+      dialog.openOpen("Load dashboard", ".json", [this](const std::string& p) { loadViewFile(p); });
+    }
+    if (theme::secondaryButton("Save file", ImVec2(-1, 0))) {
+      dialog.openSave("Save dashboard", ".json", "view.json", [this](const std::string& p) {
+        if (write_file(p, serializeView())) notify("Saved " + p);
+        else notify("Cannot write " + p);
+      });
+    }
+    if (theme::secondaryButton("Load device", ImVec2(-1, 0))) loadViewFromDevice();
+    if (theme::secondaryButton("Save device", ImVec2(-1, 0))) saveViewToDevice();
+    if (theme::secondaryButton("Send overlay", ImVec2(-1, 0))) sendOverlay(false);
+    if (theme::secondaryButton("Clear overlay", ImVec2(-1, 0))) sendOverlay(true);
+    if (theme::secondaryButton("Fetch usage", ImVec2(-1, 0))) loadUsage();
+    if (theme::secondaryButton("Copy JSON", ImVec2(-1, 0))) {
+      std::string s = serializeView();
+      ImGui::SetClipboardText(s.c_str());
+      notify("Dashboard JSON copied");
+    }
+    if (theme::secondaryButton(showJsonEditor ? "Hide JSON" : "Show JSON", ImVec2(-1, 0)))
+      showJsonEditor = !showJsonEditor;
+    if (showJsonEditor) {
+      ImGui::InputTextMultiline("##viewjson", viewJsonBuf, sizeof(viewJsonBuf), ImVec2(-1, 220));
+      if (theme::primaryButton("Apply JSON")) {
+        std::string err;
+        if (loadViewText(viewJsonBuf, err)) notify("JSON applied");
+        else notify("JSON error: " + err);
+      }
+    }
+  }
+
+  void editorCanvas(float side) {
+    const float S = side / 240.0f;
     if (previewDirty) refreshPreview();
     ImVec2 imgPos = ImGui::GetCursorScreenPos();
-    ImGui::Image((ImTextureID)(intptr_t)g_texture, ImVec2(240 * S, 240 * S));
+    ImGui::Image((ImTextureID)(intptr_t)g_texture, ImVec2(side, side));
     ImGui::SetCursorScreenPos(imgPos);
-    ImGui::InvisibleButton("##canvas", ImVec2(240 * S, 240 * S));
+    ImGui::InvisibleButton("##canvas", ImVec2(side, side));
     bool hovered = ImGui::IsItemHovered();
     bool active = ImGui::IsItemActive();
     ImVec2 mouse = ImGui::GetIO().MousePos;
@@ -1081,7 +1374,7 @@ struct App {
     float my = (mouse.y - imgPos.y) / S;
 
     JsonArray draw = view["draw"].as<JsonArray>();
-    static int dragMode = 0; // 1 move, 2 resize
+    static int dragMode = 0;
     static bool undoPushed = false;
     static ImVec2 press{};
     if (ImGui::IsItemClicked(0)) {
@@ -1126,6 +1419,7 @@ struct App {
         l["y"] = (int)((l["y"] | 0) + dy);
       }
       press = ImVec2(mx, my);
+      viewDirty = true;
       previewDirty = true;
       syncJson();
     }
@@ -1154,7 +1448,6 @@ struct App {
       }
     }
     if (!viewError.empty()) ImGui::TextColored(ImVec4(1, .4f, .4f, 1), "%s", viewError.c_str());
-    ImGui::EndChild();
   }
 
   void editor() {
@@ -1167,153 +1460,312 @@ struct App {
       if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y, false)) redo();
       if (ImGui::IsKeyPressed(ImGuiKey_Delete, false)) deleteSelected();
     }
-    ImGui::BeginChild("##editorleft", ImVec2(500, 0), false);
-    editorCanvas();
-    ImGui::EndChild();
-    ImGui::SameLine();
-    ImGui::BeginChild("##editorright", ImVec2(0, 0), false);
-    if (ImGui::Button("Undo")) undo();
-    ImGui::SameLine();
-    if (ImGui::Button("Redo")) redo();
-    ImGui::SameLine();
-    if (ImGui::Button("Delete")) deleteSelected();
-    ImGui::SameLine();
-    if (ImGui::Button("Duplicate")) duplicateSelected();
-    ImGui::SameLine();
-    if (ImGui::Button("Up")) moveLayer(-1);
-    ImGui::SameLine();
-    if (ImGui::Button("Down")) moveLayer(1);
-    if (ImGui::BeginCombo("Add layer", "Choose...")) {
-      const char* types[] = {"text", "rect", "rrect", "circle", "line", "icon", "bitmap", "usage", "fill"};
-      for (const char* t : types) if (ImGui::Selectable(t)) addLayer(t);
-      ImGui::EndCombo();
-    }
-    ImGui::SeparatorText("Layers");
-    JsonArray draw = view["draw"].as<JsonArray>();
-    ImGui::BeginChild("##layers", ImVec2(0, 150), true);
-    for (int i = (int)draw.size() - 1; i >= 0; i--) {
-      JsonObject l = draw[i];
-      char label[160];
-      const char* t = l["t"] | "?";
-      if (!strcmp(t, "text")) snprintf(label, sizeof(label), "%d  text  %s", i, (const char*)(l["v"] | ""));
-      else if (!strcmp(t, "usage")) snprintf(label, sizeof(label), "%d  usage  %s", i, (const char*)(l["provider"] | ""));
-      else if (!strcmp(t, "icon")) snprintf(label, sizeof(label), "%d  icon  %s", i, (const char*)(l["v"] | ""));
-      else snprintf(label, sizeof(label), "%d  %s", i, t);
-      if (ImGui::Selectable(label, selected == i)) selected = i;
-    }
-    ImGui::EndChild();
-    ImGui::SeparatorText("Properties");
+    ImGui::BeginChild("##designbody", ImVec2(0, 0), false);
+    const ImVec2 avail = ImGui::GetContentRegionAvail();
+    const float gap = 12.0f;
+    const float leftW = avail.x > 920 ? 220.0f : 190.0f;
+    const float rightW = avail.x > 920 ? 300.0f : 260.0f;
+    const float centerW = std::max(240.0f, avail.x - leftW - rightW - 2.0f * gap);
+    beginPane("##layerspane", ImVec2(leftW, avail.y), true);
+    editorLayerPane();
+    endPane();
+    ImGui::SameLine(0, gap);
+    beginPane("##canvaspane", ImVec2(centerW, avail.y), false);
+    drawGrid(IM_COL32(42, 47, 54, 65));
+    editorToolbar();
+    ImGui::Separator();
+    ImGui::Spacing();
+    const ImVec2 cav = ImGui::GetContentRegionAvail();
+    const float side = std::max(120.0f, std::min(560.0f, std::min(cav.x - 4.0f, cav.y - 46.0f)));
+    const float cx = ImGui::GetCursorPosX() + (cav.x - side) * 0.5f;
+    const float cy = ImGui::GetCursorPosY() + std::max(0.0f, (cav.y - 40.0f - side) * 0.5f);
+    ImGui::SetCursorPos(ImVec2(cx, cy));
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    theme::panel(ImGui::GetWindowDrawList(), ImVec2(p.x - 8, p.y - 8),
+                 ImVec2(p.x + side + 8, p.y + side + 8), theme::surfaceAlt(), theme::border());
+    editorCanvas(side);
+    ImGui::SetCursorPosY(ImGui::GetWindowHeight() - 26);
+    ImGui::TextDisabled("240 × 240  ·  %d layers  ·  %s",
+                        (int)view["draw"].as<JsonArray>().size(),
+                        viewError.empty() ? "ready" : viewError.c_str());
+    endPane();
+    ImGui::SameLine(0, gap);
+    beginPane("##inspectorpane", ImVec2(rightW, avail.y), true);
+    paneTitle("INSPECTOR");
+    ImGui::Spacing();
     layerProperties();
-    ImGui::SeparatorText("File / device");
-    if (ImGui::Button("Load file")) {
-      dialog.openOpen("Load dashboard", ".json", [this](const std::string& p) { loadViewFile(p); });
+    ImGui::Spacing();
+    ImGui::Separator();
+    if (ImGui::CollapsingHeader("File & device")) {
+      ImGui::Spacing();
+      editorActions();
     }
-    ImGui::SameLine();
-    if (ImGui::Button("Save file")) {
-      dialog.openSave("Save dashboard", ".json", "view.json", [this](const std::string& p) {
-        if (write_file(p, serializeView())) notify("Saved " + p);
-        else notify("Cannot write " + p);
-      });
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Load device")) loadViewFromDevice();
-    ImGui::SameLine();
-    if (ImGui::Button("Save device")) saveViewToDevice();
-    if (ImGui::Button("Send overlay")) sendOverlay(false);
-    ImGui::SameLine();
-    if (ImGui::Button("Clear overlay")) sendOverlay(true);
-    ImGui::SameLine();
-    if (ImGui::Button("Fetch usage")) loadUsage();
-    ImGui::SameLine();
-    if (ImGui::Button("Copy JSON")) {
-      std::string s = serializeView();
-      ImGui::SetClipboardText(s.c_str());
-      notify("Dashboard JSON copied");
-    }
-    if (ImGui::Button(showJsonEditor ? "Hide JSON" : "Show JSON")) showJsonEditor = !showJsonEditor;
-    if (showJsonEditor) {
-      ImGui::InputTextMultiline("##viewjson", viewJsonBuf, sizeof(viewJsonBuf),
-                                ImVec2(0, 180));
-      if (ImGui::Button("Apply JSON from buffer")) {
-        std::string err;
-        if (loadViewText(viewJsonBuf, err)) notify("JSON applied");
-        else notify("JSON error: " + err);
-      }
-    }
+    endPane();
     ImGui::EndChild();
   }
 
   // ---- root --------------------------------------------------------------
-  void header() {
-    if (ImGui::Button("Scan")) scan();
-    ImGui::SameLine();
-    if (manager.scanning()) { ImGui::TextDisabled("scanning..."); ImGui::SameLine(); }
-    ImGui::SetNextItemWidth(220);
-    if (ImGui::BeginCombo("##devices", selectedDevice >= 0 && selectedDevice < (int)devices.size()
-                              ? devices[selectedDevice].name.c_str() : "Select a device")) {
-      for (int i = 0; i < (int)devices.size(); i++) {
-        std::string label = devices[i].name + "  (" + devices[i].ip + ")" +
-                            (devices[i].auth ? "  [auth]" : "  " + devices[i].version);
-        if (ImGui::Selectable(label.c_str(), selectedDevice == i)) {
-          selectedDevice = i;
-          snprintf(deviceUrl, sizeof(deviceUrl), "http://%s", devices[i].ip.c_str());
-        }
-      }
-      ImGui::EndCombo();
+  void deviceRow(int i) {
+    const EmuDevice& d = devices[i];
+    ImGui::PushID(i);
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const float w = ImGui::GetContentRegionAvail().x;
+    ImGui::InvisibleButton("##row", ImVec2(w, 48));
+    const bool hovered = ImGui::IsItemHovered();
+    const bool selected = selectedDevice == i;
+    if (ImGui::IsItemClicked()) {
+      selectedDevice = i;
+      snprintf(deviceUrl, sizeof(deviceUrl), "http://%s", d.ip.c_str());
     }
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(200);
-    ImGui::InputText("##url", deviceUrl, sizeof(deviceUrl));
-    ImGui::SameLine();
-    if (ImGui::Button("Connect")) connect();
-    ImGui::SameLine();
-    if (ImGui::Button("Refresh")) { loadStatus(); loadUsage(); }
-    ImGui::SameLine();
-    ImGui::TextColored(connected ? ImVec4(.4f, .9f, .5f, 1) : ImVec4(.7f, .7f, .7f, 1),
-                       connected ? "connected" : "offline");
-    ImGui::SetNextItemWidth(130);
-    ImGui::InputTextWithHint("##user", "web user", authUser, sizeof(authUser));
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(150);
-    ImGui::InputTextWithHint("##pass", "web password", authPass, sizeof(authPass), ImGuiInputTextFlags_Password);
-    ImGui::SameLine();
-    ImGui::TextDisabled("HTTP Digest auth is used when the device asks for it.");
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    if (selected || hovered) {
+      dl->AddRectFilled(p, ImVec2(p.x + w, p.y + 44),
+                        selected ? theme::surfaceAlt() : IM_COL32(28, 32, 38, 140), 5.0f);
+      if (selected) dl->AddRectFilled(p, ImVec2(p.x + 3, p.y + 44), theme::accent(), 2.0f);
+    }
+    dl->AddCircleFilled(ImVec2(p.x + 12, p.y + 14), 3.5f,
+                        connected && selected ? theme::success() : theme::muted());
+    dl->AddText(ImVec2(p.x + 22, p.y + 7), theme::text(), d.name.c_str());
+    char sub[160];
+    snprintf(sub, sizeof(sub), "%s  ·  %s", d.ip.c_str(), d.version.c_str());
+    dl->AddText(ImVec2(p.x + 22, p.y + 25), theme::muted(), sub);
+    ImGui::PopID();
   }
 
-  void tabDashboard() {
-    if (previewDirty) refreshPreview();
-    ImGui::BeginChild("##dashleft", ImVec2(500, 0), false);
-    ImGui::Image((ImTextureID)(intptr_t)g_texture, ImVec2(480, 480));
-    ImGui::TextDisabled("Live local dashboard preview");
+  void deviceList() {
+    paneTitle("DEVICES");
+    static char search[96] = "";
+    ImGui::SetNextItemWidth(-1);
+    ImGui::InputTextWithHint("##devsearch", "Search devices", search, sizeof(search));
+    ImGui::Spacing();
+    ImGui::BeginChild("##devicelist", ImVec2(0, -196), true);
+    if (connected && selectedDevice < 0) {
+      ImGui::TextDisabled("CURRENT SESSION");
+      ImGui::TextWrapped("%s", deviceUrl);
+      ImGui::Separator();
+    }
+    int shown = 0;
+    for (int i = 0; i < (int)devices.size(); i++) {
+      if (search[0]) {
+        std::string hay = devices[i].name + " " + devices[i].ip + " " + devices[i].version;
+        std::string needle = search;
+        for (auto& ch : hay) ch = (char)tolower((unsigned char)ch);
+        for (auto& ch : needle) ch = (char)tolower((unsigned char)ch);
+        if (hay.find(needle) == std::string::npos) continue;
+      }
+      deviceRow(i);
+      shown++;
+    }
+    if (!shown) {
+      ImGui::Spacing();
+      ImGui::TextDisabled("No devices found.");
+      if (theme::secondaryButton("Scan subnet")) scan();
+    }
     ImGui::EndChild();
-    ImGui::SameLine();
-    ImGui::BeginChild("##dashright", ImVec2(0, 0), false);
-    if (ImGui::Button("Refresh status")) loadStatus();
-    ImGui::SameLine();
-    if (ImGui::Button("Refresh usage")) loadUsage();
-    ImGui::SeparatorText("Status");
-    if (status.empty()) ImGui::TextDisabled("Connect to a device to see live status.");
-    else ImGui::TextUnformatted(status.c_str());
-    ImGui::SeparatorText("Usage");
-    if (usage.empty()) ImGui::TextDisabled("No usage data.");
-    else ImGui::TextUnformatted(usage.c_str());
+    ImGui::Separator();
+    ImGui::TextDisabled("MANUAL CONNECTION");
+    ImGui::Spacing();
+    ImGui::SetNextItemWidth(-1);
+    ImGui::InputTextWithHint("##listurl", "http://device.local", deviceUrl, sizeof(deviceUrl));
+    ImGui::SetNextItemWidth(-1);
+    ImGui::InputTextWithHint("##listuser", "web user", authUser, sizeof(authUser));
+    ImGui::SetNextItemWidth(-1);
+    ImGui::InputTextWithHint("##listpass", "web password", authPass, sizeof(authPass), ImGuiInputTextFlags_Password);
+    if (theme::primaryButton("Connect", ImVec2(-1, 0))) connect();
+    if (theme::secondaryButton("Scan for devices", ImVec2(-1, 0))) scan();
+  }
+
+  void deviceStage() {
+    if (previewDirty) refreshPreview();
+    drawGrid(IM_COL32(42, 47, 54, 70));
+    paneTitle("PREVIEW", connected ? "live firmware render" : "local render");
+    ImGui::SameLine(ImGui::GetContentRegionMax().x - 94.0f);
+    if (theme::secondaryButton("Open Design")) tab = 1;
+    ImGui::SetCursorPosX(14);
+    ImGui::Spacing();
+    const ImVec2 avail = ImGui::GetContentRegionAvail();
+    const float side = std::max(120.0f, std::min(480.0f, std::min(avail.x - 4.0f, avail.y - 76.0f)));
+    const float x = ImGui::GetCursorPosX() + (avail.x - side) * 0.5f;
+    const float yoff = std::max(0.0f, (avail.y - 74.0f - side) * 0.5f);
+    ImGui::SetCursorPos(ImVec2(x, ImGui::GetCursorPosY() + yoff));
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    theme::panel(ImGui::GetWindowDrawList(), ImVec2(p.x - 6, p.y - 6),
+                 ImVec2(p.x + side + 6, p.y + side + 6), theme::surfaceAlt(), theme::border());
+    ImGui::Image((ImTextureID)(intptr_t)g_texture, ImVec2(side, side));
+    ImGui::Spacing();
+    JsonDocument sd;
+    if (!status.empty() && !deserializeJson(sd, status) && sd.is<JsonObject>()) {
+      char line[220];
+      snprintf(line, sizeof(line), "%s  ·  %s  ·  %s",
+               (const char*)(sd["hostname"] | "device"),
+               (const char*)(sd["ip"] | "-"),
+               (const char*)(sd["mode"] | "unknown"));
+      ImGui::SetCursorPosX(x);
+      ImGui::TextDisabled("%s", line);
+    } else {
+      ImGui::SetCursorPosX(x);
+      ImGui::TextDisabled("No device connected");
+    }
+    ImGui::Spacing();
+    ImGui::SetCursorPosX(x);
+    if (theme::secondaryButton("Load device view")) loadViewFromDevice();
+  }
+
+  void deviceInspector() {
+    beginPane("##inspector", ImVec2(0, 0), true);
+    paneTitle("INSPECTOR");
+    ImGui::Spacing();
+    theme::sectionLabel("STATUS");
+    ImGui::Spacing();
+    JsonDocument sd;
+    const bool hasStatus = !status.empty() && !deserializeJson(sd, status) && sd.is<JsonObject>();
+    if (!hasStatus) {
+      ImGui::TextDisabled("No live status.");
+      ImGui::TextWrapped("Connect a device to load telemetry.");
+    } else {
+      if (ImGui::BeginTable("##statusrows", 2, ImGuiTableFlags_SizingStretchProp)) {
+        ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthFixed, 78.0f);
+        ImGui::TableSetupColumn("v");
+        auto row = [](const char* k, const char* v) {
+          ImGui::TableNextRow();
+          ImGui::TableSetColumnIndex(0); ImGui::TextDisabled("%s", k);
+          ImGui::TableSetColumnIndex(1); ImGui::TextUnformatted(v && *v ? v : "-");
+        };
+        char sig[32], heap[32], up[48];
+        snprintf(sig, sizeof(sig), "%d dBm", (int)(sd["rssi"] | 0));
+        snprintf(heap, sizeof(heap), "%u B", (unsigned)(sd["heap"] | 0));
+        uint32_t sec = sd["uptime"] | 0;
+        snprintf(up, sizeof(up), "%ud %02u:%02u", sec / 86400, (sec / 3600) % 24, (sec / 60) % 60);
+        row("Hostname", sd["hostname"] | "-");
+        row("Firmware", sd["version"] | "-");
+        row("Variant", sd["variant"] | "-");
+        row("Mode", sd["mode"] | "-");
+        row("SSID", sd["ssid"] | "-");
+        row("IP", sd["ip"] | "-");
+        row("Signal", sig);
+        row("Heap", heap);
+        row("Uptime", up);
+        ImGui::EndTable();
+      }
+    }
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+    theme::sectionLabel("USAGE");
+    ImGui::Spacing();
+    JsonDocument ud;
+    JsonArray providers = (!usage.empty() && !deserializeJson(ud, usage) && ud.is<JsonObject>())
+                              ? ud["providers"].as<JsonArray>() : JsonArray();
+    if (providers.isNull() || providers.size() == 0) {
+      ImGui::TextDisabled("No usage data.");
+    } else {
+      for (JsonObject p : providers) {
+        const char* id = p["id"] | "provider";
+        ImGui::PushID(id);
+        ImGui::TextUnformatted((const char*)(p["name"] | id));
+        const bool valid = p["valid"] | p["ok"] | false;
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s", valid ? "ok" : "stale");
+        JsonArray ms = p["metrics"].as<JsonArray>();
+        for (JsonObject m : ms) {
+          int pct = std::max(0, std::min(100, (int)(m["pct"] | 0)));
+          ImGui::TextDisabled("%s", (const char*)(m["label"] | "usage"));
+          ImGui::SameLine(ImGui::GetContentRegionAvail().x - 34);
+          ImGui::Text("%d%%", pct);
+          ImGui::ProgressBar(pct / 100.0f, ImVec2(-1, 5), "");
+        }
+        ImGui::PopID();
+      }
+    }
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+    theme::sectionLabel("MAINTENANCE");
+    ImGui::Spacing();
+    if (theme::secondaryButton("Refresh telemetry", ImVec2(-1, 0))) {
+      loadStatus();
+      loadUsage();
+    }
+    if (theme::secondaryButton("Reload configuration", ImVec2(-1, 0))) loadConfig();
+    if (theme::secondaryButton("Scan devices", ImVec2(-1, 0))) scan();
+    endPane();
+  }
+
+  void deviceScreen() {
+    ImGui::BeginChild("##devicebody", ImVec2(0, 0), false);
+    const ImVec2 avail = ImGui::GetContentRegionAvail();
+    const float gap = 12.0f;
+    const float leftW = 250.0f;
+    const float rightW = 300.0f;
+    const float centerW = std::max(220.0f, avail.x - leftW - rightW - 2.0f * gap);
+    beginPane("##devices", ImVec2(leftW, avail.y), true);
+    deviceList();
+    endPane();
+    ImGui::SameLine(0, gap);
+    beginPane("##stage", ImVec2(centerW, avail.y), true);
+    deviceStage();
+    endPane();
+    ImGui::SameLine(0, gap);
+    deviceInspector();
     ImGui::EndChild();
   }
 
   void settings() {
+    ImGui::BeginChild("##settingsbody", ImVec2(0, 0), false);
+    const ImVec2 avail = ImGui::GetContentRegionAvail();
+    const float gap = 12.0f;
+    const float navW = 190.0f;
+    beginPane("##settingsnav", ImVec2(navW, avail.y), true);
+    paneTitle("SETTINGS");
+    ImGui::Spacing();
+    const char* items[] = {"WiFi", "Display", "View", "System", "JSON"};
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, 4));
+    for (int i = 0; i < 5; i++) {
+      ImGui::PushID(i);
+      const ImVec2 p = ImGui::GetCursorScreenPos();
+      const float w = ImGui::GetContentRegionAvail().x;
+      const float h = 32.0f;
+      ImGui::InvisibleButton("##nav", ImVec2(w, h));
+      const bool hovered = ImGui::IsItemHovered();
+      if (ImGui::IsItemClicked()) settingsTab = i;
+      ImDrawList* dl = ImGui::GetWindowDrawList();
+      if (settingsTab == i) {
+        dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), theme::surfaceAlt());
+        dl->AddRectFilled(p, ImVec2(p.x + 2, p.y + h), theme::accent());
+      } else if (hovered) {
+        dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), IM_COL32(26, 30, 36, 255));
+      }
+      const ImVec2 ts = ImGui::CalcTextSize(items[i]);
+      dl->AddText(ImVec2(p.x + 14, p.y + (h - ts.y) * 0.5f),
+                  settingsTab == i ? theme::accent() : theme::muted(), items[i]);
+      ImGui::PopID();
+    }
+    ImGui::PopStyleVar();
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextDisabled("Changes are written to the device.");
+    ImGui::PopTextWrapPos();
+    endPane();
+    ImGui::SameLine(0, gap);
+    beginPane("##settingsform", ImVec2(0, avail.y), true);
     if (!cfgLoaded) {
-      ImGui::TextDisabled("Connect to a device to load its settings.");
-      if (ImGui::Button("Load configuration")) loadConfig();
-      return;
+      paneTitle("CONFIGURATION");
+      ImGui::TextDisabled("Connect to load the editable configuration.");
+      if (theme::primaryButton("Load configuration")) loadConfig();
+    } else {
+      const char* titles[] = {"WiFi", "Display", "View", "System", "JSON"};
+      paneTitle("SETTINGS", titles[settingsTab]);
+      ImGui::Spacing();
+      if (settingsTab == 0) settingsWifi();
+      else if (settingsTab == 1) settingsDisplay();
+      else if (settingsTab == 2) settingsView();
+      else if (settingsTab == 3) settingsSystem();
+      else settingsJson();
     }
-    if (ImGui::BeginTabBar("##settings")) {
-      if (ImGui::BeginTabItem("WiFi")) { settingsWifi(); ImGui::EndTabItem(); }
-      if (ImGui::BeginTabItem("Display")) { settingsDisplay(); ImGui::EndTabItem(); }
-      if (ImGui::BeginTabItem("View")) { settingsView(); ImGui::EndTabItem(); }
-      if (ImGui::BeginTabItem("System")) { settingsSystem(); ImGui::EndTabItem(); }
-      if (ImGui::BeginTabItem("JSON")) { settingsJson(); ImGui::EndTabItem(); }
-      ImGui::EndTabBar();
-    }
+    endPane();
+    ImGui::EndChild();
   }
 
   void draw() {
@@ -1324,26 +1776,36 @@ struct App {
       if (ok) notify("Firmware uploaded; device is restarting");
       else notify("Firmware upload failed: " + uploadError);
     }
+    if (forceTab >= 0) { tab = forceTab; forceTab = -1; }
     const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::GetBackgroundDrawList()->AddRectFilled(vp->WorkPos,
+        ImVec2(vp->WorkPos.x + vp->WorkSize.x, vp->WorkPos.y + vp->WorkSize.y),
+        theme::bg());
     ImGui::SetNextWindowPos(vp->WorkPos);
     ImGui::SetNextWindowSize(vp->WorkSize);
-    ImGui::Begin("SmallTV", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
-                                      ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings);
-    header();
-    ImGui::Separator();
-    if (ImGui::BeginTabBar("##tabs")) {
-      ImGuiTabItemFlags f0 = forceTab == 0 ? ImGuiTabItemFlags_SetSelected : 0;
-      ImGuiTabItemFlags f1 = forceTab == 1 ? ImGuiTabItemFlags_SetSelected : 0;
-      ImGuiTabItemFlags f2 = forceTab == 2 ? ImGuiTabItemFlags_SetSelected : 0;
-      if (ImGui::BeginTabItem("Dashboard", nullptr, f0)) { tab = 0; tabDashboard(); ImGui::EndTabItem(); }
-      if (ImGui::BeginTabItem("Editor", nullptr, f1)) { tab = 1; editor(); ImGui::EndTabItem(); }
-      if (ImGui::BeginTabItem("Settings", nullptr, f2)) { tab = 2; settings(); ImGui::EndTabItem(); }
-      ImGui::EndTabBar();
-      forceTab = -1;
-    }
-    if (!toast.empty() && SDL_GetTicks() < toastUntil)
-      ImGui::TextColored(ImVec4(1, .85f, .3f, 1), "%s", toast.c_str());
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::Begin("SmallTV", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                     ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings |
+                     ImGuiWindowFlags_NoBackground);
+    const float margin = 12.0f;
+    const float topbarH = 56.0f;
+    ImGui::SetCursorPos(ImVec2(margin, margin));
+    beginPane("##topbar", ImVec2(ImGui::GetContentRegionAvail().x - margin, topbarH), false);
+    topbar();
+    endPane();
+
+    ImGui::SetCursorPos(ImVec2(margin, margin + topbarH + 12.0f));
+    const ImVec2 pageAvail = ImGui::GetContentRegionAvail();
+    const float pageH = std::max(120.0f, pageAvail.y - margin);
+    ImGui::BeginChild("##page", ImVec2(pageAvail.x - margin, pageH), false);
+    if (tab == 0) deviceScreen();
+    else if (tab == 1) editor();
+    else settings();
+    ImGui::EndChild();
     ImGui::End();
+    ImGui::PopStyleVar();
+    toastWindow();
     dialog.draw();
   }
 };
@@ -1354,6 +1816,7 @@ int main(int argc, char** argv) {
   const char* screenshot = nullptr;
   const char* timeText = nullptr;
   const char* tabText = nullptr;
+  const char* settingsTabText = nullptr;
   const char* connectUrl = nullptr;
   const char* connectUser = nullptr;
   const char* connectPass = nullptr;
@@ -1364,6 +1827,7 @@ int main(int argc, char** argv) {
     else if (!strcmp(argv[i], "--time") && i + 1 < argc) timeText = argv[++i];
     else if (!strcmp(argv[i], "--screenshot") && i + 1 < argc) screenshot = argv[++i];
     else if (!strcmp(argv[i], "--tab") && i + 1 < argc) tabText = argv[++i];
+    else if (!strcmp(argv[i], "--settings-tab") && i + 1 < argc) settingsTabText = argv[++i];
     else if (!strcmp(argv[i], "--url") && i + 1 < argc) connectUrl = argv[++i];
     else if (!strcmp(argv[i], "--user") && i + 1 < argc) connectUser = argv[++i];
     else if (!strcmp(argv[i], "--pass") && i + 1 < argc) connectPass = argv[++i];
@@ -1426,15 +1890,24 @@ int main(int argc, char** argv) {
   io.IniFilename = nullptr;
   io.FontGlobalScale = 1.0f;
   ImGui::StyleColorsDark();
+  const std::string assetsDir = find_assets_dir();
+  theme::init(renderer, assetsDir);
   ImGui_ImplSDL2_InitForSDLRenderer(window, renderer);
   ImGui_ImplSDLRenderer2_Init(renderer);
 
   App app;
   app.initialViewPath = viewPath;
   if (tabText) {
-    if (!strcmp(tabText, "editor")) app.forceTab = 1;
+    if (!strcmp(tabText, "design") || !strcmp(tabText, "editor")) app.forceTab = 1;
     else if (!strcmp(tabText, "settings")) app.forceTab = 2;
     else app.forceTab = 0;
+  }
+  if (settingsTabText) {
+    if (!strcmp(settingsTabText, "display")) app.settingsTab = 1;
+    else if (!strcmp(settingsTabText, "view")) app.settingsTab = 2;
+    else if (!strcmp(settingsTabText, "system")) app.settingsTab = 3;
+    else if (!strcmp(settingsTabText, "json")) app.settingsTab = 4;
+    else app.settingsTab = 0;
   }
   app.manager.discover();
   app.initView();
@@ -1474,6 +1947,7 @@ int main(int argc, char** argv) {
 
   ImGui_ImplSDLRenderer2_Shutdown();
   ImGui_ImplSDL2_Shutdown();
+  theme::shutdown();
   ImGui::DestroyContext();
   SDL_DestroyTexture(texture);
   SDL_DestroyRenderer(renderer);

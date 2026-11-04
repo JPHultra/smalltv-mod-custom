@@ -27,6 +27,7 @@ CPPFLAGS += -DSMALLTV_ESP8266 -DARDUINOJSON_ENABLE_ARDUINO_STRING=1 \
 LDLIBS += $(SDL_LIBS) -pthread
 
 SRCS := $(ROOT)/emulator/main.cpp \
+        $(ROOT)/emulator/theme.cpp \
         $(ROOT)/emulator/gfx.cpp \
         $(ROOT)/emulator/manager.cpp \
         $(ROOT)/src/features/view/ViewModel.cpp \
