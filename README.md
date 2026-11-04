@@ -85,17 +85,23 @@ python3 tools/package_emulator.py \
   --windows-bin /path/to/smalltv-emulator.exe \
   --sdl2-dll /path/to/SDL2.dll
 python3 tools/ci_checks.py assets
+python3 tools/verify_update.py --local-only --from-version <previous-version>
 git add src/config.h
 git commit -m "Bump FW_VERSION to X.Y.Z-custom"
 git push origin main
 git tag vX.Y.Z-custom
 git push origin vX.Y.Z-custom
-gh release create vX.Y.Z-custom dist/* --title "vX.Y.Z-custom" --notes "Release notes"
+gh release create vX.Y.Z-custom dist/* --title "vX.Y.Z-custom" \
+  --notes "Release notes" --prerelease
+python3 tools/verify_update.py --tag vX.Y.Z-custom \
+  --from-version <previous-version>
+gh release edit vX.Y.Z-custom --prerelease=false --latest
 ```
 
 The eight firmware assets plus the two emulator packages are attached to the
 release by `gh`; keep the firmware names unchanged because the firmware's
-`UPDATE_ASSET` values point at them.
+`UPDATE_ASSET` values point at them. Verify the prerelease before promoting it
+to latest so a broken asset list never becomes the self-update target.
 
 ## Dashboard emulator
 
