@@ -1,6 +1,7 @@
 #include "WebPortal.h"
 #include "Platform.h"
 #include "DiagLog.h"
+#include "UpdateStatus.h"
 #include "WebGuard.h"
 #include <ArduinoJson.h>
 #include <LittleFS.h>
@@ -173,6 +174,17 @@ static void handleStatus() {
   o["uptime"] = millis() / 1000;
   o["reset"] = appResetReason();
   o["synced"] = clockSynced();
+
+  const update_status::Snapshot up = update_status::snapshot();
+  JsonObject uo = o["update"].to<JsonObject>();
+  uo["active"] = up.active;
+  uo["phase"] = up.phaseName;
+  uo["progress"] = up.progress;
+  uo["downloaded"] = up.downloaded;
+  uo["total"] = up.total;
+  uo["target"] = up.target;
+  uo["message"] = up.message;
+  uo["error"] = up.error;
   { String ts = clockTimeStr(); if (ts.length()) o["time"] = ts; }
   o["tz"] = S->clock.tz;
   o["night"] = clockNightActive();
@@ -312,7 +324,16 @@ static void handleImport() {
 
 static void handleCheckUpdate() {
   if (!requireAuth()) return;
+  update_status::setChecking();
   OtaLatest r = otaCheckLatest(*S);
+  if (!r.ok) {
+    update_status::fail("check failed: " + r.error);
+  } else if (!r.newer) {
+    update_status::complete("up to date (" FW_VERSION ")");
+  } else {
+    update_status::setTarget(r.tag);
+    update_status::setPhase(update_status::IDLE, "Update available");
+  }
   JsonDocument doc;
   JsonObject o = doc.to<JsonObject>();
   o["current"] = FW_VERSION;
@@ -326,6 +347,7 @@ static void handleCheckUpdate() {
 static void handleSelfUpdate() {
   if (!requireAuth()) return;
   diag::info("ota", "self-update requested");
+  update_status::setChecking();
   g_selfUpdate = true;
   g_updateMsg = "starting...";
   server.send(200, "application/json", "{\"ok\":true}");
@@ -435,8 +457,13 @@ static void handleViewClear() {
 static void handleUpdateDone() {
   if (!requireAuth()) return;
   bool ok = !Update.hasError();
-  if (ok) diag::info("ota", "manual upload complete");
-  else diag::error("ota", "manual upload failed: %s", platformUpdateError().c_str());
+  if (ok) {
+    diag::info("ota", "manual upload complete");
+    update_status::setPhase(update_status::REBOOTING, "Upload complete; restarting");
+  } else {
+    diag::error("ota", "manual upload failed: %s", platformUpdateError().c_str());
+    update_status::fail("manual upload failed: " + platformUpdateError());
+  }
   server.sendHeader("Connection", "close");
   server.send(ok ? 200 : 500, "text/plain", ok ? "OK" : platformUpdateError().c_str());
   if (ok) scheduleReboot(1200);
@@ -454,6 +481,7 @@ static void handleUpdateUpload() {
     return;
   }
   if (up.status == UPLOAD_FILE_START) {
+    update_status::setPhase(update_status::DOWNLOADING, "Receiving firmware upload");
 #if defined(SMALLTV_FAMILY_ESP8266)
     WiFiUDP::stopAll();
 #endif
@@ -461,20 +489,25 @@ static void handleUpdateUpload() {
     if (!Update.begin(maxSpace)) {
       Update.printError(Serial);
       diag::error("ota", "upload begin failed: %s", platformUpdateError().c_str());
+      update_status::fail("Could not start firmware update");
     }
   } else if (up.status == UPLOAD_FILE_WRITE) {
     if (Update.write(up.buf, up.currentSize) != up.currentSize) {
       Update.printError(Serial);
       diag::error("ota", "upload write failed: %s", platformUpdateError().c_str());
+      update_status::fail("Firmware upload write failed");
     }
   } else if (up.status == UPLOAD_FILE_END) {
+    update_status::setPhase(update_status::INSTALLING, "Installing firmware");
     if (!Update.end(true)) {
       Update.printError(Serial);
       diag::error("ota", "upload end failed: %s", platformUpdateError().c_str());
+      update_status::fail("Firmware installation failed");
     }
   } else if (up.status == UPLOAD_FILE_ABORTED) {
     Update.end();
     diag::warn("ota", "manual upload aborted");
+    update_status::fail("Firmware upload aborted");
   }
   yield();
 }
@@ -493,7 +526,10 @@ static void handleNotFound() {
 void webPortalBegin(Settings& settings) {
   S = &settings;
   g_updateMsg = otaTakeBootResult();
-  if (g_updateMsg.length()) diag::warn("ota", "boot result: %s", g_updateMsg.c_str());
+  if (g_updateMsg.length()) {
+    diag::warn("ota", "boot result: %s", g_updateMsg.c_str());
+    update_status::bootResult(g_updateMsg);
+  }
 
   server.on("/", HTTP_GET, handleRoot);
   server.on("/api/config", HTTP_GET, handleGetConfig);
@@ -546,25 +582,37 @@ void webPortalLoop() {
   if (g_selfUpdate) {
     g_selfUpdate = false;
 #if defined(SMALLTV_FAMILY_ESP8266)
+    update_status::setChecking();
     OtaLatest r = otaCheckLatest(*S);
     if (!r.ok) {
       g_updateMsg = "check failed: " + r.error;
+      update_status::fail("check failed: " + r.error);
       diag::error("ota", "self update check: %s", r.error.c_str());
     } else if (!r.newer) {
       g_updateMsg = "already up to date (" FW_VERSION ")";
+      update_status::complete("already up to date (" FW_VERSION ")");
       diag::info("ota", "already up to date");
     } else if (otaRequestBootUpdate(r.tag.c_str())) {
+      update_status::setTarget(r.tag);
+      update_status::setPhase(update_status::REBOOTING,
+                              "Rebooting; update continues at boot");
       g_updateMsg = "updating...";
       scheduleReboot(400);
     } else {
       g_updateMsg = F("could not queue update (storage error)");
+      update_status::fail("Could not queue update (storage error)");
       diag::error("ota", "could not queue update");
     }
 #else
     String err = otaUpdateFromGitHub(*S);
     g_updateMsg = err.length() ? err : "updating...";
-    if (err.length()) diag::error("ota", "self update: %s", err.c_str());
-    else diag::info("ota", "self update started");
+    if (err.length()) {
+      update_status::fail(err);
+      diag::error("ota", "self update: %s", err.c_str());
+    } else {
+      update_status::setPhase(update_status::REBOOTING, "Restarting");
+      diag::info("ota", "self update started");
+    }
 #endif
   }
 }

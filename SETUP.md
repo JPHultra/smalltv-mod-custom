@@ -628,10 +628,17 @@ curl http://<device-ip>/api/usage
 A provider appears as `valid`, `stale`, or `error`; the **Usage** tab in the web
 UI shows the same data.
 
+`/api/status` also reports `update` state (phase, progress, target version,
+message and error). Live percentages are shown when the transfer can publish
+them; boot-time ESP8266 and synchronous ESP32 updates show phases and reconnect
+state instead.
+
 The **System** tab can download the current and previous boot logs. Each log is
 capped at 8 KiB; only startup events and errors are recorded, so routine polling
 does not wear the filesystem. Logs contain SSIDs and IP addresses, but no
-passwords or tokens. A factory reset removes both log files.
+passwords or tokens. A factory reset removes both log files. WiFi diagnostics
+record the scan result, join order, association state, `WiFi.status()` changes,
+disconnect reason codes and timeout/elapsed time for each attempt.
 
 ## 10. Updates and releases
 

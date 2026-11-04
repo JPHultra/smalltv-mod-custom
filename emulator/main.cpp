@@ -373,6 +373,15 @@ static std::string find_assets_dir() {
 }
 
 struct App {
+  enum class ConnState { Disconnected, Connecting, Online, Degraded, Offline, AuthRequired, Updating };
+  struct HeartbeatResult {
+    uint32_t seq = 0;
+    bool ok = false;
+    int status = 0;
+    std::string body;
+    uint32_t latencyMs = 0;
+  };
+
   DeviceManager manager;
   std::vector<EmuDevice> devices;
   int selectedDevice = -1;
@@ -380,9 +389,18 @@ struct App {
   char authUser[96] = "";
   char authPass[96] = "";
   bool connected = false;
+  ConnState connState = ConnState::Disconnected;
+  std::string connError;
   std::string lastError;
   std::string toast;
   uint32_t toastUntil = 0;
+  uint32_t lastSuccessAt = 0;
+  uint32_t lastAttemptAt = 0;
+  uint32_t lastLatencyMs = 0;
+  int consecutiveFailures = 0;
+  bool heartbeatRunning = false;
+  uint32_t heartbeatSeq = 0;
+  std::future<HeartbeatResult> heartbeatFuture;
   int tab = 0;
   int forceTab = -1;
   int settingsTab = 0;
@@ -392,10 +410,23 @@ struct App {
   bool cfgLoaded = false;
   char cfgRaw[65536] = {};
   std::string status;
+  std::string deviceVersion;
   std::string usage;
   std::string scanJson;
   JsonDocument scanDoc;
   std::string updateJson;
+  std::string latestVersion;
+  bool updateAvailable = false;
+  bool updateWatch = false;
+  std::string uploadStartVersion;
+  std::string updateStartVersion;
+  std::string updateTarget;
+  std::string updatePhase;
+  std::string updateMessage;
+  std::string updateError;
+  int updateProgress = -1;
+  uint32_t updateStartedAt = 0;
+  bool pendingInitialLoad = false;
   uint32_t lastPoll = 0;
 
   JsonDocument view;
@@ -456,14 +487,19 @@ struct App {
   }
 
   void statusPill() {
-    const bool online = connected;
-    const ImU32 col = online ? theme::success() : theme::muted();
+    const ImU32 col = connColor(connState);
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 p = ImGui::GetCursorScreenPos();
     dl->AddCircleFilled(ImVec2(p.x + 4, p.y + 9), 4.0f, col);
     ImGui::Dummy(ImVec2(10, 0));
     ImGui::SameLine();
-    ImGui::TextDisabled("%s", online ? "Online" : "Offline");
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(col), "%s", connLabel(connState));
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("Target: %s\nLast seen: %s\nLatency: %u ms%s%s",
+                        deviceUrl, lastSeenText().c_str(), lastLatencyMs,
+                        connError.empty() ? "" : "\nLast error: ",
+                        connError.c_str());
+    }
   }
 
   void topbar() {
@@ -508,6 +544,18 @@ struct App {
       if (theme::primaryButton("Connect")) { connect(); ImGui::CloseCurrentPopup(); }
       ImGui::SameLine();
       scanButton("Scan");
+      if (deviceUrl[0]) {
+        ImGui::Separator();
+        ImGui::TextDisabled("STATE");
+        ImGui::Text("%s", connLabel(connState));
+        ImGui::TextDisabled("Last seen: %s", lastSeenText().c_str());
+        if (lastLatencyMs) ImGui::TextDisabled("Latency: %u ms", lastLatencyMs);
+        if (!connError.empty()) ImGui::TextWrapped("%s", connError.c_str());
+        if (theme::secondaryButton("Disconnect")) {
+          disconnect();
+          ImGui::CloseCurrentPopup();
+        }
+      }
       ImGui::EndPopup();
     }
   }
@@ -541,6 +589,217 @@ struct App {
     toastUntil = SDL_GetTicks() + 5000;
   }
 
+  static const char* connLabel(ConnState state) {
+    switch (state) {
+      case ConnState::Connecting: return "Connecting";
+      case ConnState::Online: return "Online";
+      case ConnState::Degraded: return "Degraded";
+      case ConnState::Offline: return "Offline";
+      case ConnState::AuthRequired: return "Auth required";
+      case ConnState::Updating: return "Updating";
+      default: return "Disconnected";
+    }
+  }
+
+  static ImU32 connColor(ConnState state) {
+    switch (state) {
+      case ConnState::Online: return theme::success();
+      case ConnState::Connecting:
+      case ConnState::Updating: return theme::accent();
+      case ConnState::Degraded: return theme::warning();
+      case ConnState::AuthRequired:
+      case ConnState::Offline: return theme::danger();
+      default: return theme::muted();
+    }
+  }
+
+  bool online() const { return connState == ConnState::Online; }
+
+  std::string lastSeenText() const {
+    if (!lastSuccessAt) return "never";
+    const uint32_t age = (SDL_GetTicks() - lastSuccessAt) / 1000;
+    if (age < 2) return "just now";
+    if (age < 60) return std::to_string(age) + "s ago";
+    return std::to_string(age / 60) + "m ago";
+  }
+
+  void finishUpdate(bool ok, const std::string& message) {
+    updateWatch = false;
+    updatePhase = ok ? "done" : "error";
+    updateMessage = message;
+    updateError = ok ? "" : message;
+    updateProgress = ok ? 100 : -1;
+    if (ok) updateAvailable = false;
+    const bool recentlyOnline = lastSuccessAt &&
+        (SDL_GetTicks() - lastSuccessAt) < 15000;
+    connected = ok || recentlyOnline;
+    connState = connected ? ConnState::Online : ConnState::Offline;
+    notify(message);
+  }
+
+  void startUpdateWatch(const std::string& startVersion = "") {
+    updateWatch = true;
+    updateStartVersion = startVersion.empty() ? deviceVersion : startVersion;
+    if (updateStartVersion.empty() && !status.empty()) {
+      JsonDocument doc;
+      if (!deserializeJson(doc, status) && doc.is<JsonObject>()) {
+        const char* version = doc["version"] | "";
+        if (version[0]) updateStartVersion = version;
+      }
+    }
+    updateStartedAt = SDL_GetTicks();
+    updatePhase = "starting";
+    updateMessage = "Starting update";
+    updateError.clear();
+    updateProgress = -1;
+    connState = ConnState::Updating;
+    connected = false;
+  }
+
+  void applyStatus(const std::string& body) {
+    status = json_text(body);
+    JsonDocument doc;
+    if (deserializeJson(doc, body) || !doc.is<JsonObject>()) return;
+    const char* version = doc["version"] | "";
+    if (version[0]) deviceVersion = version;
+    JsonObject update = doc["update"].as<JsonObject>();
+    if (!update.isNull()) {
+      const char* phase = update["phase"] | "";
+      if (phase[0]) updatePhase = phase;
+      updateProgress = update["progress"] | -1;
+      const char* message = update["message"] | "";
+      if (message[0]) updateMessage = message;
+      const char* error = update["error"] | "";
+      updateError = error;
+      const char* target = update["target"] | "";
+      if (target[0]) updateTarget = target;
+    }
+    if (updateWatch) {
+      String target = updateTarget;
+      if (target.startsWith("v")) target.remove(0, 1);
+      if (!target.isEmpty() && deviceVersion == target.c_str()) {
+        finishUpdate(true, "Updated to " + deviceVersion);
+      } else if (!updateStartVersion.empty() && !deviceVersion.empty() &&
+                 deviceVersion != updateStartVersion) {
+        finishUpdate(true, "Updated to " + deviceVersion);
+      } else if (!updateError.empty() || updatePhase == "error") {
+        finishUpdate(false, updateError.empty() ? updateMessage : updateError);
+      }
+    }
+  }
+
+  void markOnline(uint32_t latencyMs) {
+    lastSuccessAt = SDL_GetTicks();
+    lastLatencyMs = latencyMs;
+    consecutiveFailures = 0;
+    connError.clear();
+    connected = true;
+    if (!updateWatch) connState = ConnState::Online;
+    if (pendingInitialLoad) {
+      pendingInitialLoad = false;
+      loadConfig();
+      loadUsage();
+      if (!viewDirty) loadViewFromDevice();
+    }
+  }
+
+  void markFailure(const std::string& error, int httpStatus = 0) {
+    connError = error;
+    connected = false;
+    lastAttemptAt = SDL_GetTicks();
+    if (uploadRunning) {
+      connState = ConnState::Updating;
+      return;
+    }
+    if (updateWatch) {
+      connState = ConnState::Updating;
+      updatePhase = "rebooting";
+      updateMessage = "Waiting for the device to come back";
+      if (SDL_GetTicks() - updateStartedAt > 180000)
+        finishUpdate(false, "Device did not return after 3 minutes");
+      return;
+    }
+    consecutiveFailures++;
+    if (httpStatus == 401 || httpStatus == 403) connState = ConnState::AuthRequired;
+    else if (httpStatus >= 500) connState = ConnState::Degraded;
+    else if (consecutiveFailures >= 2) connState = ConnState::Offline;
+    else connState = ConnState::Connecting;
+  }
+
+  void startHeartbeat() {
+    if (heartbeatRunning || !deviceUrl[0]) return;
+    heartbeatRunning = true;
+    const uint32_t seq = ++heartbeatSeq;
+    lastAttemptAt = SDL_GetTicks();
+    heartbeatFuture = std::async(std::launch::async, [this, seq] {
+      const uint32_t started = SDL_GetTicks();
+      DeviceResponse r;
+      HeartbeatResult result;
+      result.seq = seq;
+      result.ok = manager.request("GET", "/api/status", "", "", r);
+      result.status = r.status;
+      result.body = std::move(r.body);
+      result.latencyMs = SDL_GetTicks() - started;
+      return result;
+    });
+  }
+
+  void pollHeartbeat() {
+    if (uploadRunning) return;
+    const uint32_t now = SDL_GetTicks();
+    if (!heartbeatRunning) {
+      const uint32_t interval = updateWatch ? 1000 : (online() ? 5000 : 3000);
+      if (deviceUrl[0] && now - lastAttemptAt >= interval) startHeartbeat();
+      return;
+    }
+    if (heartbeatFuture.wait_for(std::chrono::milliseconds(0)) !=
+        std::future_status::ready) return;
+    HeartbeatResult result = heartbeatFuture.get();
+    heartbeatRunning = false;
+    if (result.seq != heartbeatSeq) return;
+    lastAttemptAt = SDL_GetTicks();
+    if (!result.ok) {
+      markFailure("Device is unreachable");
+    } else if (result.status == 200) {
+      markOnline(result.latencyMs);
+      applyStatus(result.body);
+    } else if (result.status == 401 || result.status == 403) {
+      markFailure("Authentication required", result.status);
+    } else if (result.status >= 500) {
+      markFailure("Device error HTTP " + std::to_string(result.status), result.status);
+    } else {
+      markOnline(result.latencyMs);
+      connError = "HTTP " + std::to_string(result.status);
+    }
+  }
+
+  void disconnect() {
+    manager.setTarget("");
+    deviceUrl[0] = 0;
+    ++heartbeatSeq;
+    connState = ConnState::Disconnected;
+    connected = false;
+    connError.clear();
+    lastSuccessAt = 0;
+    lastLatencyMs = 0;
+    consecutiveFailures = 0;
+    pendingInitialLoad = false;
+    updateWatch = false;
+    updateAvailable = false;
+    latestVersion.clear();
+    uploadStartVersion.clear();
+    updateStartVersion.clear();
+    updateTarget.clear();
+    updatePhase.clear();
+    updateMessage.clear();
+    updateError.clear();
+    updateProgress = -1;
+    status.clear();
+    deviceVersion.clear();
+    cfgLoaded = false;
+    notify("Disconnected");
+  }
+
   void connect() {
     std::string url = deviceUrl;
     if (url.rfind("http://", 0) != 0 && url.rfind("https://", 0) != 0)
@@ -549,29 +808,86 @@ struct App {
     snprintf(deviceUrl, sizeof(deviceUrl), "%s", url.c_str());
     manager.setTarget(url);
     manager.setAuth(authUser, authPass);
-    connected = true;
-    lastError.clear();
-    notify("Connected to " + url);
-    loadConfig();
-    loadStatus();
-    loadUsage();
-    if (!viewDirty) loadViewFromDevice();
+    ++heartbeatSeq;
+    connState = ConnState::Connecting;
+    connected = false;
+    connError.clear();
+    consecutiveFailures = 0;
+    lastSuccessAt = 0;
+    lastAttemptAt = 0;
+    lastLatencyMs = 0;
+    pendingInitialLoad = true;
+    updateWatch = false;
+    updateAvailable = false;
+    latestVersion.clear();
+    uploadStartVersion.clear();
+    updateStartVersion.clear();
+    updateTarget.clear();
+    updatePhase.clear();
+    updateMessage.clear();
+    updateError.clear();
+    updateProgress = -1;
+    status.clear();
+    deviceVersion.clear();
+    cfgLoaded = false;
+    notify("Connecting to " + url);
+  }
+
+  void checkGithubUpdates() {
+    DeviceResponse r;
+    if (!api("GET", "/api/checkupdate", "", "", r)) return;
+    JsonDocument doc;
+    if (deserializeJson(doc, r.body) || !doc.is<JsonObject>()) {
+      updateError = "Invalid update-check response";
+      return;
+    }
+    const char* latest = doc["latest"] | "";
+    const char* current = doc["current"] | "";
+    updateAvailable = doc["newer"] | false;
+    updateError = (const char*)(doc["error"] | "");
+    if (latest[0]) latestVersion = latest;
+    if (latest[0]) updateTarget = latest;
+    if (current[0]) deviceVersion = current;
+    if (!updateAvailable && updateError.empty())
+      updateMessage = "Up to date (" + deviceVersion + ")";
+    else if (updateAvailable)
+      updateMessage = "Version " + latestVersion + " is available";
+  }
+
+  void startGithubUpdate() {
+    DeviceResponse r;
+    if (!api("POST", "/api/selfupdate", "", "application/json", r)) return;
+    if (!latestVersion.empty()) updateTarget = latestVersion;
+    startUpdateWatch();
+    notify("Update started; waiting for the device");
   }
 
   bool api(const std::string& method, const std::string& path,
            const std::string& body, const std::string& ct, DeviceResponse& r) {
+    const uint32_t started = SDL_GetTicks();
     if (!manager.request(method, path, body, ct, r)) {
       lastError = "network error";
-      notify(lastError);
+      markFailure(lastError);
+      if (!updateWatch) notify(lastError);
       return false;
     }
-    if (r.status < 200 || r.status >= 300) {
-      lastError = "HTTP " + std::to_string(r.status) +
-                  (r.body.empty() ? "" : ": " + r.body.substr(0, 180));
-      notify(lastError);
-      return false;
+    const uint32_t latency = SDL_GetTicks() - started;
+    lastAttemptAt = SDL_GetTicks();
+    if (r.status >= 200 && r.status < 300) {
+      markOnline(latency);
+      if (path == "/api/status") applyStatus(r.body);
+      return true;
     }
-    return true;
+    lastError = "HTTP " + std::to_string(r.status) +
+                (r.body.empty() ? "" : ": " + r.body.substr(0, 180));
+    if (r.status == 401 || r.status == 403 || r.status >= 500) {
+      markFailure(lastError, r.status);
+    } else {
+      markOnline(latency);
+      connError = lastError;
+    }
+    if (!updateWatch) notify(lastError);
+    return false;
   }
 
   void loadStatus() {
@@ -999,39 +1315,71 @@ struct App {
     if (!firmwarePath.empty()) {
       ImGui::TextWrapped("%s", firmwarePath.c_str());
       if (uploadRunning) {
-        ImGui::TextDisabled("Uploading firmware...");
-        ImGui::ProgressBar(-1.0f * (float)ImGui::GetTime(), ImVec2(240, 0), "uploading");
-      } else if (ImGui::Button("Upload firmware")) {
-        const std::string path = firmwarePath;
-        uploadRunning = true;
-        uploadError.clear();
-        notify("Uploading firmware...");
-        uploadFuture = std::async(std::launch::async, [this, path] {
-          std::string error;
-          bool ok = manager.uploadFirmware(path, error);
-          uploadError = error;
-          return ok;
-        });
+        const size_t done = manager.uploadDone();
+        const size_t total = manager.uploadTotal();
+        const float fraction = total ? (float)done / (float)total : 0.0f;
+        char label[64];
+        if (total) snprintf(label, sizeof(label), "%llu / %llu bytes",
+                            (unsigned long long)done, (unsigned long long)total);
+        else snprintf(label, sizeof(label), "uploading");
+        ImGui::ProgressBar(total ? fraction : -1.0f * (float)ImGui::GetTime(),
+                           ImVec2(240, 0), label);
+        ImGui::TextDisabled("Sending firmware to the device...");
+      } else {
+        ImGui::BeginDisabled(updateWatch);
+        if (ImGui::Button("Upload firmware")) {
+          const std::string path = firmwarePath;
+          uploadStartVersion = deviceVersion;
+          if (uploadStartVersion.empty() && !status.empty()) {
+            JsonDocument doc;
+            if (!deserializeJson(doc, status) && doc.is<JsonObject>()) {
+              const char* version = doc["version"] | "";
+              if (version[0]) uploadStartVersion = version;
+            }
+          }
+          uploadRunning = true;
+          uploadError.clear();
+          updateTarget.clear();
+          connState = ConnState::Updating;
+          connected = false;
+          updatePhase = "uploading";
+          updateMessage = "Sending firmware to the device";
+          updateError.clear();
+          updateProgress = -1;
+          notify("Uploading firmware...");
+          uploadFuture = std::async(std::launch::async, [this, path] {
+            std::string error;
+            bool ok = manager.uploadFirmware(path, error);
+            uploadError = error;
+            return ok;
+          });
+        }
+        ImGui::EndDisabled();
       }
     }
-    if (ImGui::Button("Check GitHub updates")) {
-      DeviceResponse r;
-      if (api("GET", "/api/checkupdate", "", "", r)) {
-        updateJson = json_text(r.body);
-        notify("Update check complete");
-      }
-    }
+    ImGui::BeginDisabled(updateWatch || uploadRunning);
+    if (ImGui::Button("Check GitHub updates")) checkGithubUpdates();
     ImGui::SameLine();
-    if (ImGui::Button("Install latest update")) {
-      DeviceResponse r;
-      if (api("POST", "/api/selfupdate", "", "application/json", r)) {
-        updateJson = "Update started. The device will restart.\n" + json_text(r.body);
-        notify("Self-update started");
-      }
-    }
-    if (!updateJson.empty()) {
-      if (ImGui::BeginChild("##update", ImVec2(0, 130), true)) ImGui::TextUnformatted(updateJson.c_str());
-      ImGui::EndChild();
+    ImGui::BeginDisabled(!updateAvailable);
+    if (ImGui::Button("Install latest update")) startGithubUpdate();
+    ImGui::EndDisabled();
+    ImGui::EndDisabled();
+    if (updateWatch) {
+      ImGui::Spacing();
+      ImGui::TextDisabled("Update: %s", updatePhase.empty() ? "starting" : updatePhase.c_str());
+      const float fraction = updateProgress >= 0 ? (float)updateProgress / 100.0f
+                                                 : -1.0f * (float)ImGui::GetTime();
+      char label[64];
+      if (updateProgress >= 0) snprintf(label, sizeof(label), "%d%%", updateProgress);
+      else snprintf(label, sizeof(label), "working");
+      ImGui::ProgressBar(fraction, ImVec2(240, 0), label);
+      if (!updateTarget.empty()) ImGui::TextDisabled("Target: %s", updateTarget.c_str());
+      if (!updateMessage.empty()) ImGui::TextWrapped("%s", updateMessage.c_str());
+      if (!updateError.empty()) ImGui::TextWrapped("Error: %s", updateError.c_str());
+    } else if (!updateMessage.empty()) {
+      ImGui::Spacing();
+      ImGui::TextWrapped("%s", updateMessage.c_str());
+      if (!updateError.empty()) ImGui::TextWrapped("Error: %s", updateError.c_str());
     }
     ImGui::SeparatorText("Backup");
     if (ImGui::Button("Export settings...")) {
@@ -1599,7 +1947,7 @@ struct App {
       if (selected) dl->AddRectFilled(p, ImVec2(p.x + 3, p.y + 44), theme::accent(), 2.0f);
     }
     dl->AddCircleFilled(ImVec2(p.x + 12, p.y + 14), 3.5f,
-                        connected && selected ? theme::success() : theme::muted());
+                        online() && selected ? theme::success() : theme::muted());
     dl->AddText(ImVec2(p.x + 22, p.y + 7), theme::text(), d.name.c_str());
     char sub[160];
     snprintf(sub, sizeof(sub), "%s  ·  %s", d.ip.c_str(), d.version.c_str());
@@ -1616,7 +1964,7 @@ struct App {
     scanProgress();
     if (manager.scanning()) ImGui::Spacing();
     ImGui::BeginChild("##devicelist", ImVec2(0, -196), true);
-    if (connected && selectedDevice < 0) {
+    if (online() && selectedDevice < 0) {
       ImGui::TextDisabled("CURRENT SESSION");
       ImGui::TextWrapped("%s", deviceUrl);
       ImGui::Separator();
@@ -1660,7 +2008,7 @@ struct App {
   void deviceStage() {
     if (previewDirty) refreshPreview();
     drawGrid(IM_COL32(42, 47, 54, 70));
-    paneTitle("PREVIEW", connected ? "live firmware render" : "local render");
+    paneTitle("PREVIEW", online() ? "live firmware render" : "last render");
     ImGui::SameLine(ImGui::GetContentRegionMax().x - 94.0f);
     if (theme::secondaryButton("Open Design")) tab = 1;
     ImGui::SetCursorPosX(14);
@@ -1705,6 +2053,12 @@ struct App {
       ImGui::TextDisabled("No live status.");
       ImGui::TextWrapped("Connect a device to load telemetry.");
     } else {
+      if (!online()) {
+        ImGui::TextDisabled("Last known data · %s · seen %s", connLabel(connState),
+                             lastSeenText().c_str());
+        if (!connError.empty()) ImGui::TextWrapped("%s", connError.c_str());
+        ImGui::Spacing();
+      }
       if (ImGui::BeginTable("##statusrows", 2, ImGuiTableFlags_SizingStretchProp)) {
         ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthFixed, 78.0f);
         ImGui::TableSetupColumn("v");
@@ -1856,8 +2210,17 @@ struct App {
         uploadFuture.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
       bool ok = uploadFuture.get();
       uploadRunning = false;
-      if (ok) notify("Firmware uploaded; device is restarting");
-      else notify("Firmware upload failed: " + uploadError);
+      if (ok) {
+        startUpdateWatch(uploadStartVersion);
+        notify("Firmware uploaded; waiting for reboot");
+      } else {
+        updatePhase = "error";
+        updateMessage = "Firmware upload failed";
+        updateError = uploadError;
+        updateProgress = -1;
+        connState = SDL_GetTicks() - lastSuccessAt < 15000 ? ConnState::Online : ConnState::Offline;
+        notify("Firmware upload failed: " + uploadError);
+      }
     }
     if (forceTab >= 0) { tab = forceTab; forceTab = -1; }
     const ImGuiViewport* vp = ImGui::GetMainViewport();
@@ -2011,10 +2374,7 @@ int main(int argc, char** argv) {
           event.window.windowID == SDL_GetWindowID(window)) running = false;
     }
     app.pollDevices();
-    if (app.connected && SDL_GetTicks() - app.lastPoll > 5000) {
-      app.lastPoll = SDL_GetTicks();
-      app.loadStatus();
-    }
+    app.pollHeartbeat();
     if (app.previewDirty) app.refreshPreview();
 
     ImGui_ImplSDLRenderer2_NewFrame();

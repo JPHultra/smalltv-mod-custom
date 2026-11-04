@@ -19,6 +19,8 @@ static uint32_t    g_downSince = 0;      // 0 = connected; else millis() the dro
 // WiFi.begin(), and would otherwise overwrite the real cause.
 static volatile uint16_t g_lastReason = 0;
 static volatile bool     g_assoc = false;   // associated, maybe still waiting for DHCP
+static volatile uint16_t g_lostSeq = 0;     // bumped on every real disconnect event
+static uint16_t    g_loggedLost = 0;
 static String      g_failText;
 static uint16_t    g_failSeq = 0;           // bumped on every new failure text
 
@@ -37,7 +39,10 @@ static bool        g_seen[MAX_WIFI_NETS];
 
 static void onStaDisconnected(uint16_t reason) {
   g_assoc = false;
-  if (reason != 8 && reason != 36) g_lastReason = reason;
+  if (reason != 8 && reason != 36) {
+    g_lastReason = reason;
+    g_lostSeq++;
+  }
 }
 
 #if defined(SMALLTV_FAMILY_ESP32)
@@ -66,38 +71,86 @@ static void netHookEvents() {
 // PSTR: on the ESP8266 a plain literal would sit in RAM, which is heap there.
 static const char* reasonText(uint16_t r) {
   switch (r) {
-    case 2:                             return PSTR("auth timed out");
-    case 15: case 202: case 204:        return PSTR("wrong password?");
-    case 201:                           return PSTR("network not found");
-    case 210: case 211:                 return PSTR("security mode?");
-    case 203:                           return PSTR("router refused");
-    case 200:                           return PSTR("signal lost");
-    default:                            return PSTR("join failed");
+    case 1:                             return PSTR("unspecified");
+    case 2:                             return PSTR("auth expired");
+    case 3:                             return PSTR("auth leaving");
+    case 4:                             return PSTR("association expired");
+    case 5:                             return PSTR("too many associations");
+    case 6:                             return PSTR("not authenticated");
+    case 7:                             return PSTR("not associated");
+    case 8:                             return PSTR("association left");
+    case 9:                             return PSTR("association not authenticated");
+    case 10:                            return PSTR("power capability");
+    case 11:                            return PSTR("supported channel");
+    case 12:                            return PSTR("service not available");
+    case 13:                            return PSTR("invalid information element");
+    case 14:                            return PSTR("MIC failure");
+    case 15:                            return PSTR("4-way handshake timeout");
+    case 16:                            return PSTR("group key timeout");
+    case 17:                            return PSTR("4-way information differs");
+    case 18:                            return PSTR("group cipher invalid");
+    case 19:                            return PSTR("pairwise cipher invalid");
+    case 20:                            return PSTR("AKMP invalid");
+    case 21:                            return PSTR("RSN IE version");
+    case 22:                            return PSTR("invalid RSN IE");
+    case 23:                            return PSTR("802.1X authentication");
+    case 24:                            return PSTR("cipher suite rejected");
+    case 200:                           return PSTR("beacon timeout");
+    case 201:                           return PSTR("access point not found");
+    case 202:                           return PSTR("authentication failed");
+    case 203:                           return PSTR("association failed");
+    case 204:                           return PSTR("handshake timeout");
+    case 205:                           return PSTR("connection failed");
+    default:                            return PSTR("other reason");
+  }
+}
+
+static const char* wifiStatusText(int status) {
+  switch (status) {
+    case 0:  return "idle";
+    case 1:  return "no SSID";
+    case 2:  return "scan completed";
+    case 3:  return "connected";
+    case 4:  return "connect failed";
+    case 5:  return "connection lost";
+    case 6:  return "disconnected";
+    case 7:  return "no shield";
+    case 8:  return "stopped";
+    default: return "unknown";
   }
 }
 
 // Call once an attempt has timed out, before WiFi.disconnect().
-static void recordFailure(const String& ssid) {
-  char why[24];
-  if (g_assoc)            strcpy_P(why, PSTR("no IP (DHCP)"));
+static void recordFailure(const String& ssid, uint32_t elapsed = 0,
+                          uint32_t budget = 0) {
+  char why[32];
+  char reason[32] = "other reason";
+  if (g_lastReason) snprintf_P(reason, sizeof(reason), PSTR("%s"), reasonText(g_lastReason));
+  if (g_assoc)            strcpy_P(why, PSTR("associated, no DHCP IP"));
   else if (g_lastReason)  strcpy_P(why, reasonText(g_lastReason));
-  else                    strcpy_P(why, PSTR("timed out"));
-  char buf[64];
-  if (g_lastReason && !g_assoc)
-    snprintf_P(buf, sizeof(buf), PSTR("%s: %s (%u)"), ssid.c_str(), why, (unsigned)g_lastReason);
+  else                    strcpy_P(why, PSTR("timed out before association"));
+  char buf[96];
+  if (g_lastReason)
+    snprintf_P(buf, sizeof(buf), PSTR("%s: %s (%u)"), ssid.c_str(), why,
+               (unsigned)g_lastReason);
   else
     snprintf_P(buf, sizeof(buf), PSTR("%s: %s"), ssid.c_str(), why);
   g_failText = buf;
   g_failSeq++;
   Serial.print(F("[net] join failed, "));
   Serial.println(buf);
-  diag::error("net", "join failed %s", buf);
+  diag::error("net", "join failed ssid=%s status=%s(%d) assoc=%d reason=%u(%s) elapsed=%lums budget=%lums",
+              ssid.c_str(), wifiStatusText((int)WiFi.status()), (int)WiFi.status(),
+              g_assoc ? 1 : 0, (unsigned)g_lastReason, reason,
+              (unsigned long)elapsed, (unsigned long)budget);
 }
 
 static void beginJoin(const WifiCred& n) {
   g_lastReason = 0;
   g_assoc = false;
-  WiFi.begin(n.ssid.c_str(), n.pass.c_str());
+  int result = (int)WiFi.begin(n.ssid.c_str(), n.pass.c_str());
+  diag::info("net", "begin ssid=%s status=%s(%d)", n.ssid.c_str(),
+             wifiStatusText(result), result);
 }
 
 static void startAP(const Settings& s) {
@@ -120,8 +173,9 @@ static void startAP(const Settings& s) {
   g_dns.setErrorReplyCode(DNSReplyCode::NoError);
   g_dns.start(53, "*", apIP);
   g_retryAt = millis();
-  diag::warn("net", "AP ssid=%s ip=%s", s.apSsid.c_str(),
-             WiFi.softAPIP().toString().c_str());
+  diag::warn("net", "AP ssid=%s ip=%s saved=%u retry=%lums", s.apSsid.c_str(),
+             WiFi.softAPIP().toString().c_str(), (unsigned)s.wifiCount,
+             (unsigned long)kRetryEveryMs);
 }
 
 void netBegin(const Settings& s, void (*onProgress)(const char*)) {
@@ -133,11 +187,14 @@ void netBegin(const Settings& s, void (*onProgress)(const char*)) {
   netHookEvents();
 
   if (s.wifiCount == 0) {
+    diag::warn("net", "start hostname=%s saved=0", g_hostname.c_str());
     if (onProgress) onProgress("No WiFi saved");
     startAP(s);
     return;
   }
 
+  diag::info("net", "start hostname=%s saved=%u", g_hostname.c_str(),
+             (unsigned)s.wifiCount);
   WiFi.mode(WIFI_STA);
 
   // Try order: scan once (blocking is fine here, only the boot screen is up)
@@ -146,14 +203,16 @@ void netBegin(const Settings& s, void (*onProgress)(const char*)) {
   // shorter timeout each.
   uint8_t order[MAX_WIFI_NETS];
   bool    seen[MAX_WIFI_NETS];
+  int32_t rssi[MAX_WIFI_NETS];
+  for (uint8_t i = 0; i < s.wifiCount; i++) { rssi[i] = -32768; seen[i] = false; }
   if (s.wifiCount == 1) {
     order[0] = 0;
     seen[0] = true;
+    diag::info("net", "single saved network; skipping scan");
   } else {
-    int32_t rssi[MAX_WIFI_NETS];
-    for (uint8_t i = 0; i < s.wifiCount; i++) { rssi[i] = -32768; seen[i] = false; }
     if (onProgress) onProgress("Scanning...");
     int found = WiFi.scanNetworks();
+    diag::info("net", "scan complete found=%d", found);
     if (found < 0) diag::warn("net", "WiFi scan failed (%d)", found);
     for (int a = 0; a < found; a++)
       for (uint8_t i = 0; i < s.wifiCount; i++)
@@ -161,6 +220,10 @@ void netBegin(const Settings& s, void (*onProgress)(const char*)) {
           rssi[i] = WiFi.RSSI(a);
           seen[i] = true;
         }
+    for (uint8_t i = 0; i < s.wifiCount; i++)
+      diag::info("net", "scan saved[%u] ssid=%s seen=%d rssi=%d",
+                 (unsigned)i, s.wifi[i].ssid.c_str(), seen[i] ? 1 : 0,
+                 (int)rssi[i]);
     WiFi.scanDelete();
 
     bool used[MAX_WIFI_NETS] = {false};
@@ -186,11 +249,25 @@ void netBegin(const Settings& s, void (*onProgress)(const char*)) {
       snprintf(msg, sizeof(msg), "WiFi: %s", n.ssid.c_str());
       onProgress(msg);
     }
+    const uint32_t budget = seen[order[k]] ? kJoinBudgetMs : kUnseenBudgetMs;
+    diag::info("net", "attempt %u/%u ssid=%s seen=%d rssi=%d budget=%lums",
+               (unsigned)(k + 1), (unsigned)s.wifiCount, n.ssid.c_str(),
+               seen[order[k]] ? 1 : 0, (int)rssi[order[k]],
+               (unsigned long)budget);
     beginJoin(n);
 
-    uint32_t budget = seen[order[k]] ? kJoinBudgetMs : kUnseenBudgetMs;
     uint32_t start = millis();
+    int lastStatus = -1;
+    bool lastAssoc = false;
     while (WiFi.status() != WL_CONNECTED && millis() - start < budget) {
+      const int status = (int)WiFi.status();
+      if (status != lastStatus || g_assoc != lastAssoc) {
+        lastStatus = status;
+        lastAssoc = g_assoc;
+        diag::info("net", "attempt status ssid=%s status=%s(%d) assoc=%d elapsed=%lums",
+                   n.ssid.c_str(), wifiStatusText(status), status,
+                   g_assoc ? 1 : 0, (unsigned long)(millis() - start));
+      }
       delay(200);
       yield();
     }
@@ -212,11 +289,12 @@ void netBegin(const Settings& s, void (*onProgress)(const char*)) {
 #endif
       }
       if (onProgress) onProgress(WiFi.localIP().toString().c_str());
-      diag::info("net", "joined ssid=%s ip=%s", n.ssid.c_str(),
-                 WiFi.localIP().toString().c_str());
+      diag::info("net", "joined ssid=%s ip=%s rssi=%d channel=%d elapsed=%lums",
+                 n.ssid.c_str(), WiFi.localIP().toString().c_str(), (int)WiFi.RSSI(),
+                 (int)WiFi.channel(), (unsigned long)(millis() - start));
       return;
     }
-    recordFailure(n.ssid);
+    recordFailure(n.ssid, millis() - start, budget);
     WiFi.disconnect();
     delay(100);
   }
@@ -243,13 +321,20 @@ void netLoop() {
       }
       uint32_t budget = g_seen[g_curNet] ? kJoinBudgetMs : kUnseenBudgetMs;
       if (busy || millis() - g_attemptStart > budget) {
-        if (!busy) recordFailure(g_cfg->wifi[g_curNet].ssid);
+        if (!busy) {
+          recordFailure(g_cfg->wifi[g_curNet].ssid, millis() - g_attemptStart, budget);
+        } else {
+          diag::warn("net", "setup retry paused: AP client connected");
+        }
         WiFi.disconnect();
         g_attemptStart = 0;
         g_retryAt = millis();
       }
     } else if (!busy && millis() - g_retryAt > kRetryEveryMs) {
       g_curNet = (int8_t)((g_curNet + 1) % g_cfg->wifiCount);
+      diag::info("net", "setup retry start ssid=%s seen=%d budget=%lums",
+                 g_cfg->wifi[g_curNet].ssid.c_str(), g_seen[g_curNet] ? 1 : 0,
+                 (unsigned long)(g_seen[g_curNet] ? kJoinBudgetMs : kUnseenBudgetMs));
       beginJoin(g_cfg->wifi[g_curNet]);
       g_attemptStart = millis();
       if (!g_attemptStart) g_attemptStart = 1;   // 0 means idle
@@ -262,9 +347,21 @@ void netLoop() {
   // status is picked up on later passes.
   platformMdnsUpdate();
   if (WiFi.status() == WL_CONNECTED) {
-    if (g_downSince) diag::info("net", "sta restored");
+    if (g_downSince) {
+      diag::info("net", "sta restored ip=%s rssi=%d downtime=%lums",
+                 WiFi.localIP().toString().c_str(), (int)WiFi.RSSI(),
+                 (unsigned long)(millis() - g_downSince));
+    }
     g_downSince = 0;
     return;
+  }
+  if (g_lostSeq != g_loggedLost) {
+    g_loggedLost = g_lostSeq;
+    char reason[32] = "other reason";
+    if (g_lastReason) snprintf_P(reason, sizeof(reason), PSTR("%s"), reasonText(g_lastReason));
+    diag::warn("net", "sta lost status=%s(%d) reason=%u(%s)",
+               wifiStatusText((int)WiFi.status()), (int)WiFi.status(),
+               (unsigned)g_lastReason, reason);
   }
   if (!g_downSince) {
     g_downSince = millis();
@@ -274,6 +371,8 @@ void netLoop() {
     g_lastReconnect = millis();
     if (g_cfg && g_cfg->wifiCount > 1 && millis() - g_downSince > 45000) {
       g_curNet = (int8_t)((g_curNet + 1) % g_cfg->wifiCount);
+      diag::warn("net", "rotation to saved network ssid=%s",
+                 g_cfg->wifi[g_curNet].ssid.c_str());
       beginJoin(g_cfg->wifi[g_curNet]);
       g_downSince = millis();   // give this candidate its own window before rotating on
     } else {

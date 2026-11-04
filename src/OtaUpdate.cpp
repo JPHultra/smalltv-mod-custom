@@ -1,6 +1,7 @@
 #include "OtaUpdate.h"
 #include "Platform.h"
 #include "DiagLog.h"
+#include "UpdateStatus.h"
 #include <ArduinoJson.h>
 #include <LittleFS.h>
 #include "config.h"
@@ -128,11 +129,21 @@ OtaLatest otaCheckLatest(const Settings& s) {
 
 String otaUpdateFromGitHub(const Settings& s) {
 #if defined(SMALLTV_FAMILY_ESP32)
+  update_status::setChecking();
   OtaLatest r = otaCheckLatest(s);
-  if (!r.ok) return "check failed: " + r.error;
-  if (!r.newer) return "already up to date (" FW_VERSION ")";
-  if (ESP.getFreeHeap() < 22000)
+  if (!r.ok) {
+    update_status::fail("check failed: " + r.error);
+    return "check failed: " + r.error;
+  }
+  if (!r.newer) {
+    update_status::complete("already up to date (" FW_VERSION ")");
+    return "already up to date (" FW_VERSION ")";
+  }
+  update_status::setTarget(r.tag);
+  if (ESP.getFreeHeap() < 22000) {
+    update_status::fail("not enough free heap for a TLS update");
     return "not enough free heap for a TLS update (" + String(ESP.getFreeHeap()) + ")";
+  }
 
   // mbedTLS manages its own buffers; each target pulls its own release asset
   // (UPDATE_ASSET in config.h). The two-slot OTA layout makes this atomic, so a
@@ -146,15 +157,30 @@ String otaUpdateFromGitHub(const Settings& s) {
     HTTPUpdate up;
     up.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
     up.rebootOnUpdate(true);
+    up.onStart([] { update_status::setPhase(update_status::DOWNLOADING, "Downloading firmware"); });
+    up.onProgress([](int current, int total) {
+      if (current < 0) current = 0;
+      if (total < 0) total = 0;
+      update_status::setProgress((uint32_t)current, (uint32_t)total);
+    });
+    up.onEnd([] { update_status::setPhase(update_status::INSTALLING, "Installing firmware"); });
+    up.onError([](int) { update_status::fail("firmware download failed"); });
 
     t_httpUpdate_return ret = up.update(client, r.url);
     switch (ret) {
-      case HTTP_UPDATE_OK:         return "";                     // reboots into the new image
-      case HTTP_UPDATE_NO_UPDATES: return F("server reported no update");
-      case HTTP_UPDATE_FAILED:     lastErr = up.getLastErrorString(); break;
+      case HTTP_UPDATE_OK:
+        update_status::setPhase(update_status::REBOOTING, "Installing complete; rebooting");
+        return "";                                               // reboots into the new image
+      case HTTP_UPDATE_NO_UPDATES:
+        update_status::complete("server reported no update");
+        return F("server reported no update");
+      case HTTP_UPDATE_FAILED:
+        lastErr = up.getLastErrorString();
+        break;
     }
     if (attempt < 2) delay(1000);
   }
+  update_status::fail("download failed after retry: " + lastErr);
   return "download failed after retry: " + lastErr;
 #else
   (void)s;
@@ -189,7 +215,10 @@ bool otaRequestBootUpdate(const char* tag) {
 static void otaBootResult(const String& msg) {
   File f = LittleFS.open(OTA_MSG_PATH, "w");
   if (f) { f.print(msg); f.close(); }
-  if (msg.length()) diag::warn("ota", "boot: %s", msg.c_str());
+  if (msg.length()) {
+    diag::warn("ota", "boot: %s", msg.c_str());
+    update_status::bootResult(msg);
+  }
 }
 
 String otaTakeBootResult() {
@@ -205,9 +234,12 @@ void otaBootUpdate(const Settings& s) {
   LittleFS.remove(OTA_REQ_PATH);            // consume first: one attempt per request
   if (WiFi.status() != WL_CONNECTED) { otaBootResult(F("no WiFi at boot")); return; }
 
+  update_status::setChecking();
   OtaLatest r = otaCheckLatest(s);          // re-resolve the asset URL fresh
   if (!r.ok)    { otaBootResult("check failed: " + r.error); return; }
   if (!r.newer) { otaBootResult(F("already up to date (" FW_VERSION ")")); return; }
+  update_status::setTarget(r.tag);
+  update_status::setPhase(update_status::DOWNLOADING, "Downloading firmware at boot");
 
   // Honest guard: rx + tx buffers plus BearSSL engine/stack-thunk overhead.
   const uint32_t need = 16384 + 512 + 8000;
@@ -223,6 +255,14 @@ void otaBootUpdate(const Settings& s) {
 
   ESPhttpUpdate.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
   ESPhttpUpdate.rebootOnUpdate(true);
+  ESPhttpUpdate.onStart([] { update_status::setPhase(update_status::DOWNLOADING, "Downloading firmware at boot"); });
+  ESPhttpUpdate.onProgress([](int current, int total) {
+    if (current < 0) current = 0;
+    if (total < 0) total = 0;
+    update_status::setProgress((uint32_t)current, (uint32_t)total);
+  });
+  ESPhttpUpdate.onEnd([] { update_status::setPhase(update_status::INSTALLING, "Installing firmware at boot"); });
+  ESPhttpUpdate.onError([](int) { update_status::fail("firmware download failed at boot"); });
 
   // Retry once on a transient stream stall — the buffers are still free at boot
   // and the request was already consumed, so a retry can't boot-loop.
@@ -232,10 +272,14 @@ void otaBootUpdate(const Settings& s) {
     if (ret == HTTP_UPDATE_OK || ret == HTTP_UPDATE_NO_UPDATES) break;  // OK reboots; NO_UPDATES is final
     if (attempt < 2) delay(1000);
   }
-  if (ret == HTTP_UPDATE_NO_UPDATES)
+  if (ret == HTTP_UPDATE_NO_UPDATES) {
+    update_status::complete("server reported no update");
     otaBootResult(F("server reported no update"));
-  else if (ret != HTTP_UPDATE_OK)
+  } else if (ret != HTTP_UPDATE_OK) {
     otaBootResult("download failed: " + ESPhttpUpdate.getLastErrorString());
+  } else {
+    update_status::setPhase(update_status::REBOOTING, "Installing complete; rebooting");
+  }
   // HTTP_UPDATE_OK: rebootOnUpdate restarts into the new image
 }
 #else

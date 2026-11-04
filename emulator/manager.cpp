@@ -314,7 +314,7 @@ std::vector<EmuDevice> DeviceManager::scan() {
 
 bool DeviceManager::request(const std::string& method, const std::string& path,
                             const std::string& body, const std::string& contentType,
-                            DeviceResponse& response) {
+                            DeviceResponse& response, ProgressCallback progress) {
   std::string base, user, pass;
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -337,8 +337,8 @@ bool DeviceManager::request(const std::string& method, const std::string& path,
     cli.set_read_timeout(timeoutSec, 0);
     cli.set_write_timeout(timeoutSec, 0);
     if (method == "GET") return cli.Get(path, h);
-    if (method == "POST") return cli.Post(path, h, body, contentType.empty() ? "application/octet-stream" : contentType);
-    if (method == "PUT") return cli.Put(path, h, body, contentType.empty() ? "application/octet-stream" : contentType);
+    if (method == "POST") return cli.Post(path, h, body, contentType.empty() ? "application/octet-stream" : contentType, progress);
+    if (method == "PUT") return cli.Put(path, h, body, contentType.empty() ? "application/octet-stream" : contentType, progress);
     if (method == "DELETE") return cli.Delete(path, h, body, contentType.empty() ? "application/octet-stream" : contentType);
     return cli.Get(path, h);
   };
@@ -361,6 +361,8 @@ bool DeviceManager::request(const std::string& method, const std::string& path,
 }
 
 bool DeviceManager::uploadFirmware(const std::string& path, std::string& error) {
+  uploadDone_ = 0;
+  uploadTotal_ = 0;
   std::ifstream file(path, std::ios::binary);
   if (!file) { error = "cannot open firmware file"; return false; }
   std::string data((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
@@ -374,10 +376,17 @@ bool DeviceManager::uploadFirmware(const std::string& path, std::string& error) 
   body += data;
   body += "\r\n--" + boundary + "--\r\n";
   DeviceResponse response;
-  if (!request("POST", "/update", body, "multipart/form-data; boundary=" + boundary, response)) {
+  auto progress = [this](size_t current, size_t total) {
+    uploadDone_ = current;
+    uploadTotal_ = total;
+    return true;
+  };
+  if (!request("POST", "/update", body, "multipart/form-data; boundary=" + boundary,
+               response, progress)) {
     error = "device request failed";
     return false;
   }
+  uploadDone_ = uploadTotal_.load();
   if (response.status != 200) {
     error = "device returned HTTP " + std::to_string(response.status) + (response.body.empty() ? "" : ": " + response.body.substr(0, 120));
     return false;

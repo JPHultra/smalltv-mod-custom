@@ -27,6 +27,8 @@ HTML/WebView assets.
 - GitHub self-update, settings export/import, reboot and factory reset
 - Native file browser; no zenity/kdialog dependency
 - Diagnostic log viewer for the current and previous boot
+- Connection heartbeat with online/offline/update status and last-seen details
+- Phase and progress display for firmware updates
 - Flat graphite/amber desktop styling with vendored Inter fonts
 
 The app does not emulate Wi-Fi/OTA in firmware. Fonts live in

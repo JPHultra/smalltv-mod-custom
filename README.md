@@ -248,6 +248,11 @@ for `/api/dashboard`, `/api/view`, `/api/view/clear` and `/api/usage`, and
 enables the CORS headers the GitHub Pages editor needs. `/api/usage` stays open
 for the daemon, as before.
 
+`/api/status` also reports firmware update progress in an `update` object
+(`phase`, `progress`, `downloaded`, `total`, `target`, `message`, `error`).
+Progress is live where the transport can report it; boot-time ESP8266 updates
+and synchronous ESP32 updates report phases and final results instead.
+
 ## Notes
 
 - The ESP8266 image is about 608 KB flash / 47 KB static RAM in this build,

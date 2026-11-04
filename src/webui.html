@@ -46,6 +46,8 @@ td{padding:6px 4px}
 .net:hover{border-color:var(--acc2)}
 .bar{height:8px;background:#0b0e13;border-radius:6px;overflow:hidden;margin-top:6px}
 .bar>div{height:100%;width:0;background:var(--acc2);transition:.2s}
+.bar>div.indet{width:35%;animation:indet 1.2s linear infinite;transition:none}
+@keyframes indet{0%{margin-left:-35%}100%{margin-left:100%}}
 small.hint{display:block;color:var(--mut);margin-top:4px;font-size:12px}
 .chip{display:inline-block;margin-left:8px;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;letter-spacing:.03em;background:var(--acc2);color:#fff;vertical-align:middle}
 </style></head>
@@ -165,7 +167,9 @@ small.hint{display:block;color:var(--mut);margin-top:4px;font-size:12px}
  <section id="system" class="tab">
   <div class="card"><h2>Update from GitHub</h2>
    <div class="muted">Installed: <b id="fwVer">-</b></div>
+   <div class="muted" id="ghLatest" style="margin-top:4px">Latest: -</div>
    <div style="margin-top:10px"><button class="btn sec" onclick="checkUpdate()" id="chkBtn">Check for latest</button><button class="btn" style="margin-left:8px" onclick="selfUpdate()" id="ghUpBtn" disabled>Update now</button></div>
+   <div class="bar" id="ghBarWrap" style="display:none"><div id="ghBar"></div></div>
    <div id="ghMsg" class="muted" style="margin-top:8px"></div>
    <small class="hint">Pulls the newest release from your GitHub repo. Each image fetches its own release asset.</small>
   </div>
@@ -321,12 +325,31 @@ function pushDashboard(){var t=$('viewJson').value;try{JSON.parse(t)}catch(e){to
 function testOverlay(){var t=$('viewJson').value;try{JSON.parse(t)}catch(e){toast('Not valid JSON');return}j('/api/view',{method:'POST',headers:{'Content-Type':'application/json'},body:t}).then(function(){toast('Overlay shown')}).catch(function(e){toast(e.message)})}
 function clearOverlay(){j('/api/view/clear',{method:'POST'}).then(function(){toast('Overlay cleared')}).catch(function(e){toast(e.message)})}
 
-function checkUpdate(){$('ghMsg').textContent='Checking GitHub...';$('chkBtn').disabled=true;j('/api/checkupdate').then(function(u){$('chkBtn').disabled=false;if(!u.ok){$('ghMsg').textContent='Check failed: '+(u.error||'unknown');return}if(u.newer){$('ghMsg').innerHTML='Version <b>'+u.latest+'</b> is available (installed '+u.current+').';$('ghUpBtn').disabled=false}else{$('ghMsg').textContent='Up to date ('+u.current+').';$('ghUpBtn').disabled=true}}).catch(function(){$('chkBtn').disabled=false;$('ghMsg').textContent='Check failed'})}
-function selfUpdate(){if(!confirm('Download and flash the latest release from GitHub? The device reboots if it succeeds.'))return;$('ghUpBtn').disabled=true;$('chkBtn').disabled=true;$('ghMsg').textContent='Downloading and flashing...';var cur=(($('fwVer').textContent||'').trim().split(' ').pop())||'';j('/api/selfupdate',{method:'POST'}).then(function(){var n=0;var t=setInterval(function(){n++;j('/api/status').then(function(s){if(cur&&s.version&&s.version!==cur){clearInterval(t);$('ghMsg').textContent='Updated to '+s.version+'.';$('chkBtn').disabled=false;return}var m=s.updateMsg||'';if(m&&m!=='starting...'&&m!=='updating...'){clearInterval(t);$('ghMsg').textContent='Update failed: '+m;$('chkBtn').disabled=false}}).catch(function(){});if(n>100)clearInterval(t)},3000)}).catch(function(){$('ghMsg').textContent='Could not start update';$('chkBtn').disabled=false})}
+var ghTimer=null, ghStarted=0, ghStartVersion='', ghBarMode='';
+function currentVersion(){return (($('fwVer').textContent||'').trim().split(' ').pop())||''}
+function setGhButtons(check,update){$('chkBtn').disabled=!check;$('ghUpBtn').disabled=!update}
+function setGhBar(mode,percent,color){var w=$('ghBarWrap'),b=$('ghBar');if(!w||!b)return;w.style.display=mode?'block':'none';b.className=(mode==='indet')?'indet':'';b.style.width=(mode==='percent')?Math.max(0,Math.min(100,percent))+'%':'';b.style.background=color||'var(--acc2)'}
+function stopGhWatch(){if(ghTimer){clearInterval(ghTimer);ghTimer=null}ghStarted=0}
+function updatePhaseText(u){var p=u&&u.phase?u.phase:'';var m=u&&u.message?u.message:'';if(m)return m;if(p==='checking')return 'Checking GitHub releases...';if(p==='downloading')return 'Downloading firmware...';if(p==='installing')return 'Installing firmware...';if(p==='rebooting')return 'Rebooting device...';if(p==='done')return 'Update complete.';if(p==='error')return 'Update failed.';return 'Waiting for device...'}
+function finishGh(ok,msg){stopGhWatch();$('ghMsg').textContent=msg;setGhButtons(true,false);setGhBar(ok?'percent':'percent',100,ok?'var(--acc)':'var(--red)')}
+function refreshAfterUpdate(){loadStatus();setTimeout(loadConfig,400);setTimeout(function(){$('ghLatest').textContent='Latest: -'},1200)}
+function startUpdateWatch(){stopGhWatch();ghStartVersion=currentVersion();ghStarted=Date.now();setGhBar('indet');setGhButtons(false,false);ghTimer=setInterval(function(){
+  if(Date.now()-ghStarted>180000){finishGh(false,'The device did not come back after 3 minutes. Check the diagnostics log.');return}
+  j('/api/status').then(function(s){
+    var u=s.update||{};
+    if(ghStartVersion&&s.version&&s.version!==ghStartVersion){finishGh(true,'Updated to '+s.version+'.');refreshAfterUpdate();return}
+    if(u.phase==='error'||u.error){finishGh(false,'Update failed: '+(u.error||u.message||'unknown error'));return}
+    $('ghMsg').textContent=updatePhaseText(u);
+    if(typeof u.progress==='number'&&u.progress>=0)setGhBar('percent',u.progress);
+    else setGhBar('indet');
+  }).catch(function(){$('ghMsg').textContent='Device is rebooting or installing; waiting for it to come back...';setGhBar('indet')});
+},1000)}
+function checkUpdate(){$('ghLatest').textContent='Latest: checking...';setGhButtons(false,false);$('ghMsg').textContent='Checking GitHub releases...';setGhBar('indet');j('/api/checkupdate').then(function(u){setGhBar('',0);setGhButtons(true,false);if(!u.ok){$('ghMsg').textContent='Check failed: '+(u.error||'unknown');return}$('ghLatest').textContent='Latest: '+(u.latest||'-');if(u.newer){$('ghMsg').innerHTML='Version <b>'+u.latest+'</b> is available (installed '+u.current+').';$('ghUpBtn').disabled=false}else{$('ghMsg').textContent='Up to date ('+u.current+').'}}).catch(function(){setGhBar('',0);setGhButtons(true,false);$('ghMsg').textContent='Check failed: device did not respond'})}
+function selfUpdate(){if(!confirm('Download and flash the latest release from GitHub? The device reboots if it succeeds.'))return;setGhButtons(false,false);$('ghMsg').textContent='Starting update...';setGhBar('indet');j('/api/selfupdate',{method:'POST'}).then(function(){startUpdateWatch()}).catch(function(){finishGh(false,'Could not start update')})}
 function importCfg(){var f=$('cfgFile').files[0];if(!f){toast('Pick a config .json first');return}var r=new FileReader();r.onload=function(){var txt=r.result;try{JSON.parse(txt)}catch(e){toast('Not valid JSON');return}if(!confirm('Apply this configuration and reboot?'))return;j('/api/import',{method:'POST',headers:{'Content-Type':'application/json'},body:txt}).then(function(){toast('Imported, rebooting...');setTimeout(function(){location.reload()},8000)}).catch(function(){toast('Import failed')})};r.readAsText(f)}
 function reboot(){if(confirm('Reboot device?'))j('/api/reboot',{method:'POST'}).then(function(){toast('Rebooting...')})}
 function factory(){if(confirm('Erase ALL settings and reboot?'))j('/api/factory',{method:'POST'}).then(function(){toast('Reset, rebooting...')})}
-function upload(){var f=$('fw').files[0];if(!f){toast('Pick a .bin first');return}var fd=new FormData();fd.append('firmware',f,f.name);var x=new XMLHttpRequest();x.open('POST','/update');$('upBtn').disabled=true;x.upload.onprogress=function(e){if(e.lengthComputable){var p=Math.round(e.loaded/e.total*100);$('upBar').style.width=p+'%';$('upMsg').textContent='Uploading '+p+'%'}};x.onload=function(){$('upBtn').disabled=false;if(x.status==200){$('upMsg').textContent='Done. Rebooting...';$('upBar').style.width='100%';setTimeout(function(){location.reload()},9000)}else{$('upMsg').textContent='Failed: '+x.responseText}};x.onerror=function(){$('upBtn').disabled=false;$('upMsg').textContent='Upload error'};x.send(fd)}
+function upload(){var f=$('fw').files[0];if(!f){toast('Pick a .bin first');return}var start=currentVersion();var fd=new FormData();fd.append('firmware',f,f.name);var x=new XMLHttpRequest();x.open('POST','/update');$('upBtn').disabled=true;$('upBar').style.width='0%';$('upBar').className='';$('upMsg').textContent='Uploading 0%';x.upload.onprogress=function(e){if(e.lengthComputable){var p=Math.round(e.loaded/e.total*100);$('upBar').style.width=p+'%';$('upMsg').textContent='Uploading '+p+'%'}};x.upload.onload=function(){$('upBar').style.width='100%';$('upMsg').textContent='Upload complete; installing...'};x.onload=function(){$('upBtn').disabled=false;if(x.status===200){$('upMsg').textContent='Installed; waiting for the device to reboot...';var n=0;var t=setInterval(function(){n++;j('/api/status').then(function(s){if(start&&s.version&&s.version!==start){clearInterval(t);$('upMsg').textContent='Updated to '+s.version+'.';loadStatus();setTimeout(loadConfig,400)}else{var u=s.update||{};if(u.phase==='error'||u.error){clearInterval(t);$('upMsg').textContent='Update failed: '+(u.error||u.message||'unknown')}}}).catch(function(){});if(n>180){clearInterval(t);$('upMsg').textContent='Device did not come back; check the diagnostics log.'}},1000)}else{$('upMsg').textContent='Failed: '+x.responseText}};x.onerror=function(){$('upBtn').disabled=false;$('upMsg').textContent='Upload failed: device did not respond'};x.send(fd)}
 
 loadConfig().then(loadStatus);
 setInterval(loadStatus,5000);
