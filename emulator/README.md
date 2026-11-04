@@ -47,6 +47,13 @@ emulator/build/smalltv-emulator \
 
 The default files are `examples/view.json` and `daemon/usage.example.json`.
 
+## Release packages
+
+The GitHub release includes ready-to-run packages:
+
+- Linux: `smalltv-emulator-linux-x86_64.tar.gz` (needs the system `libSDL2` runtime)
+- Windows: `smalltv-emulator-windows-x86_64.zip` (includes `SDL2.dll`)
+
 ## Screenshot
 
 ```sh
