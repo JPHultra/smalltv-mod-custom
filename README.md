@@ -95,17 +95,19 @@ unchanged because the firmware's `UPDATE_ASSET` values point at them.
 
 ## Dashboard emulator
 
-A host-side SDL2 emulator runs the real view renderer and anti-aliased font.
-It also starts a local device manager that discovers SmallTV devices, serves a
-full copy of the device web UI, and includes the visual dashboard editor:
+A native SDL2 + Dear ImGui desktop app runs the real view renderer and
+anti-aliased font. It includes device discovery, native settings, firmware
+upload and a visual dashboard editor. There is no local web server and no
+browser/WebView dependency:
 
 ```sh
 make -C emulator
-emulator/build/smalltv-emulator --view examples/view.json   --usage daemon/usage.example.json --time 10:36
+emulator/build/smalltv-emulator --view examples/view.json --usage daemon/usage.example.json
 ```
 
-Firmware upload, the device web UI password (HTTP Digest), GitHub self-update,
-settings and the editor are handled through the local manager. See
+Use the **Dashboard**, **Editor** and **Settings** tabs. The device web UI
+password uses HTTP Digest, and firmware upload, GitHub self-update and
+settings export/import are handled directly by the app. See
 [`emulator/README.md`](emulator/README.md) for details and Windows/MSYS2
 instructions.
 

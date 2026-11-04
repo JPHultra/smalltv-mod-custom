@@ -11,6 +11,7 @@
 #include <sstream>
 #include <thread>
 
+#include "httplib.h"
 #include "md5.h"
 
 #if defined(_WIN32)
@@ -24,12 +25,6 @@
 #endif
 
 namespace {
-
-std::string read_text(const std::string& path) {
-  std::ifstream f(path, std::ios::binary);
-  if (!f) return {};
-  return std::string(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
-}
 
 std::string local_ipv4() {
 #if defined(_WIN32)
@@ -111,14 +106,7 @@ std::string make_digest(const std::string& challenge, const std::string& user,
 
 }  // namespace
 
-DeviceManager::DeviceManager(std::string assetsRoot, int port)
-    : assetsRoot_(std::move(assetsRoot)), port_(port) {}
-
 DeviceManager::~DeviceManager() { stop(); }
-
-std::string DeviceManager::url() const {
-  return "http://127.0.0.1:" + std::to_string(port_) + "/";
-}
 
 std::string DeviceManager::target() const {
   std::lock_guard<std::mutex> lock(mutex_);
@@ -136,127 +124,7 @@ void DeviceManager::setAuth(const std::string& user, const std::string& pass) {
   pass_ = pass;
 }
 
-std::string DeviceManager::asset(const std::string& name) const {
-  std::vector<std::string> candidates = {
-      assetsRoot_ + "/" + name,
-      assetsRoot_ + "/emulator/" + name,
-  };
-  for (const auto& path : candidates) {
-    if (std::ifstream(path).good()) return path;
-  }
-  return {};
-}
-
-std::string DeviceManager::managerPath() const {
-  return asset("manager.html");
-}
-
-std::string DeviceManager::deviceUiPath() const {
-  std::string path = asset("device-ui.html");
-  if (!path.empty()) return path;
-  return asset("src/webui.html");
-}
-
-std::string DeviceManager::editorDir() const {
-  std::vector<std::string> candidates = {
-      assetsRoot_ + "/editor",
-      assetsRoot_ + "/../editor",
-  };
-  for (const auto& path : candidates) {
-    if (std::ifstream(path + "/index.html").good()) return path;
-  }
-  return {};
-}
-
-void DeviceManager::configureRoutes() {
-  server_.set_payload_max_length(8 * 1024 * 1024);
-  server_.set_read_timeout(10, 0);
-  server_.set_write_timeout(10, 0);
-
-  server_.Get("/", [this](const httplib::Request&, httplib::Response& res) {
-    std::string path = managerPath();
-    std::string body = read_text(path);
-    if (body.empty()) { res.status = 500; res.set_content("manager.html missing", "text/plain"); return; }
-    res.set_content(body, "text/html; charset=utf-8");
-  });
-  server_.Get("/device-ui", [this](const httplib::Request&, httplib::Response& res) {
-    std::string body = read_text(deviceUiPath());
-    if (body.empty()) { res.status = 500; res.set_content("device UI missing", "text/plain"); return; }
-    res.set_content(body, "text/html; charset=utf-8");
-  });
-  server_.Get("/api/local/status", [this](const httplib::Request&, httplib::Response& res) {
-    JsonDocument doc;
-    doc["target"] = target();
-    std::string out;
-    serializeJson(doc, out);
-    res.set_content(out, "application/json");
-  });
-  server_.Get("/api/local/discover", [this](const httplib::Request&, httplib::Response& res) {
-    auto devices = discover();
-    JsonDocument doc;
-    doc["scanning"] = scanning();
-    JsonArray arr = doc["devices"].to<JsonArray>();
-    for (const auto& d : devices) {
-      JsonObject o = arr.add<JsonObject>();
-      o["ip"] = d.ip;
-      o["name"] = d.name;
-      o["version"] = d.version;
-      o["variant"] = d.variant;
-      o["auth"] = d.auth;
-    }
-    std::string out;
-    serializeJson(doc, out);
-    res.set_content(out, "application/json");
-  });
-  server_.Post("/api/local/target", [this](const httplib::Request& req, httplib::Response& res) {
-    JsonDocument doc;
-    if (deserializeJson(doc, req.body)) { res.status = 400; res.set_content("{\"error\":\"bad json\"}", "application/json"); return; }
-    std::string url = doc["url"] | "";
-    if (url.rfind("http://", 0) != 0) { res.status = 400; res.set_content("{\"error\":\"device URL must start with http://\"}", "application/json"); return; }
-    setTarget(url);
-    res.set_content("{\"ok\":true}", "application/json");
-  });
-  server_.Post("/api/local/auth", [this](const httplib::Request& req, httplib::Response& res) {
-    JsonDocument doc;
-    if (deserializeJson(doc, req.body)) { res.status = 400; res.set_content("{\"error\":\"bad json\"}", "application/json"); return; }
-    setAuth(doc["user"] | "", doc["pass"] | "");
-    res.set_content("{\"ok\":true}", "application/json");
-  });
-
-  auto proxy = [this](const httplib::Request& req, httplib::Response& res) {
-    forward(req, res, req.method);
-  };
-  server_.Get(R"(/api/.*)", proxy);
-  server_.Post(R"(/api/.*)", proxy);
-  server_.Put(R"(/api/.*)", proxy);
-  server_.Delete(R"(/api/.*)", proxy);
-  server_.Post("/update", proxy);
-
-  std::string dir = editorDir();
-  if (!dir.empty()) {
-    server_.set_mount_point("/editor", dir);
-    server_.Get("/editor", [dir](const httplib::Request&, httplib::Response& res) {
-      std::string body = read_text(dir + "/index.html");
-      res.set_content(body, "text/html; charset=utf-8");
-    });
-  }
-}
-
-bool DeviceManager::start(std::string& error) {
-  configureRoutes();
-  if (!server_.bind_to_port("127.0.0.1", port_)) {
-    error = "cannot bind 127.0.0.1:" + std::to_string(port_);
-    return false;
-  }
-  running_ = true;
-  thread_ = std::thread([this] { server_.listen_after_bind(); });
-  return true;
-}
-
 void DeviceManager::stop() {
-  if (!running_.exchange(false)) return;
-  server_.stop();
-  if (thread_.joinable()) thread_.join();
   if (scanThread_.joinable()) scanThread_.join();
 }
 
@@ -272,6 +140,11 @@ std::vector<EmuDevice> DeviceManager::discover() {
       scanning_ = false;
     });
   }
+  std::lock_guard<std::mutex> lock(scanMutex_);
+  return found_;
+}
+
+std::vector<EmuDevice> DeviceManager::knownDevices() const {
   std::lock_guard<std::mutex> lock(scanMutex_);
   return found_;
 }
@@ -326,8 +199,9 @@ std::vector<EmuDevice> DeviceManager::scan() {
   return found;
 }
 
-bool DeviceManager::forward(const httplib::Request& req, httplib::Response& res,
-                            const std::string& method) {
+bool DeviceManager::request(const std::string& method, const std::string& path,
+                            const std::string& body, const std::string& contentType,
+                            DeviceResponse& response) {
   std::string base, user, pass;
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -336,54 +210,64 @@ bool DeviceManager::forward(const httplib::Request& req, httplib::Response& res,
     pass = pass_;
   }
   if (base.empty()) {
-    res.status = 503;
-    res.set_content("{\"error\":\"no device selected\"}", "application/json");
+    response.status = 503;
+    response.body = "{\"error\":\"no device selected\"}";
+    response.contentType = "application/json";
     return true;
   }
-  const std::string path = req.target.empty() ? req.path : req.target;
   httplib::Headers headers;
-  for (const auto& kv : req.headers) {
-    if (kv.first == "Content-Type" || kv.first == "Accept" ||
-        kv.first == "Content-Disposition")
-      headers.emplace(kv.first, kv.second);
-  }
-  const std::string contentType = req.get_header_value("Content-Type");
-
+  headers.emplace("Accept", "application/json");
   auto send = [&](const httplib::Headers& h) -> httplib::Result {
     httplib::Client cli(base.c_str());
     cli.set_connection_timeout(0, 700000);
-    cli.set_read_timeout(20, 0);
-    cli.set_write_timeout(20, 0);
+    const int timeoutSec = path == "/update" ? 60 : 5;
+    cli.set_read_timeout(timeoutSec, 0);
+    cli.set_write_timeout(timeoutSec, 0);
     if (method == "GET") return cli.Get(path, h);
-    if (method == "POST") return cli.Post(path, h, req.body, contentType.empty() ? "application/octet-stream" : contentType);
-    if (method == "PUT") return cli.Put(path, h, req.body, contentType.empty() ? "application/octet-stream" : contentType);
-    if (method == "DELETE") return cli.Delete(path, h, req.body, contentType.empty() ? "application/octet-stream" : contentType);
+    if (method == "POST") return cli.Post(path, h, body, contentType.empty() ? "application/octet-stream" : contentType);
+    if (method == "PUT") return cli.Put(path, h, body, contentType.empty() ? "application/octet-stream" : contentType);
+    if (method == "DELETE") return cli.Delete(path, h, body, contentType.empty() ? "application/octet-stream" : contentType);
     return cli.Get(path, h);
   };
-
   auto result = send(headers);
   if (result && result->status == 401 && !user.empty()) {
     std::string challenge = result->get_header_value("WWW-Authenticate");
     if (challenge.find("Digest") != std::string::npos) {
-      std::string auth = make_digest(challenge, user, pass, method == "GET" ? "GET" : method, path);
+      std::string auth = make_digest(challenge, user, pass, method, path);
       if (!auth.empty()) {
         headers.emplace("Authorization", auth);
         result = send(headers);
       }
     }
   }
-  if (!result) {
-    res.status = 502;
-    res.set_content("{\"error\":\"device request failed\"}", "application/json");
-    return true;
+  if (!result) return false;
+  response.status = result->status;
+  response.body = result->body;
+  response.contentType = result->get_header_value("Content-Type");
+  return true;
+}
+
+bool DeviceManager::uploadFirmware(const std::string& path, std::string& error) {
+  std::ifstream file(path, std::ios::binary);
+  if (!file) { error = "cannot open firmware file"; return false; }
+  std::string data((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+  if (data.empty()) { error = "firmware file is empty"; return false; }
+  const std::string boundary = "----SmallTVEmulatorBoundary";
+  std::string body;
+  body.reserve(data.size() + 256);
+  body += "--" + boundary + "\r\n";
+  body += "Content-Disposition: form-data; name=\"firmware\"; filename=\"firmware.bin\"\r\n";
+  body += "Content-Type: application/octet-stream\r\n\r\n";
+  body += data;
+  body += "\r\n--" + boundary + "--\r\n";
+  DeviceResponse response;
+  if (!request("POST", "/update", body, "multipart/form-data; boundary=" + boundary, response)) {
+    error = "device request failed";
+    return false;
   }
-  res.status = result->status;
-  res.body = result->body;
-  for (const auto& key : {"Content-Type", "Content-Disposition", "Cache-Control", "Location", "WWW-Authenticate"}) {
-    std::string value = result->get_header_value(key);
-    if (!value.empty()) res.set_header(key, value);
+  if (response.status != 200) {
+    error = "device returned HTTP " + std::to_string(response.status) + (response.body.empty() ? "" : ": " + response.body.substr(0, 120));
+    return false;
   }
-  if (res.get_header_value("Content-Type").empty())
-    res.set_header("Content-Type", "application/octet-stream");
   return true;
 }

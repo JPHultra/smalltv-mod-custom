@@ -21,7 +21,9 @@ CPPFLAGS += -DSMALLTV_ESP8266 -DARDUINOJSON_ENABLE_ARDUINO_STRING=1 \
             -I$(ROOT)/emulator/shim -I$(ROOT)/tests/shim \
             -I$(ROOT)/src -I$(ROOT)/src/features/view \
             -I$(ROOT)/src/features/usage -I$(ROOT)/src/fonts \
-            -I$(ROOT)/emulator/third_party -I$(ARDUINOJSON) $(SDL_CFLAGS)
+            -I$(ROOT)/emulator/third_party -I$(ROOT)/emulator/third_party/imgui \
+            -I$(ROOT)/emulator/third_party/imgui/backends \
+            -I$(ARDUINOJSON) $(SDL_CFLAGS)
 LDLIBS += $(SDL_LIBS) -pthread
 
 SRCS := $(ROOT)/emulator/main.cpp \
@@ -31,7 +33,13 @@ SRCS := $(ROOT)/emulator/main.cpp \
         $(ROOT)/src/features/view/ViewRender.cpp \
         $(ROOT)/src/features/view/ViewIcons.cpp \
         $(ROOT)/src/features/usage/UsageClient.cpp \
-        $(ROOT)/src/fonts/NotoSansMonoAA.cpp
+        $(ROOT)/src/fonts/NotoSansMonoAA.cpp \
+        $(ROOT)/emulator/third_party/imgui/imgui.cpp \
+        $(ROOT)/emulator/third_party/imgui/imgui_draw.cpp \
+        $(ROOT)/emulator/third_party/imgui/imgui_tables.cpp \
+        $(ROOT)/emulator/third_party/imgui/imgui_widgets.cpp \
+        $(ROOT)/emulator/third_party/imgui/backends/imgui_impl_sdl2.cpp \
+        $(ROOT)/emulator/third_party/imgui/backends/imgui_impl_sdlrenderer2.cpp
 OBJS := $(patsubst $(ROOT)/%.cpp,$(BUILD)/%.o,$(SRCS))
 DEPS := $(OBJS:.o=.d)
 

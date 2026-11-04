@@ -1,27 +1,39 @@
-# SmallTV dashboard emulator
+# SmallTV desktop app
 
-A host-side 240x240 emulator for the dashboard renderer. It compiles the real
+A native desktop application for the SmallTV dashboard. It runs the real
 firmware `ViewModel`, `ViewRender`, `ViewIcons`, usage store and anti-aliased
-font against a fake `Arduino_GFX` framebuffer, so the pixels and text metrics
-match the device.
+font against a fake `Arduino_GFX` framebuffer, and adds a native device manager
+and visual dashboard editor.
 
-The emulator also starts a local device manager at `http://127.0.0.1:8788/`:
+The app is **fully native**: SDL2 + Dear ImGui, no web server, no browser and no
+HTML/WebView assets.
 
-- discovers SmallTV devices on the local subnet
-- serves a full copy of the device web UI through a local proxy
-- supports the device web UI password (HTTP Digest)
-- serves the visual dashboard editor at `/editor`
-- proxies dashboard, overlay, usage, settings, export/import and firmware upload
-- accepts local `.bin` firmware uploads and the device's GitHub self-update
+## Features
 
-The emulator does not emulate Wi-Fi/OTA in the firmware itself; it talks to real
-devices over the network. Usage data in the SDL preview comes from a local JSON
-fixture.
+- Local live preview using the firmware renderer
+- Subnet discovery of SmallTV devices
+- Device web-UI password (HTTP Digest)
+- Native settings for WiFi, display, clock, button, view/overlay and security
+- Live status and usage
+- Native visual dashboard editor:
+  - text, rectangle, rounded rectangle, circle, line, icon, bitmap, usage and
+    fill layers
+  - drag, resize, layer ordering, duplicate/delete
+  - properties, icon picker, bitmap pixel grid
+  - undo/redo, alignment, JSON apply/copy
+  - load/save from a file or the device
+  - overlay test and clear
+- Firmware upload (`.bin`) with the in-app file browser
+- GitHub self-update, settings export/import, reboot and factory reset
+- Native file browser; no zenity/kdialog dependency
+
+The app does not emulate Wi-Fi/OTA in firmware. It talks to real devices over
+the network. The local preview uses a JSON fixture until you edit the dashboard.
 
 ## Build
 
-Prerequisites: a C++17 compiler, `pkg-config`, SDL2 development files, and a
-firmware build once so `.pio/libdeps/.../ArduinoJson` exists.
+Prerequisites: a C++17 compiler, `pkg-config`, SDL2 development files, `make`,
+and a firmware build once so `.pio/libdeps/.../ArduinoJson` exists.
 
 Linux:
 
@@ -31,54 +43,55 @@ Linux:
 make -C emulator
 ```
 
-Windows: use WSL, or MSYS2 with `g++`, `pkg-config` and the SDL2 package:
+Windows: use MSYS2 with `g++`, `pkg-config`, SDL2 and `make`:
 
 ```sh
 pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-pkgconf mingw-w64-x86_64-SDL2 make
 make -C emulator
 ```
 
+Dear ImGui is vendored under `emulator/third_party/imgui/` (MIT), using the SDL2
+and SDL_Renderer2 backends.
+
 ## Run
 
 ```sh
 emulator/build/smalltv-emulator --view examples/view.json \
-  --usage daemon/usage.example.json --scale 2
+  --usage daemon/usage.example.json
 ```
 
-It opens the dashboard window and the local device manager. Use **Scan** to find
-the device, select it, then use the full web UI or **Open dashboard editor**.
+Select a discovered device, enter the web UI password if the device uses one,
+and press **Connect**. The **Editor** tab edits the local dashboard; **Save
+device** writes it to the selected device.
 
 Options:
 
-- `--view` draw-list JSON for the emulator window
-- `--usage` normalized usage JSON for the emulator window
+- `--view PATH` draw-list JSON loaded into the editor
+- `--usage PATH` normalized usage JSON for the local preview
 - `--time HH:MM` fixed clock; omit for the local clock
-- `--scale` integer window scale, 1-8
-- `--port` local manager port (default 8788)
-- `--assets` directory containing `manager.html`, `device-ui.html` and `editor/`
-- `--no-browser` do not open the manager automatically
+- `--tab NAME` start on `dashboard`, `editor` or `settings`
+- `--url URL` connect to a device at startup
+- `--user USER` / `--pass PASS` device web UI credentials
 - `--screenshot PATH` write a 240x240 P6 PPM and exit
 - `Esc` quits
 
-The local manager uses the device URL selected in its toolbar. The visual editor
-is served locally so mixed-content blocking does not apply. Firmware upload,
-GitHub update, settings, WiFi scan, export/import and factory reset all go
-through the device proxy.
+## Native editor
+
+The canvas is the real firmware renderer at 2x. Click a layer to select it,
+drag to move, and drag the yellow corner handle to resize. The right panel has
+layer order, properties and device/file actions. **Add layer** inserts a new
+component at the canvas centre. The JSON panel lets you inspect or replace the
+draw list directly.
 
 ## Release packages
 
-The GitHub release includes ready-to-run packages:
-
-- Linux: `smalltv-emulator-linux-x86_64.tar.gz` (needs the system `libSDL2` runtime)
+- Linux: `smalltv-emulator-linux-x86_64.tar.gz` (needs the system SDL2 runtime)
 - Windows: `smalltv-emulator-windows-x86_64.zip` (includes `SDL2.dll`)
 
 ## Screenshot
 
 ```sh
-emulator/build/smalltv-emulator \
-  --view examples/view.json --usage daemon/usage.example.json \
-  --time 10:36 --screenshot /tmp/smalltv.ppm
+emulator/build/smalltv-emulator --view examples/view.json \
+  --usage daemon/usage.example.json --time 10:36 --screenshot /tmp/smalltv.ppm
 magick /tmp/smalltv.ppm /tmp/smalltv.png
 ```
-
-Use the matching usage JSON from your daemon/device to preview real values.
