@@ -613,6 +613,7 @@ The UI is at `http://<device-ip>/` or `http://<hostname>.local/`.
 | `GET/POST /api/dashboard` | installed dashboard JSON |
 | `POST /api/view`, `POST /api/view/clear` | transient overlay |
 | `GET/POST /api/usage` | usage status / daemon push |
+| `GET /api/logs`, `GET /api/logs/previous` | current / previous boot diagnostic log |
 | `POST /update` | firmware upload (System tab) |
 | `GET /api/export`, `POST /api/import` | settings backup |
 
@@ -626,6 +627,11 @@ curl http://<device-ip>/api/usage
 
 A provider appears as `valid`, `stale`, or `error`; the **Usage** tab in the web
 UI shows the same data.
+
+The **System** tab can download the current and previous boot logs. Each log is
+capped at 8 KiB; only startup events and errors are recorded, so routine polling
+does not wear the filesystem. Logs contain SSIDs and IP addresses, but no
+passwords or tokens. A factory reset removes both log files.
 
 ## 10. Updates and releases
 

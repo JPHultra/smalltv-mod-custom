@@ -234,6 +234,7 @@ normalized contract; provider credentials stay on the daemon host.
 | `GET/POST /api/dashboard` | installed dashboard JSON |
 | `POST /api/view`, `POST /api/view/clear` | transient overlay |
 | `GET/POST /api/usage` | usage status / daemon push |
+| `GET /api/logs`, `GET /api/logs/previous` | current / previous boot diagnostic log |
 | `POST /update` | firmware upload |
 
 The optional web-UI password is digest auth. The editor token is an alternative

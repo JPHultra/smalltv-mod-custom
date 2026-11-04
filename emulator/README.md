@@ -26,6 +26,7 @@ HTML/WebView assets.
 - Firmware upload (`.bin`) with the in-app file browser
 - GitHub self-update, settings export/import, reboot and factory reset
 - Native file browser; no zenity/kdialog dependency
+- Diagnostic log viewer for the current and previous boot
 - Flat graphite/amber desktop styling with vendored Inter fonts
 
 The app does not emulate Wi-Fi/OTA in firmware. Fonts live in
@@ -66,7 +67,8 @@ emulator/build/smalltv-emulator --view examples/view.json \
 Select or enter a device in the Device workspace and connect. Device shows
 discovery, a scaled live preview, status/usage telemetry and maintenance
 actions; Design is the three-pane dashboard editor; Settings uses section
-navigation with two-column forms.
+navigation with two-column forms. Settings > System can fetch the device's
+current and previous diagnostic logs.
 
 Options:
 

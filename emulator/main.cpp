@@ -413,6 +413,9 @@ struct App {
   std::future<bool> uploadFuture;
   bool uploadRunning = false;
   std::string uploadError;
+  std::string diagText;
+  std::string diagTitle;
+  bool diagOpen = false;
   std::string initialViewPath = "examples/view.json";
   FileDialog dialog;
 
@@ -574,6 +577,15 @@ struct App {
   void loadStatus() {
     DeviceResponse r;
     if (api("GET", "/api/status", "", "", r)) status = json_text(r.body);
+  }
+
+  void readDiagnostics(bool previous) {
+    DeviceResponse r;
+    const char* path = previous ? "/api/logs/previous" : "/api/logs";
+    if (!api("GET", path, "", "", r)) return;
+    diagText = r.body.empty() ? "(empty log)" : r.body;
+    diagTitle = previous ? "Previous boot log" : "Current boot log";
+    diagOpen = true;
   }
 
   void loadUsage() {
@@ -948,6 +960,24 @@ struct App {
     if (ImGui::Button("Clear overlay")) sendOverlay(true);
   }
 
+  void diagnosticsSection() {
+    ImGui::SeparatorText("Diagnostics");
+    if (ImGui::Button("View current boot log")) readDiagnostics(false);
+    ImGui::SameLine();
+    if (ImGui::Button("View previous boot log")) readDiagnostics(true);
+    if (diagOpen) {
+      ImGui::Spacing();
+      ImGui::TextDisabled("%s", diagTitle.c_str());
+      ImGui::BeginChild("##diaglog", ImVec2(0, 180), true,
+                        ImGuiWindowFlags_HorizontalScrollbar);
+      ImGui::TextUnformatted(diagText.c_str());
+      ImGui::EndChild();
+      if (ImGui::Button("Copy log")) ImGui::SetClipboardText(diagText.c_str());
+      ImGui::SameLine();
+      if (ImGui::Button("Close log")) diagOpen = false;
+    }
+  }
+
   void settingsSystem() {
     JsonObject o = cfg.as<JsonObject>();
     JsonObject a = o["auth"].as<JsonObject>();
@@ -1023,6 +1053,7 @@ struct App {
         if (api("POST", "/api/import", body, "application/json", r)) notify("Settings imported");
       });
     }
+    diagnosticsSection();
     ImGui::SeparatorText("Restart");
     if (ImGui::Button("Reboot device")) {
       DeviceResponse r;
@@ -1805,6 +1836,7 @@ struct App {
       paneTitle("CONFIGURATION");
       ImGui::TextDisabled("Connect to load the editable configuration.");
       if (theme::primaryButton("Load configuration")) loadConfig();
+      diagnosticsSection();
     } else {
       const char* titles[] = {"WiFi", "Display", "View", "System", "JSON"};
       paneTitle("SETTINGS", titles[settingsTab]);

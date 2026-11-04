@@ -1,5 +1,6 @@
 #include "WebPortal.h"
 #include "Platform.h"
+#include "DiagLog.h"
 #include "WebGuard.h"
 #include <ArduinoJson.h>
 #include <LittleFS.h>
@@ -105,6 +106,7 @@ static void sendJson(JsonDocument& doc, int code = 200) {
 }
 
 static void sendError(int code, const char* message) {
+  diag::error("web", "%d %s", code, message ? message : "-");
   JsonDocument doc;
   doc["error"] = message;
   sendJson(doc, code);
@@ -206,6 +208,7 @@ static String netFingerprint(const Settings& s) {
 
 
 static void sendParseError(DeserializationError err) {
+  diag::error("web", "bad json: %s", err.c_str());
   if (err == DeserializationError::NoMemory)
     server.send(503, "application/json", "{\"ok\":false,\"error\":\"not enough memory\"}");
   else
@@ -228,6 +231,7 @@ static void handlePostConfig() {
   if (!applyAndSaveSettings(*S,
         [&](Settings& settings) { settingsApplyJson(settings, doc.as<JsonObjectConst>()); doc.clear(); },
         [](const Settings& settings) { return saveSettings(settings); })) {
+    diag::error("web", "could not save settings");
     server.send(500, "application/json", "{\"ok\":false,\"error\":\"could not save settings\"}");
     return;
   }
@@ -297,9 +301,11 @@ static void handleImport() {
   if (!applyAndSaveSettings(*S,
         [&](Settings& settings) { settingsApplyJson(settings, doc.as<JsonObjectConst>()); doc.clear(); },
         [](const Settings& settings) { return saveSettings(settings); })) {
+    diag::error("web", "could not import settings");
     server.send(500, "application/json", "{\"ok\":false,\"error\":\"could not save settings\"}");
     return;
   }
+  diag::info("web", "settings imported");
   server.send(200, "application/json", "{\"ok\":true,\"reboot\":true}");
   scheduleReboot(800);
 }
@@ -319,17 +325,44 @@ static void handleCheckUpdate() {
 
 static void handleSelfUpdate() {
   if (!requireAuth()) return;
+  diag::info("ota", "self-update requested");
   g_selfUpdate = true;
   g_updateMsg = "starting...";
   server.send(200, "application/json", "{\"ok\":true}");
 }
+
+static void sendDiagnosticLog(bool previous) {
+  if (!requireAuth()) return;
+  const char* path = previous ? diag::kPreviousPath : diag::kCurrentPath;
+  File f = LittleFS.open(path, "r");
+  if (!f) {
+    server.send(404, "text/plain", "No diagnostic log for this boot");
+    return;
+  }
+  server.sendHeader("Cache-Control", "no-store");
+  server.sendHeader("Content-Disposition", String("attachment; filename=\"") +
+                                          (previous ? "smalltv-diag-previous.log"
+                                                    : "smalltv-diag-current.log") + "\"");
+  server.streamFile(f, "text/plain");
+  f.close();
+}
+
+static void handleLogs() { sendDiagnosticLog(false); }
+static void handlePreviousLogs() { sendDiagnosticLog(true); }
 
 // ---- usage push (daemon, no web-UI password) -------------------------------
 static void handleUsagePush() {
   if (!guardRequest()) return;
   if (!server.hasArg("plain")) { server.send(400, "text/plain", "no body"); return; }
   const String body = server.arg("plain");
-  const bool ok = body.length() <= 4096 && usageApply(body);
+  bool ok = false;
+  if (body.length() > 4096) {
+    diag::warn("usage", "push too large (%u bytes)", (unsigned)body.length());
+  } else if (!usageApply(body)) {
+    diag::warn("usage", "push rejected");
+  } else {
+    ok = true;
+  }
   server.send(ok ? 200 : 400, "application/json", ok ? "{\"ok\":true}" : "{\"ok\":false}");
 }
 
@@ -402,6 +435,8 @@ static void handleViewClear() {
 static void handleUpdateDone() {
   if (!requireAuth()) return;
   bool ok = !Update.hasError();
+  if (ok) diag::info("ota", "manual upload complete");
+  else diag::error("ota", "manual upload failed: %s", platformUpdateError().c_str());
   server.sendHeader("Connection", "close");
   server.send(ok ? 200 : 500, "text/plain", ok ? "OK" : platformUpdateError().c_str());
   if (ok) scheduleReboot(1200);
@@ -423,13 +458,23 @@ static void handleUpdateUpload() {
     WiFiUDP::stopAll();
 #endif
     uint32_t maxSpace = (ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000;
-    if (!Update.begin(maxSpace)) Update.printError(Serial);
+    if (!Update.begin(maxSpace)) {
+      Update.printError(Serial);
+      diag::error("ota", "upload begin failed: %s", platformUpdateError().c_str());
+    }
   } else if (up.status == UPLOAD_FILE_WRITE) {
-    if (Update.write(up.buf, up.currentSize) != up.currentSize) Update.printError(Serial);
+    if (Update.write(up.buf, up.currentSize) != up.currentSize) {
+      Update.printError(Serial);
+      diag::error("ota", "upload write failed: %s", platformUpdateError().c_str());
+    }
   } else if (up.status == UPLOAD_FILE_END) {
-    if (!Update.end(true)) Update.printError(Serial);
+    if (!Update.end(true)) {
+      Update.printError(Serial);
+      diag::error("ota", "upload end failed: %s", platformUpdateError().c_str());
+    }
   } else if (up.status == UPLOAD_FILE_ABORTED) {
     Update.end();
+    diag::warn("ota", "manual upload aborted");
   }
   yield();
 }
@@ -448,6 +493,7 @@ static void handleNotFound() {
 void webPortalBegin(Settings& settings) {
   S = &settings;
   g_updateMsg = otaTakeBootResult();
+  if (g_updateMsg.length()) diag::warn("ota", "boot result: %s", g_updateMsg.c_str());
 
   server.on("/", HTTP_GET, handleRoot);
   server.on("/api/config", HTTP_GET, handleGetConfig);
@@ -460,6 +506,8 @@ void webPortalBegin(Settings& settings) {
   server.on("/api/import", HTTP_POST, handleImport);
   server.on("/api/checkupdate", HTTP_GET, handleCheckUpdate);
   server.on("/api/selfupdate", HTTP_POST, handleSelfUpdate);
+  server.on("/api/logs", HTTP_GET, handleLogs);
+  server.on("/api/logs/previous", HTTP_GET, handlePreviousLogs);
 
   server.on("/api/usage", HTTP_GET, handleUsageGet);
   server.on("/api/usage", HTTP_POST, handleUsagePush);
@@ -499,17 +547,24 @@ void webPortalLoop() {
     g_selfUpdate = false;
 #if defined(SMALLTV_FAMILY_ESP8266)
     OtaLatest r = otaCheckLatest(*S);
-    if (!r.ok)         g_updateMsg = "check failed: " + r.error;
-    else if (!r.newer) g_updateMsg = "already up to date (" FW_VERSION ")";
-    else if (otaRequestBootUpdate(r.tag.c_str())) {
+    if (!r.ok) {
+      g_updateMsg = "check failed: " + r.error;
+      diag::error("ota", "self update check: %s", r.error.c_str());
+    } else if (!r.newer) {
+      g_updateMsg = "already up to date (" FW_VERSION ")";
+      diag::info("ota", "already up to date");
+    } else if (otaRequestBootUpdate(r.tag.c_str())) {
       g_updateMsg = "updating...";
       scheduleReboot(400);
     } else {
       g_updateMsg = F("could not queue update (storage error)");
+      diag::error("ota", "could not queue update");
     }
 #else
     String err = otaUpdateFromGitHub(*S);
     g_updateMsg = err.length() ? err : "updating...";
+    if (err.length()) diag::error("ota", "self update: %s", err.c_str());
+    else diag::info("ota", "self update started");
 #endif
   }
 }

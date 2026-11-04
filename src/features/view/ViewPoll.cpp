@@ -2,6 +2,7 @@
 #include "Platform.h"
 #include "Net.h"
 #include "ViewOverlay.h"
+#include "DiagLog.h"
 #include <memory>
 
 static uint32_t g_nextMs = 0;
@@ -93,5 +94,10 @@ void viewPollService(const Settings& s) {
   if (!netConnected()) return;
   if ((int32_t)(millis() - g_nextMs) < 0) return;
   g_nextMs = millis() + (uint32_t)s.view.pollSec * 1000UL;
+  const String previous = g_error;
   fetchOverlay(s);
+  if (g_error != previous) {
+    if (g_error.length()) diag::error("view", "poll: %s", g_error.c_str());
+    else diag::info("view", "poll recovered");
+  }
 }

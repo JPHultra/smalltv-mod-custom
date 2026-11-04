@@ -1,5 +1,6 @@
 #include "Net.h"
 #include "Platform.h"
+#include "DiagLog.h"
 #include <DNSServer.h>
 
 static NetMode     g_mode = NET_AP;
@@ -90,6 +91,7 @@ static void recordFailure(const String& ssid) {
   g_failSeq++;
   Serial.print(F("[net] join failed, "));
   Serial.println(buf);
+  diag::error("net", "join failed %s", buf);
 }
 
 static void beginJoin(const WifiCred& n) {
@@ -118,6 +120,8 @@ static void startAP(const Settings& s) {
   g_dns.setErrorReplyCode(DNSReplyCode::NoError);
   g_dns.start(53, "*", apIP);
   g_retryAt = millis();
+  diag::warn("net", "AP ssid=%s ip=%s", s.apSsid.c_str(),
+             WiFi.softAPIP().toString().c_str());
 }
 
 void netBegin(const Settings& s, void (*onProgress)(const char*)) {
@@ -150,6 +154,7 @@ void netBegin(const Settings& s, void (*onProgress)(const char*)) {
     for (uint8_t i = 0; i < s.wifiCount; i++) { rssi[i] = -32768; seen[i] = false; }
     if (onProgress) onProgress("Scanning...");
     int found = WiFi.scanNetworks();
+    if (found < 0) diag::warn("net", "WiFi scan failed (%d)", found);
     for (int a = 0; a < found; a++)
       for (uint8_t i = 0; i < s.wifiCount; i++)
         if (WiFi.SSID(a) == s.wifi[i].ssid && WiFi.RSSI(a) > rssi[i]) {
@@ -207,6 +212,8 @@ void netBegin(const Settings& s, void (*onProgress)(const char*)) {
 #endif
       }
       if (onProgress) onProgress(WiFi.localIP().toString().c_str());
+      diag::info("net", "joined ssid=%s ip=%s", n.ssid.c_str(),
+                 WiFi.localIP().toString().c_str());
       return;
     }
     recordFailure(n.ssid);
@@ -230,6 +237,7 @@ void netLoop() {
     if (g_attemptStart) {
       if (WiFi.status() == WL_CONNECTED) {
         Serial.println(F("[net] setup-mode retry joined, rebooting"));
+        diag::info("net", "setup retry joined; rebooting");
         delay(100);
         ESP.restart();
       }
@@ -254,10 +262,14 @@ void netLoop() {
   // status is picked up on later passes.
   platformMdnsUpdate();
   if (WiFi.status() == WL_CONNECTED) {
+    if (g_downSince) diag::info("net", "sta restored");
     g_downSince = 0;
     return;
   }
-  if (!g_downSince) g_downSince = millis();
+  if (!g_downSince) {
+    g_downSince = millis();
+    diag::warn("net", "sta down; reconnecting");
+  }
   if (millis() - g_lastReconnect > 10000) {
     g_lastReconnect = millis();
     if (g_cfg && g_cfg->wifiCount > 1 && millis() - g_downSince > 45000) {

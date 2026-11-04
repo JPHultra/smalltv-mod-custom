@@ -1,5 +1,6 @@
 #include "OtaUpdate.h"
 #include "Platform.h"
+#include "DiagLog.h"
 #include <ArduinoJson.h>
 #include <LittleFS.h>
 #include "config.h"
@@ -28,6 +29,7 @@ OtaLatest otaCheckLatest(const Settings& s) {
   OtaLatest r;
   if (ESP.getFreeHeap() < 20000) {
     r.error = "low heap (" + String(ESP.getFreeHeap()) + ")";
+    diag::error("ota", "check failed: %s", r.error.c_str());
     return r;
   }
 
@@ -114,9 +116,13 @@ OtaLatest otaCheckLatest(const Settings& s) {
       http.end();
     }
 
-    if (r.ok || !retryable) return r;
+    if (r.ok || !retryable) {
+      if (!r.ok) diag::error("ota", "check failed: %s", r.error.c_str());
+      return r;
+    }
     if (attempt < kAttempts) delay(500);           // brief backoff before the next try
   }
+  if (!r.ok) diag::error("ota", "check failed: %s", r.error.c_str());
   return r;   // r.error holds the last (retryable) error after all attempts
 }
 
@@ -170,15 +176,20 @@ bool otaBootRequested() { return LittleFS.exists(OTA_REQ_PATH); }
 
 bool otaRequestBootUpdate(const char* tag) {
   File f = LittleFS.open(OTA_REQ_PATH, "w");
-  if (!f) return false;                     // storage full/broken -> caller must not reboot
+  if (!f) {
+    diag::error("ota", "could not queue boot update");
+    return false;                     // storage full/broken -> caller must not reboot
+  }
   f.print(tag ? tag : "");
   f.close();
+  diag::info("ota", "queued boot update %s", tag ? tag : "");
   return true;
 }
 
 static void otaBootResult(const String& msg) {
   File f = LittleFS.open(OTA_MSG_PATH, "w");
   if (f) { f.print(msg); f.close(); }
+  if (msg.length()) diag::warn("ota", "boot: %s", msg.c_str());
 }
 
 String otaTakeBootResult() {

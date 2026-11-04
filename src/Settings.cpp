@@ -1,6 +1,7 @@
 #include "Settings.h"
 #include "AtomicJson.h"
 #include "Platform.h"
+#include "DiagLog.h"
 #include <LittleFS.h>
 
 static const char* CONFIG_PATH = "/config.json";
@@ -208,6 +209,7 @@ void Settings::setDefaults() {
 bool settingsBegin() {
   if (LittleFS.begin()) return true;
   if (LittleFS.format() && LittleFS.begin()) return true;
+  Serial.println("[fs] LittleFS mount failed");
   return false;
 }
 
@@ -220,7 +222,10 @@ bool loadSettings(Settings& s) {
   JsonDocument doc;
   DeserializationError err = deserializeJson(doc, f);
   f.close();
-  if (err) return false;
+  if (err) {
+    diag::error("fs", "config parse failed: %s", err.c_str());
+    return false;
+  }
 
   settingsApplyJson(s, doc.as<JsonObjectConst>());
   return true;
@@ -230,7 +235,10 @@ bool saveSettings(const Settings& s) {
   JsonDocument doc;
   JsonObject root = doc.to<JsonObject>();
   settingsToJson(s, root, /*includeSecrets=*/true);
-  if (!saveJsonAtomically(LittleFS, doc, CONFIG_PATH, "/config.json.tmp")) return false;
+  if (!saveJsonAtomically(LittleFS, doc, CONFIG_PATH, "/config.json.tmp")) {
+    diag::error("fs", "config save failed");
+    return false;
+  }
   g_storedSize = measureJson(doc);
   return true;
 }
@@ -239,6 +247,7 @@ void factoryReset(Settings& s) {
   LittleFS.remove(CONFIG_PATH);
   g_storedSize = 0;
   s.setDefaults();
+  diag::clear();
 }
 
 size_t settingsStoredSize() { return g_storedSize; }

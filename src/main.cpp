@@ -5,6 +5,7 @@
 // src/features/usage.
 #include <Arduino.h>
 #include "Platform.h"
+#include "DiagLog.h"
 #include "config.h"
 #include "Settings.h"
 #include "Net.h"
@@ -177,19 +178,25 @@ void setup() {
 
   Serial.println("[boot] settings");
   settingsBegin();
-  loadSettings(g_settings);
+  diag::begin(FW_VERSION, FW_VARIANT, pr.reason.c_str(), pr.wasCrash,
+              pr.epc, pr.addr, g_safeMode);
+  const bool settingsLoaded = loadSettings(g_settings);
+  diag::info("boot", "settings: %s", settingsLoaded ? "loaded" : "defaults");
 
   Serial.println("[boot] display");
+  diag::info("boot", "display");
   gfxBegin(g_settings);
   gfxBoot(g_safeMode ? "Crashed" : "SmallTV", FW_VERSION);
 
   Serial.println("[boot] net");
+  diag::info("boot", "net");
   netAllowRetry(!g_safeMode);
   netBegin(g_settings, bootProgress);
   if (!g_safeMode) clockReapply(g_settings);
 
   if (otaBootRequested()) {
     Serial.println("[boot] github update");
+    diag::info("ota", "boot update requested");
     gfxBoot("SmallTV", "updating...");
     otaBootUpdate(g_settings);
     gfxBoot("SmallTV", "update failed");
@@ -197,16 +204,25 @@ void setup() {
   }
 
   Serial.println("[boot] usage");
+  diag::info("boot", "usage");
   usageInit();
 
   Serial.println("[boot] web");
+  diag::info("boot", "web");
   webPortalBegin(g_settings);
 
   Serial.println("[boot] view");
+  diag::info("boot", "view");
   g_viewMode.begin();
+  if (!g_viewMode.hasScreen()) diag::warn("view", "%s", g_viewMode.error().c_str());
   viewPollBegin(g_settings);
 
   Serial.println("[boot] done");
+  diag::info("boot", "ready");
+
+  if (netMode() == NET_AP && netFailReason()[0]) {
+    diag::warn("net", "setup AP reason=%s", netFailReason());
+  }
 
   if (netMode() == NET_AP) {
     gfxApInfo(g_settings.apSsid.c_str(), g_settings.apPass.c_str(), netIP().c_str(), netFailReason());
