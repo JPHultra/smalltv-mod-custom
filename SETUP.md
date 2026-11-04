@@ -272,7 +272,7 @@ token is in the query string; it is a write credential, not the web UI password.
   "priority": 0,
   "draw": [
     {"t":"text","x":120,"y":6,"s":5,"c":"#e9edf4","a":"c","v":"{HH}:{MM}"},
-    {"t":"text","x":120,"y":48,"s":2,"c":"#86e2bf","a":"c","v":"{WEEKDAY} {YYYY}-{MON}-{DD}"},
+    {"t":"text","x":120,"y":48,"s":2,"c":"#86e2bf","a":"c","v":"{WD} {YYYY}-{MON}-{DD}"},
     {"t":"usage","x":8,"y":68,"w":224,"h":54,"c":"#d97757","provider":"claude","metric":-1},
     {"t":"usage","x":8,"y":126,"w":224,"h":62,"c":"#10a37f","provider":"chatgpt","metric":-1},
     {"t":"usage","x":8,"y":192,"w":224,"h":44,"c":"#4d6bfe","provider":"deepseek","metric":-1}

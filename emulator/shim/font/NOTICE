@@ -1,0 +1,4 @@
+glcdfont.h is the classic 5x7 font table from the Adafruit GFX Library /
+moononournation's GFX Library for Arduino, bundled here so the host emulator
+does not need the PlatformIO GFX package to compile the legacy-font fallback.
+See the upstream GFX Library for its BSD license.
