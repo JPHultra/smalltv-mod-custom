@@ -113,9 +113,14 @@ static const char* wifiStatusText(int status) {
     case 3:  return "connected";
     case 4:  return "connect failed";
     case 5:  return "connection lost";
+#if defined(SMALLTV_FAMILY_ESP8266)
+    case 6:  return "wrong password";
+    case 7:  return "disconnected";
+#else
     case 6:  return "disconnected";
-    case 7:  return "no shield";
     case 8:  return "stopped";
+#endif
+    case 255: return "no shield";
     default: return "unknown";
   }
 }
@@ -139,9 +144,11 @@ static void recordFailure(const String& ssid, uint32_t elapsed = 0,
   g_failSeq++;
   Serial.print(F("[net] join failed, "));
   Serial.println(buf);
-  diag::error("net", "join failed ssid=%s status=%s(%d) assoc=%d reason=%u(%s) elapsed=%lums budget=%lums",
+  String ip = WiFi.localIP().toString();
+  diag::error("net", "join failed ssid=%s status=%s(%d) assoc=%d ip=%s rssi=%d reason=%u(%s) elapsed=%lums budget=%lums",
               ssid.c_str(), wifiStatusText((int)WiFi.status()), (int)WiFi.status(),
-              g_assoc ? 1 : 0, (unsigned)g_lastReason, reason,
+              g_assoc ? 1 : 0, ip.c_str(), (int)WiFi.RSSI(),
+              (unsigned)g_lastReason, reason,
               (unsigned long)elapsed, (unsigned long)budget);
 }
 
@@ -196,6 +203,7 @@ void netBegin(const Settings& s, void (*onProgress)(const char*)) {
   diag::info("net", "start hostname=%s saved=%u", g_hostname.c_str(),
              (unsigned)s.wifiCount);
   WiFi.mode(WIFI_STA);
+  platformSetWifiSleep(false);
 
   // Try order: scan once (blocking is fine here, only the boot screen is up)
   // and put the networks the scan can see first, strongest first. Unseen ones
@@ -332,6 +340,7 @@ void netLoop() {
       }
     } else if (!busy && millis() - g_retryAt > kRetryEveryMs) {
       g_curNet = (int8_t)((g_curNet + 1) % g_cfg->wifiCount);
+      platformSetWifiSleep(false);
       diag::info("net", "setup retry start ssid=%s seen=%d budget=%lums",
                  g_cfg->wifi[g_curNet].ssid.c_str(), g_seen[g_curNet] ? 1 : 0,
                  (unsigned long)(g_seen[g_curNet] ? kJoinBudgetMs : kUnseenBudgetMs));

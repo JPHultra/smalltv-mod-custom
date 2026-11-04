@@ -29,6 +29,10 @@ using SecureClient   = WiFiClientSecure;
 using NetClient      = NetworkClient;
 
 static inline void platformSetHostname(const char* h) { WiFi.setHostname(h); }
+// Keep the radio awake while joining and running the HTTP/mDNS workloads. Some
+// APs and DHCP servers behave badly when a low-power station misses a unicast
+// DHCP offer; the extra current is a fair trade for reliable connectivity.
+static inline void platformSetWifiSleep(bool enabled) { WiFi.setSleep(enabled); }
 static inline void platformTimeBegin(const char* tz, const char* s1, const char* s2) {
   configTzTime(tz, s1, s2);   // ESP32 core: sets TZ + starts SNTP
 }
@@ -94,6 +98,9 @@ using SecureClient   = BearSSL::WiFiClientSecure;
 using NetClient      = WiFiClient;
 
 static inline void platformSetHostname(const char* h) { WiFi.hostname(h); }
+static inline void platformSetWifiSleep(bool enabled) {
+  WiFi.setSleepMode(enabled ? WIFI_MODEM_SLEEP : WIFI_NONE_SLEEP);
+}
 static inline void platformTimeBegin(const char* tz, const char* s1, const char* s2) {
   configTime(tz, s1, s2);     // ESP8266 core: TZ-string overload, sets TZ + starts SNTP
 }
