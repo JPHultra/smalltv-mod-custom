@@ -21,11 +21,12 @@ CPPFLAGS += -DSMALLTV_ESP8266 -DARDUINOJSON_ENABLE_ARDUINO_STRING=1 \
             -I$(ROOT)/emulator/shim -I$(ROOT)/tests/shim \
             -I$(ROOT)/src -I$(ROOT)/src/features/view \
             -I$(ROOT)/src/features/usage -I$(ROOT)/src/fonts \
-            -I$(ARDUINOJSON) $(SDL_CFLAGS)
-LDLIBS += $(SDL_LIBS)
+            -I$(ROOT)/emulator/third_party -I$(ARDUINOJSON) $(SDL_CFLAGS)
+LDLIBS += $(SDL_LIBS) -pthread
 
 SRCS := $(ROOT)/emulator/main.cpp \
         $(ROOT)/emulator/gfx.cpp \
+        $(ROOT)/emulator/manager.cpp \
         $(ROOT)/src/features/view/ViewModel.cpp \
         $(ROOT)/src/features/view/ViewRender.cpp \
         $(ROOT)/src/features/view/ViewIcons.cpp \

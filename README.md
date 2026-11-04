@@ -95,16 +95,18 @@ unchanged because the firmware's `UPDATE_ASSET` values point at them.
 
 ## Dashboard emulator
 
-A host-side SDL2 emulator runs the real view renderer and anti-aliased font
-against a local JSON draw list and usage fixture:
+A host-side SDL2 emulator runs the real view renderer and anti-aliased font.
+It also starts a local device manager that discovers SmallTV devices, serves a
+full copy of the device web UI, and includes the visual dashboard editor:
 
 ```sh
 make -C emulator
 emulator/build/smalltv-emulator --view examples/view.json   --usage daemon/usage.example.json --time 10:36
 ```
 
-It does not emulate Wi-Fi, the web server or OTA. See
-[`emulator/README.md`](emulator/README.md) for screenshots and Windows/MSYS2
+Firmware upload, the device web UI password (HTTP Digest), GitHub self-update,
+settings and the editor are handled through the local manager. See
+[`emulator/README.md`](emulator/README.md) for details and Windows/MSYS2
 instructions.
 
 ## Dashboard

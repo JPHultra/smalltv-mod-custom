@@ -446,6 +446,7 @@ async function clearOverlay(){try{await api('/api/view/clear',{method:'POST'});s
 function usageHint(m){const e=$('usageHint');if(e)e.textContent=m}
 async function fetchUsage(){try{status('Fetching usage...');const text=await api('/api/usage');usageData=JSON.parse(text);draw();usageHint('Usage preview: live device data');status('Usage fetched')}catch(e){usageHint('Usage preview: sample data (Fetch usage failed)');status('Usage failed: '+e.message,true)}}
 
+const qDevice=new URLSearchParams(location.search).get('device');if(qDevice)$('deviceUrl').value=qDevice;
 $('json').value=JSON.stringify(exportView(),null,2);
 draw();renderLayers();
 setInterval(()=>{if(!drag)draw()},1000);

@@ -5,8 +5,18 @@ firmware `ViewModel`, `ViewRender`, `ViewIcons`, usage store and anti-aliased
 font against a fake `Arduino_GFX` framebuffer, so the pixels and text metrics
 match the device.
 
-It does not emulate Wi-Fi, the web UI, OTA, buttons or provider fetching. Usage
-data comes from a local JSON file.
+The emulator also starts a local device manager at `http://127.0.0.1:8788/`:
+
+- discovers SmallTV devices on the local subnet
+- serves a full copy of the device web UI through a local proxy
+- supports the device web UI password (HTTP Digest)
+- serves the visual dashboard editor at `/editor`
+- proxies dashboard, overlay, usage, settings, export/import and firmware upload
+- accepts local `.bin` firmware uploads and the device's GitHub self-update
+
+The emulator does not emulate Wi-Fi/OTA in the firmware itself; it talks to real
+devices over the network. Usage data in the SDL preview comes from a local JSON
+fixture.
 
 ## Build
 
@@ -31,21 +41,29 @@ make -C emulator
 ## Run
 
 ```sh
-emulator/build/smalltv-emulator \
-  --view examples/view.json \
-  --usage daemon/usage.example.json \
-  --time 10:36 \
-  --scale 2
+emulator/build/smalltv-emulator --view examples/view.json \
+  --usage daemon/usage.example.json --scale 2
 ```
 
-- `--view` draw-list JSON
-- `--usage` normalized usage JSON
+It opens the dashboard window and the local device manager. Use **Scan** to find
+the device, select it, then use the full web UI or **Open dashboard editor**.
+
+Options:
+
+- `--view` draw-list JSON for the emulator window
+- `--usage` normalized usage JSON for the emulator window
 - `--time HH:MM` fixed clock; omit for the local clock
 - `--scale` integer window scale, 1-8
+- `--port` local manager port (default 8788)
+- `--assets` directory containing `manager.html`, `device-ui.html` and `editor/`
+- `--no-browser` do not open the manager automatically
 - `--screenshot PATH` write a 240x240 P6 PPM and exit
 - `Esc` quits
 
-The default files are `examples/view.json` and `daemon/usage.example.json`.
+The local manager uses the device URL selected in its toolbar. The visual editor
+is served locally so mixed-content blocking does not apply. Firmware upload,
+GitHub update, settings, WiFi scan, export/import and factory reset all go
+through the device proxy.
 
 ## Release packages
 

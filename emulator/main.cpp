@@ -10,6 +10,7 @@
 
 #include "Gfx.h"
 #include "Arduino_GFX_Library.h"
+#include "manager.h"
 #include "UsageClient.h"
 #include "ViewModel.h"
 #include "ViewRender.h"
@@ -63,7 +64,10 @@ static void usage() {
       << "  --usage PATH      normalized usage JSON (default daemon/usage.example.json)\n"
       << "  --time HH:MM      fixed clock time instead of the local clock\n"
       << "  --scale N         window scale 1-8 (default 2)\n"
-      << "  --screenshot PATH write a 240x240 P6 PPM and exit\n";
+      << "  --screenshot PATH write a 240x240 P6 PPM and exit\n"
+      << "  --port N          local manager port (default 8788)\n"
+      << "  --assets PATH     directory containing manager.html/device-ui.html/editor\n"
+      << "  --no-browser      do not open the manager in a browser\n";
 }
 
 int main(int argc, char** argv) {
@@ -71,7 +75,10 @@ int main(int argc, char** argv) {
   const char* usagePath = "daemon/usage.example.json";
   const char* screenshot = nullptr;
   const char* timeText = nullptr;
+  const char* assets = ".";
   int scale = 2;
+  int port = 8788;
+  bool noBrowser = false;
 
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "--view") && i + 1 < argc) viewPath = argv[++i];
@@ -79,6 +86,9 @@ int main(int argc, char** argv) {
     else if (!strcmp(argv[i], "--time") && i + 1 < argc) timeText = argv[++i];
     else if (!strcmp(argv[i], "--scale") && i + 1 < argc) scale = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--screenshot") && i + 1 < argc) screenshot = argv[++i];
+    else if (!strcmp(argv[i], "--assets") && i + 1 < argc) assets = argv[++i];
+    else if (!strcmp(argv[i], "--port") && i + 1 < argc) port = atoi(argv[++i]);
+    else if (!strcmp(argv[i], "--no-browser")) noBrowser = true;
     else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) { usage(); return 0; }
     else { usage(); return 2; }
   }
@@ -137,9 +147,21 @@ int main(int argc, char** argv) {
   }
 
   SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
+#if defined(_WIN32)
+  WSADATA wsa{};
+  WSAStartup(MAKEWORD(2, 2), &wsa);
+#endif
   if (SDL_Init(SDL_INIT_VIDEO) != 0) {
     std::cerr << "SDL init failed: " << SDL_GetError() << "\n";
     return 1;
+  }
+  DeviceManager manager(assets, port);
+  std::string managerError;
+  if (!manager.start(managerError)) {
+    std::cerr << "local manager: " << managerError << "\n";
+  } else if (!noBrowser) {
+    SDL_OpenURL(manager.url().c_str());
+    std::cout << "device manager: " << manager.url() << "\n";
   }
   SDL_Window* window = SDL_CreateWindow(
       "SmallTV Emulator", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
@@ -152,6 +174,7 @@ int main(int argc, char** argv) {
       : nullptr;
   if (!window || !renderer || !texture) {
     std::cerr << "SDL window failed: " << SDL_GetError() << "\n";
+    manager.stop();
     return 1;
   }
 
@@ -186,5 +209,6 @@ int main(int argc, char** argv) {
   SDL_DestroyRenderer(renderer);
   SDL_DestroyWindow(window);
   SDL_Quit();
+  manager.stop();
   return 0;
 }
