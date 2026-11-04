@@ -168,7 +168,9 @@ static bool input_int_json(JsonObject o, const char* key, const char* label,
 static bool input_bool_json(JsonObject o, const char* key, const char* label) {
   formNext();
   bool value = o[key] | false;
-  if (ImGui::Checkbox(label, &value)) {
+  if (label && *label) ImGui::TextDisabled("%s", label);
+  const std::string id = std::string("##") + key + label;
+  if (ImGui::Checkbox(id.c_str(), &value)) {
     o[key] = value;
     return true;
   }
@@ -384,6 +386,7 @@ struct App {
   int tab = 0;
   int forceTab = -1;
   int settingsTab = 0;
+  bool scanRequested = false;
 
   JsonDocument cfg;
   bool cfgLoaded = false;
@@ -501,7 +504,7 @@ struct App {
       ImGui::InputTextWithHint("##pass", "web password", authPass, sizeof(authPass), ImGuiInputTextFlags_Password);
       if (theme::primaryButton("Connect")) { connect(); ImGui::CloseCurrentPopup(); }
       ImGui::SameLine();
-      if (theme::secondaryButton("Scan")) scan();
+      scanButton("Scan");
       ImGui::EndPopup();
     }
   }
@@ -747,12 +750,52 @@ struct App {
 
   // ---- discovery ---------------------------------------------------------
   void scan() {
+    if (manager.scanning()) return;
+    scanRequested = true;
     manager.discover();
-    notify("Scanning the local subnet...");
+  }
+
+  bool scanButton(const char* label, ImVec2 size = ImVec2(0, 0)) {
+    if (manager.scanning()) {
+      ImGui::BeginDisabled();
+      theme::secondaryButton("Scanning...", size);
+      ImGui::EndDisabled();
+      return false;
+    }
+    if (theme::secondaryButton(label, size)) {
+      scan();
+      return true;
+    }
+    return false;
+  }
+
+  void scanProgress() {
+    const ScanState state = manager.scanState();
+    if (!state.running) return;
+    char overlay[64];
+    if (state.total > 0) snprintf(overlay, sizeof(overlay), "%d / %d", state.done, state.total);
+    else snprintf(overlay, sizeof(overlay), "starting...");
+    const float fraction = state.total > 0 ? (float)state.done / (float)state.total : 0.0f;
+    ImGui::ProgressBar(fraction, ImVec2(-1, 0), overlay);
+    if (!state.subnet.empty()) ImGui::TextWrapped("Scanning %s", state.subnet.c_str());
+    else ImGui::TextDisabled("Finding local subnet...");
+    if (state.found > 0) ImGui::TextDisabled("%d device(s) found", state.found);
   }
 
   void pollDevices() {
     devices = manager.knownDevices();
+    if (!scanRequested || manager.scanning()) return;
+    scanRequested = false;
+    const ScanState state = manager.scanState();
+    if (!state.error.empty()) {
+      notify("Scan failed: " + state.error);
+    } else if (devices.empty()) {
+      notify("Scan complete: no devices found");
+    } else if (devices.size() == 1) {
+      notify("Scan complete: 1 device found");
+    } else {
+      notify("Scan complete: " + std::to_string(devices.size()) + " devices found");
+    }
   }
 
   // ---- settings forms ----------------------------------------------------
@@ -852,8 +895,9 @@ struct App {
     int idx = !strcmp(cur, "rgb") ? 1 : !strcmp(cur, "bgr") ? 2 : 0;
     formStart("##panel");
     formNext();
+    ImGui::TextDisabled("Colour order");
     ImGui::SetNextItemWidth(-1);
-    if (ImGui::Combo("Colour order", &idx, orders, 3)) d["colorOrder"] = orders[idx];
+    if (ImGui::Combo("##colorOrder", &idx, orders, 3)) d["colorOrder"] = orders[idx];
     input_bool_json(d, "invert", "Invert");
     input_int_json(d, "rGain", "Red gain", 0, 255, 255);
     input_int_json(d, "gGain", "Green gain", 0, 255, 255);
@@ -1538,6 +1582,8 @@ struct App {
     ImGui::SetNextItemWidth(-1);
     ImGui::InputTextWithHint("##devsearch", "Search devices", search, sizeof(search));
     ImGui::Spacing();
+    scanProgress();
+    if (manager.scanning()) ImGui::Spacing();
     ImGui::BeginChild("##devicelist", ImVec2(0, -196), true);
     if (connected && selectedDevice < 0) {
       ImGui::TextDisabled("CURRENT SESSION");
@@ -1556,10 +1602,15 @@ struct App {
       deviceRow(i);
       shown++;
     }
-    if (!shown) {
+    if (!shown && !manager.scanning()) {
       ImGui::Spacing();
-      ImGui::TextDisabled("No devices found.");
-      if (theme::secondaryButton("Scan subnet")) scan();
+      const ScanState state = manager.scanState();
+      if (!state.error.empty()) {
+        ImGui::TextWrapped("Scan failed: %s", state.error.c_str());
+      } else {
+        ImGui::TextDisabled("No devices found.");
+      }
+      scanButton("Scan subnet");
     }
     ImGui::EndChild();
     ImGui::Separator();
@@ -1572,7 +1623,7 @@ struct App {
     ImGui::SetNextItemWidth(-1);
     ImGui::InputTextWithHint("##listpass", "web password", authPass, sizeof(authPass), ImGuiInputTextFlags_Password);
     if (theme::primaryButton("Connect", ImVec2(-1, 0))) connect();
-    if (theme::secondaryButton("Scan for devices", ImVec2(-1, 0))) scan();
+    scanButton("Scan for devices", ImVec2(-1, 0));
   }
 
   void deviceStage() {
@@ -1687,7 +1738,7 @@ struct App {
       loadUsage();
     }
     if (theme::secondaryButton("Reload configuration", ImVec2(-1, 0))) loadConfig();
-    if (theme::secondaryButton("Scan devices", ImVec2(-1, 0))) scan();
+    scanButton("Scan devices", ImVec2(-1, 0));
     endPane();
   }
 

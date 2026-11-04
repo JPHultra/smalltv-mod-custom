@@ -19,6 +19,15 @@ struct EmuDevice {
   bool auth = false;
 };
 
+struct ScanState {
+  bool running = false;
+  int done = 0;
+  int total = 0;
+  int found = 0;
+  std::string subnet;
+  std::string error;
+};
+
 class DeviceManager {
  public:
   DeviceManager() = default;
@@ -30,6 +39,7 @@ class DeviceManager {
   void setAuth(const std::string& user, const std::string& pass);
   std::vector<EmuDevice> discover();
   std::vector<EmuDevice> knownDevices() const;
+  ScanState scanState() const;
   bool request(const std::string& method, const std::string& path,
                const std::string& body, const std::string& contentType,
                DeviceResponse& response);
@@ -44,6 +54,11 @@ class DeviceManager {
   mutable std::mutex scanMutex_;
   std::vector<EmuDevice> found_;
   std::atomic<bool> scanning_{false};
+  std::atomic<int> scanDone_{0};
+  std::atomic<int> scanTotal_{0};
+  std::atomic<int> scanFound_{0};
+  std::string scanSubnet_;
+  std::string scanError_;
   std::string target_;
   std::string user_;
   std::string pass_;

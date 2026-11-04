@@ -25,6 +25,9 @@ CPPFLAGS += -DSMALLTV_ESP8266 -DARDUINOJSON_ENABLE_ARDUINO_STRING=1 \
             -I$(ROOT)/emulator/third_party/imgui/backends \
             -I$(ARDUINOJSON) $(SDL_CFLAGS)
 LDLIBS += $(SDL_LIBS) -pthread
+ifeq ($(OS),Windows_NT)
+LDLIBS += -lws2_32 -liphlpapi
+endif
 
 SRCS := $(ROOT)/emulator/main.cpp \
         $(ROOT)/emulator/theme.cpp \

@@ -17,8 +17,12 @@
 #if defined(_WIN32)
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <iphlpapi.h>
+#include <iptypes.h>
 #else
 #include <arpa/inet.h>
+#include <ifaddrs.h>
+#include <net/if.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -52,6 +56,71 @@ std::string local_ipv4() {
   close(sock);
 #endif
   return result;
+}
+
+struct LocalNetworks {
+  std::vector<std::string> ips;
+  std::vector<std::string> subnets;
+};
+
+void add_local_network(LocalNetworks& networks, const std::string& ip) {
+  int a, b, c, d;
+  if (sscanf(ip.c_str(), "%d.%d.%d.%d", &a, &b, &c, &d) != 4) return;
+  if (a <= 0 || a >= 224 || a == 127 || (a == 169 && b == 254)) return;
+  char base[32];
+  snprintf(base, sizeof(base), "%d.%d.%d", a, b, c);
+  if (std::find(networks.ips.begin(), networks.ips.end(), ip) == networks.ips.end())
+    networks.ips.push_back(ip);
+  if (std::find(networks.subnets.begin(), networks.subnets.end(), base) == networks.subnets.end())
+    networks.subnets.push_back(base);
+}
+
+LocalNetworks local_networks() {
+  LocalNetworks networks;
+#if defined(_WIN32)
+  ULONG size = 0;
+  DWORD result = GetAdaptersAddresses(AF_INET,
+                                      GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST |
+                                          GAA_FLAG_SKIP_DNS_SERVER,
+                                      nullptr, nullptr, &size);
+  if (result == ERROR_BUFFER_OVERFLOW) {
+    std::vector<BYTE> buffer(size);
+    auto* adapters = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buffer.data());
+    if (GetAdaptersAddresses(AF_INET,
+                             GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST |
+                                 GAA_FLAG_SKIP_DNS_SERVER,
+                             nullptr, adapters, &size) == NO_ERROR) {
+      for (auto* adapter = adapters; adapter; adapter = adapter->Next) {
+        if (adapter->OperStatus != IfOperStatusUp) continue;
+        if (adapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK) continue;
+        for (auto* unicast = adapter->FirstUnicastAddress; unicast;
+             unicast = unicast->Next) {
+          const sockaddr* address = unicast->Address.lpSockaddr;
+          if (!address || address->sa_family != AF_INET) continue;
+          char text[INET_ADDRSTRLEN] = {};
+          const auto* inet = reinterpret_cast<const sockaddr_in*>(address);
+          if (inet_ntop(AF_INET, &inet->sin_addr, text, sizeof(text)))
+            add_local_network(networks, text);
+        }
+      }
+    }
+  }
+#else
+  struct ifaddrs* addresses = nullptr;
+  if (getifaddrs(&addresses) == 0) {
+    for (auto* ifa = addresses; ifa; ifa = ifa->ifa_next) {
+      if (!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_INET) continue;
+      if (!(ifa->ifa_flags & IFF_UP) || (ifa->ifa_flags & IFF_LOOPBACK)) continue;
+      char text[INET_ADDRSTRLEN] = {};
+      const auto* inet = reinterpret_cast<const sockaddr_in*>(ifa->ifa_addr);
+      if (inet_ntop(AF_INET, &inet->sin_addr, text, sizeof(text)))
+        add_local_network(networks, text);
+    }
+    freeifaddrs(addresses);
+  }
+#endif
+  if (networks.subnets.empty()) add_local_network(networks, local_ipv4());
+  return networks;
 }
 
 std::string json_string_field(const std::string& body, const char* key) {
@@ -131,6 +200,14 @@ void DeviceManager::stop() {
 std::vector<EmuDevice> DeviceManager::discover() {
   if (!scanning_.exchange(true)) {
     if (scanThread_.joinable()) scanThread_.join();
+    scanDone_ = 0;
+    scanTotal_ = 0;
+    scanFound_ = 0;
+    {
+      std::lock_guard<std::mutex> lock(scanMutex_);
+      scanSubnet_.clear();
+      scanError_.clear();
+    }
     scanThread_ = std::thread([this] {
       auto result = scan();
       {
@@ -149,26 +226,59 @@ std::vector<EmuDevice> DeviceManager::knownDevices() const {
   return found_;
 }
 
+ScanState DeviceManager::scanState() const {
+  ScanState state;
+  state.running = scanning_.load();
+  state.done = scanDone_.load();
+  state.total = scanTotal_.load();
+  state.found = scanFound_.load();
+  std::lock_guard<std::mutex> lock(scanMutex_);
+  state.subnet = scanSubnet_;
+  state.error = scanError_;
+  return state;
+}
+
 std::vector<EmuDevice> DeviceManager::scan() {
-  std::string local = local_ipv4();
-  int a, b, c, d;
-  if (sscanf(local.c_str(), "%d.%d.%d.%d", &a, &b, &c, &d) != 4) return {};
+  LocalNetworks local = local_networks();
+  if (local.subnets.empty()) {
+    std::lock_guard<std::mutex> lock(scanMutex_);
+    scanError_ = "No local IPv4 address found";
+    return {};
+  }
+
+  std::vector<std::string> targets;
+  std::string subnetText;
+  for (const auto& base : local.subnets) {
+    if (!subnetText.empty()) subnetText += ", ";
+    subnetText += base + ".0/24";
+    for (int host = 1; host <= 254; host++) {
+      std::string ip = base + "." + std::to_string(host);
+      if (std::find(local.ips.begin(), local.ips.end(), ip) != local.ips.end()) continue;
+      targets.push_back(ip);
+    }
+  }
+  {
+    std::lock_guard<std::mutex> lock(scanMutex_);
+    scanSubnet_ = subnetText;
+  }
+  scanDone_ = 0;
+  scanFound_ = 0;
+  scanTotal_ = (int)targets.size();
 
   std::vector<EmuDevice> found;
   std::mutex foundMu;
-  std::atomic<int> next{1};
+  std::atomic<int> next{0};
   auto worker = [&] {
     while (true) {
-      int host = next.fetch_add(1);
-      if (host > 254) break;
-      std::string ip = std::to_string(a) + "." + std::to_string(b) + "." + std::to_string(c) + "." + std::to_string(host);
-      if (ip == local) continue;
-      httplib::Client cli("http://" + ip, 80);
+      int index = next.fetch_add(1);
+      if (index >= (int)targets.size()) break;
+      const std::string& ip = targets[index];
+      httplib::Client cli(ip, 80);
       cli.set_connection_timeout(0, 250000);
       cli.set_read_timeout(0, 350000);
       auto res = cli.Get("/api/status");
-      if (!res) continue;
-      if (res->status == 200 && res->body.find("smalltv-mod") != std::string::npos) {
+      if (res && res->status == 200 &&
+          res->body.find("smalltv-mod") != std::string::npos) {
         EmuDevice dev;
         dev.ip = ip;
         dev.name = json_string_field(res->body, "hostname");
@@ -178,7 +288,8 @@ std::vector<EmuDevice> DeviceManager::scan() {
         dev.variant = json_string_field(res->body, "variant");
         std::lock_guard<std::mutex> lock(foundMu);
         found.push_back(dev);
-      } else if (res->status == 401) {
+        scanFound_.fetch_add(1);
+      } else if (res && res->status == 401) {
         std::string challenge = res->get_header_value("WWW-Authenticate");
         if (challenge.find("Digest") != std::string::npos ||
             challenge.find("SmallTV") != std::string::npos) {
@@ -188,8 +299,10 @@ std::vector<EmuDevice> DeviceManager::scan() {
           dev.auth = true;
           std::lock_guard<std::mutex> lock(foundMu);
           found.push_back(dev);
+          scanFound_.fetch_add(1);
         }
       }
+      scanDone_.fetch_add(1);
     }
   };
   std::vector<std::thread> threads;
