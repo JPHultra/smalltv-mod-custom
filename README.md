@@ -81,17 +81,21 @@ Release locally, without GitHub Actions:
 ```sh
 # edit FW_VERSION in src/config.h first
 python3 tools/build_release.py --pio /path/to/pio --jobs 8
+python3 tools/package_emulator.py \
+  --windows-bin /path/to/smalltv-emulator.exe \
+  --sdl2-dll /path/to/SDL2.dll
 python3 tools/ci_checks.py assets
 git add src/config.h
-git commit -m "Bump FW_VERSION to X.Y.Z"
+git commit -m "Bump FW_VERSION to X.Y.Z-custom"
 git push origin main
-git tag vX.Y.Z
-git push origin vX.Y.Z
-gh release create vX.Y.Z dist/* --title "vX.Y.Z" --notes "Release notes"
+git tag vX.Y.Z-custom
+git push origin vX.Y.Z-custom
+gh release create vX.Y.Z-custom dist/* --title "vX.Y.Z-custom" --notes "Release notes"
 ```
 
-The eight `dist/` assets are attached to the release by `gh`; keep their names
-unchanged because the firmware's `UPDATE_ASSET` values point at them.
+The eight firmware assets plus the two emulator packages are attached to the
+release by `gh`; keep the firmware names unchanged because the firmware's
+`UPDATE_ASSET` values point at them.
 
 ## Dashboard emulator
 
@@ -105,7 +109,7 @@ make -C emulator
 emulator/build/smalltv-emulator --view examples/view.json --usage daemon/usage.example.json
 ```
 
-Use the **Dashboard**, **Editor** and **Settings** tabs. The device web UI
+Use the **Device**, **Design** and **Settings** tabs. The device web UI
 password uses HTTP Digest, and firmware upload, GitHub self-update and
 settings export/import are handled directly by the app. See
 [`emulator/README.md`](emulator/README.md) for details and Windows/MSYS2

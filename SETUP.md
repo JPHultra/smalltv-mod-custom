@@ -633,28 +633,31 @@ The device self-update is pointed at `JPHultra/smalltv-mod-custom` in
 `src/config.h`. Releases are built and published from this PC; there are no
 GitHub Actions.
 
-1. Edit `FW_VERSION` in `src/config.h` (currently `4.2.0-custom`) to the new version.
+1. Edit `FW_VERSION` in `src/config.h` (currently `4.4.0-custom`) to the new version.
 2. Build all targets and stage the assets:
 
 ```sh
 python3 tools/build_release.py --pio /path/to/pio --jobs 8
+python3 tools/package_emulator.py \
+  --windows-bin /path/to/smalltv-emulator.exe \
+  --sdl2-dll /path/to/SDL2.dll
 python3 tools/ci_checks.py assets
 ```
 
-3. Commit the version change and tag it, for example `v4.0.1`:
+3. Commit the version change and tag it, for example `v4.4.0-custom`:
 
 ```sh
 git add src/config.h
-git commit -m "Bump FW_VERSION to 4.0.1"
+git commit -m "Bump FW_VERSION to 4.4.0-custom"
 git push origin main
-git tag v4.0.1
-git push origin v4.0.1
+git tag v4.4.0-custom
+git push origin v4.4.0-custom
 ```
 
-4. Attach the eight `dist/` assets to the tag:
+4. Attach the eight firmware assets and two emulator packages:
 
 ```sh
-gh release create v4.0.1 dist/* --title "v4.0.1" --notes "Release notes"
+gh release create v4.4.0-custom dist/* --title "v4.4.0-custom" --notes "Release notes"
 ```
 
 5. If the editor changed, publish it separately:
