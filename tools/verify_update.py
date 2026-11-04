@@ -7,9 +7,9 @@ device should update. With --local-only it checks the staged dist/ directory
 without contacting GitHub.
 
 Examples:
-  python3 tools/verify_update.py --local-only --from-version 4.4.1-custom
-  python3 tools/verify_update.py --tag v4.4.2-custom --from-version 4.4.1-custom
-  python3 tools/verify_update.py --latest --from-version 4.4.1-custom
+  python3 tools/verify_update.py --local-only --from-version 4.4.2-custom
+  python3 tools/verify_update.py --tag v4.5.0-custom --from-version 4.4.2-custom
+  python3 tools/verify_update.py --latest --from-version 4.4.2-custom
 """
 from __future__ import annotations
 
@@ -125,7 +125,7 @@ def check_local(dist: Path, version: str, required: list[str],
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--repo", default=DEFAULT_REPO)
-    parser.add_argument("--tag", help="release tag to verify (v4.4.2-custom)")
+    parser.add_argument("--tag", help="release tag to verify (v4.5.0-custom)")
     parser.add_argument("--latest", action="store_true",
                         help="verify the published latest release")
     parser.add_argument("--local-only", action="store_true",
