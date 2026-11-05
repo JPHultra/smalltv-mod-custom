@@ -93,6 +93,24 @@ int main() {
   assert(layout->rows[0].label.x == 10 && layout->rows[1].label.y == 70);
   assert(layout->rows[1].bar.w == 180);
 
+  // Pixel fields take precedence while legacy values remain available.
+  const char* px_fields = R"({"draw":[
+    {"t":"text","x":0,"y":0,"s":2,"sizePx":24,"c":"#ffffff","v":"px"},
+    {"t":"icon","x":0,"y":0,"s":1,"sizePx":48,"c":"#ffffff","v":"sun"},
+    {"t":"bitmap","x":0,"y":0,"w":2,"h":2,"s":1,"displayW":20,"displayH":30,"c":"#ffffff","d":"00"},
+    {"t":"image","x":0,"y":0,"s":1,"displayW":40,"displayH":50,"src":"aa"},
+    {"t":"usage","x":0,"y":0,"w":100,"h":50,"c":"#ffffff","provider":"claude","style":{"namePx":24,"labelPx":16,"valuePx":32}}
+  ]})";
+  assert(viewScreenParse(px_fields, strlen(px_fields), s, error));
+  assert(s.prims[0].aux == 3);
+  assert(s.prims[1].aux == 2);
+  const ViewBitmapStyle* bitmap_style = viewPrimBitmapStyle(s, s.prims[2]);
+  assert(bitmap_style && bitmap_style->displayW == 20 && bitmap_style->displayH == 30);
+  assert(s.prims[3].x2 == 40 && s.prims[3].y2 == 50);
+  const UsageStyle* pixel_style = viewPrimUsageStyle(s, s.prims[4]);
+  assert(pixel_style && pixel_style->nameSize == 3 &&
+         pixel_style->labelSize == 2 && pixel_style->valueSize == 4);
+
   // An omitted metric means "all metrics" (the renderer stacks them).
   const char* all_metrics = R"({"draw":[{"t":"usage","x":0,"y":0,"w":100,"h":50,"c":"#ffffff","provider":"claude"}]})";
   assert(viewScreenParse(all_metrics, strlen(all_metrics), s, error));

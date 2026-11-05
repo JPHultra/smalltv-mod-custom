@@ -190,6 +190,27 @@ static bool input_int_json(JsonObject o, const char* key, const char* label,
   return false;
 }
 
+static bool input_px_size(JsonObject o, const char* px_key, const char* scale_key,
+                          const char* label, int step, int min_px, int max_px,
+                          int max_scale, int fallback_scale = 1) {
+  formNext();
+  const int scale = o[scale_key] | fallback_scale;
+  int value = o[px_key].isNull() ? scale * step : (int)(o[px_key] | 0);
+  if (value > 0) value = ((value + step / 2) / step) * step;
+  value = std::max(min_px, std::min(max_px, value));
+  if (label && *label) ImGui::TextDisabled("%s", label);
+  const std::string id = std::string("##") + px_key + label;
+  ImGui::SetNextItemWidth(-1);
+  if (ImGui::InputInt(id.c_str(), &value)) {
+    if (value > 0) value = ((value + step / 2) / step) * step;
+    value = std::max(min_px, std::min(max_px, value));
+    o[px_key] = value;
+    o[scale_key] = value > 0 ? std::max(1, std::min(max_scale, value / step)) : 0;
+    return true;
+  }
+  return false;
+}
+
 static bool input_bool_json(JsonObject o, const char* key, const char* label) {
   formNext();
   bool value = o[key] | false;
@@ -500,11 +521,20 @@ struct App {
   bool showGuides = true;
   bool showRulers = true;
   int snapGrid = 8;
+  bool componentsDrawerOpen = true;
+  bool documentDrawerOpen = false;
+  bool inspectorDismissed = false;
+  float componentsDrawerWidth = 230.0f;
+  float documentDrawerWidth = 270.0f;
+  float inspectorDrawerWidth = 300.0f;
+  std::string lastSelectionSignature;
   float snapGuideX = -1.0f;
   float snapGuideY = -1.0f;
   int usageLayoutRow = 0;
   int usageDragKind = 0;  // 1 name, 2 reset, 3 label, 4 value, 5 bar
   int usageDragRow = 0;
+  int usageSelectedKind = 0;
+  int usageSelectedRow = 0;
   char viewJsonBuf[65536] = {};
   std::vector<std::string> undoStack;
   std::vector<std::string> redoStack;
@@ -555,6 +585,31 @@ struct App {
   }
 
   void endPane() {
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
+  }
+
+  bool beginDrawer(const char* id, float width, const char* title, bool* open) {
+    if (width <= 0) width = 240;
+    const ImVec2 avail = ImGui::GetContentRegionAvail();
+    if (width > avail.x - 120) width = std::max(160.0f, avail.x - 120);
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const ImVec2 b(p.x + width, p.y + avail.y);
+    theme::panel(ImGui::GetWindowDrawList(), p, b, theme::surface(), theme::border(), 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14, 10));
+    ImGui::BeginChild(id, ImVec2(width, avail.y),
+                      ImGuiChildFlags_AlwaysUseWindowPadding,
+                      ImGuiWindowFlags_NoBackground);
+    ImGui::PushFont(theme::fonts().heading);
+    ImGui::TextUnformatted(title);
+    ImGui::PopFont();
+    ImGui::SameLine(std::max(20.0f, width - 34));
+    if (ImGui::SmallButton("x")) *open = false;
+    ImGui::Separator();
+    return *open;
+  }
+
+  void endDrawer() {
     ImGui::EndChild();
     ImGui::PopStyleVar();
   }
@@ -1739,6 +1794,7 @@ struct App {
     JsonDocument d;
     if (!deserializeJson(d, s)) return;
     view = d;
+    normalizePixelUnits();
     ensureComponentIds();
     selected = -1;
     selection.clear();
@@ -1767,6 +1823,89 @@ struct App {
     std::string s;
     serializeJsonPretty(view, s);
     snprintf(viewJsonBuf, sizeof(viewJsonBuf), "%s", s.c_str());
+  }
+
+  void markViewChanged() {
+    viewDirty = true;
+    previewDirty = true;
+    lastAutosave = 0;
+    syncJson();
+  }
+
+  static int clampScale(int value, int minValue, int maxValue) {
+    return std::max(minValue, std::min(maxValue, value));
+  }
+
+  void normalizePixelUnits() {
+    const int count = (int)view["draw"].as<JsonArray>().size();
+    for (int i = 0; i < count; i++) {
+      JsonArray draw = view["draw"].as<JsonArray>();
+      JsonObject l = draw[i];
+      const char* t = l["t"] | "";
+      if (!strcmp(t, "text")) {
+        if (l["sizePx"].isNull()) {
+          const int scale = clampScale(l["s"] | 1, 1, 6);
+          l["sizePx"] = scale * 8;
+        }
+      } else if (!strcmp(t, "icon")) {
+        if (l["sizePx"].isNull()) {
+          const int scale = clampScale(l["s"] | 1, 1, 8);
+          l["sizePx"] = scale * 24;
+        }
+      } else if (!strcmp(t, "bitmap")) {
+        if (l["displayW"].isNull() || l["displayH"].isNull()) {
+          const int scale = clampScale(l["s"] | 1, 1, 4);
+          l["displayW"] = std::max(1, (int)(l["w"] | 1) * scale);
+          l["displayH"] = std::max(1, (int)(l["h"] | 1) * scale);
+        }
+      } else if (!strcmp(t, "image")) {
+        if ((l["displayW"].isNull() || l["displayH"].isNull()) &&
+            (int)(l["w"] | 0) > 0 && (int)(l["h"] | 0) > 0) {
+          const int scale = clampScale(l["s"] | 1, 1, 8);
+          l["displayW"] = std::max(1, (int)(l["w"] | 1) * scale);
+          l["displayH"] = std::max(1, (int)(l["h"] | 1) * scale);
+        }
+      } else if (!strcmp(t, "usage")) {
+        JsonObject style = l["style"].as<JsonObject>();
+        if (!style.isNull()) {
+          auto ensure = [&](const char* pxKey, const char* sizeKey, int fallback) {
+            if (!style[pxKey].isNull()) return;
+            style[pxKey] = clampScale(style[sizeKey] | fallback, 0, 6) * 8;
+          };
+          ensure("namePx", "nameSize", 2);
+          ensure("labelPx", "labelSize", 0);
+          ensure("valuePx", "valueSize", 0);
+          ensure("resetPx", "resetSize", 1);
+        }
+      }
+    }
+  }
+
+  void syncDisplayScale(JsonObject l) {
+    const int w = l["w"] | 0, h = l["h"] | 0;
+    const int dw = l["displayW"] | 0, dh = l["displayH"] | 0;
+    if (w <= 0 || h <= 0 || dw <= 0 || dh <= 0) return;
+    const int sx = (dw + w / 2) / w;
+    const int sy = (dh + h / 2) / h;
+    const int maxScale = !strcmp(l["t"] | "", "bitmap") ? 4 : 8;
+    l["s"] = clampScale((sx + sy + 1) / 2, 1, maxScale);
+  }
+
+  void clearSelection() {
+    selected = -1;
+    selection.clear();
+    usageSelectedKind = 0;
+    usageDragKind = 0;
+    snapGuideX = snapGuideY = -1.0f;
+  }
+
+  std::string selectionSignature() {
+    std::string sig;
+    for (int i : selection) {
+      sig += std::to_string(i);
+      sig += ',';
+    }
+    return sig;
   }
 
   bool loadViewText(const std::string& text, std::string& err) {
@@ -1895,6 +2034,8 @@ struct App {
     layer["w"] = asset.info.width;
     layer["h"] = asset.info.height;
     layer["s"] = 1;
+    layer["displayW"] = asset.info.width;
+    layer["displayH"] = asset.info.height;
     layer["a"] = "l";
     layer["z"] = maxZ() + 1;
     ensureComponentIds();
@@ -2652,6 +2793,7 @@ struct App {
   }
 
   void selectComponent(int index, bool additive) {
+    usageSelectedKind = 0;
     JsonArray draw = view["draw"].as<JsonArray>();
     if (index < 0 || index >= (int)draw.size()) {
       selected = -1;
@@ -2668,6 +2810,7 @@ struct App {
   }
 
   void selectOnly(int index) {
+    usageSelectedKind = 0;
     selection.clear();
     if (index >= 0) selection.insert(index);
     selected = index;
@@ -2724,21 +2867,35 @@ struct App {
     x = l["x"] | 0;
     y = l["y"] | 0;
     int s = l["s"] | 1;
+    if (!l["sizePx"].isNull() && (int)(l["sizePx"] | 0) > 0)
+      s = std::max(1, (int)(l["sizePx"] | 0) / 8);
     const char* a = l["a"] | "l";
     w = h = 0;
     if (!strcmp(t, "text")) {
-      w = (float)strlen(l["v"] | "") * 6 * s;
-      h = 8.0f * s;
-      if (a[0] == 'c') x -= w / 2;
-      else if (a[0] == 'r') x -= w;
-    } else if (!strcmp(t, "rect") || !strcmp(t, "rrect") || !strcmp(t, "usage") ||
-               !strcmp(t, "bitmap") || !strcmp(t, "image")) {
-      w = (float)(l["w"] | 0) * (!strcmp(t, "bitmap") || !strcmp(t, "image") ? s : 1);
-      h = (float)(l["h"] | 0) * (!strcmp(t, "bitmap") || !strcmp(t, "image") ? s : 1);
-      if (!strcmp(t, "bitmap") || !strcmp(t, "image")) {
+      const int boxW = l["w"] | 0, boxH = l["h"] | 0;
+      if (boxW > 0 || boxH > 0) {
+        w = boxW > 0 ? (float)boxW : (float)strlen(l["v"] | "") * 6 * s;
+        h = boxH > 0 ? (float)boxH : 8.0f * s;
+        x = (float)(l["x"] | 0) + (l["mx"] | 0);
+        y = (float)(l["y"] | 0) + (l["my"] | 0);
+      } else {
+        w = (float)strlen(l["v"] | "") * 6 * s;
+        h = 8.0f * s;
         if (a[0] == 'c') x -= w / 2;
         else if (a[0] == 'r') x -= w;
       }
+    } else if (!strcmp(t, "rect") || !strcmp(t, "rrect") || !strcmp(t, "usage")) {
+      w = (float)(l["w"] | 0);
+      h = (float)(l["h"] | 0);
+    } else if (!strcmp(t, "bitmap") || !strcmp(t, "image")) {
+      w = (float)(l["displayW"] | 0);
+      h = (float)(l["displayH"] | 0);
+      if (w <= 0 || h <= 0) {
+        w = (float)(l["w"] | 0) * s;
+        h = (float)(l["h"] | 0) * s;
+      }
+      if (a[0] == 'c') x -= w / 2;
+      else if (a[0] == 'r') x -= w;
     } else if (!strcmp(t, "circle")) {
       int r = l["r"] | 0;
       w = h = (float)r * 2;
@@ -2751,7 +2908,7 @@ struct App {
       x = std::min(x, x2);
       y = std::min(y, y2);
     } else if (!strcmp(t, "icon")) {
-      w = h = 24.0f * s;
+      w = h = (float)((l["sizePx"] | 0) > 0 ? (int)(l["sizePx"] | 0) : 24 * s);
       if (a[0] == 'c') x -= w / 2;
       else if (a[0] == 'r') x -= w;
     } else if (!strcmp(t, "fill")) {
@@ -2768,7 +2925,7 @@ struct App {
     l["x"] = 120;
     l["y"] = 120;
     if (!strcmp(type, "text")) {
-      l["s"] = 3; l["c"] = "#e9edf4"; l["a"] = "c"; l["v"] = "text";
+      l["s"] = 3; l["sizePx"] = 24; l["c"] = "#e9edf4"; l["a"] = "c"; l["v"] = "text";
     } else if (!strcmp(type, "rect") || !strcmp(type, "rrect")) {
       l["w"] = 100; l["h"] = 40; l["c"] = "#3fb950";
       if (!strcmp(type, "rrect")) l["r"] = 8;
@@ -2777,9 +2934,10 @@ struct App {
     } else if (!strcmp(type, "line")) {
       l["x2"] = 200; l["y2"] = 200; l["c"] = "#e9edf4";
     } else if (!strcmp(type, "icon")) {
-      l["s"] = 2; l["c"] = "#86e2bf"; l["a"] = "c"; l["v"] = "sun";
+      l["s"] = 2; l["sizePx"] = 48; l["c"] = "#86e2bf"; l["a"] = "c"; l["v"] = "sun";
     } else if (!strcmp(type, "bitmap")) {
       l["x"] = 100; l["y"] = 100; l["w"] = 8; l["h"] = 8; l["s"] = 2;
+      l["displayW"] = 16; l["displayH"] = 16;
       l["a"] = "l"; l["c"] = "#3fb950"; l["d"] = "AA55AA55AA55AA55";
     } else if (!strcmp(type, "usage")) {
       l["w"] = 224; l["h"] = 54; l["c"] = "#d97757";
@@ -2803,12 +2961,12 @@ struct App {
     if (!strcmp(kind, "clock")) {
       draw = view["draw"].as<JsonArray>();
       JsonObject clock = draw.add<JsonObject>();
-      clock["t"] = "text"; clock["x"] = 120; clock["y"] = 22; clock["s"] = 5;
+      clock["t"] = "text"; clock["x"] = 120; clock["y"] = 22; clock["s"] = 5; clock["sizePx"] = 40;
       clock["c"] = "#e9edf4"; clock["a"] = "c"; clock["v"] = "{HH}:{MM}";
       clock["z"] = maxZ() + 1;
       draw = view["draw"].as<JsonArray>();
       JsonObject date = draw.add<JsonObject>();
-      date["t"] = "text"; date["x"] = 120; date["y"] = 64; date["s"] = 2;
+      date["t"] = "text"; date["x"] = 120; date["y"] = 64; date["s"] = 2; date["sizePx"] = 16;
       date["c"] = "#86e2bf"; date["a"] = "c"; date["v"] = "{WD} {YYYY}-{MON}-{DD}";
       date["z"] = maxZ() + 1;
     } else if (!strcmp(kind, "usage")) {
@@ -2849,6 +3007,8 @@ struct App {
     layer["w"] = asset.info.width;
     layer["h"] = asset.info.height;
     layer["s"] = 1;
+    layer["displayW"] = asset.info.width;
+    layer["displayH"] = asset.info.height;
     layer.remove("d");
     viewDirty = true;
     previewDirty = true;
@@ -2867,6 +3027,8 @@ struct App {
     layer["src"] = asset.name;
     layer["w"] = asset.info.width;
     layer["h"] = asset.info.height;
+    layer["displayW"] = asset.info.width;
+    layer["displayH"] = asset.info.height;
     viewDirty = true;
     previewDirty = true;
     previewAnimStart = SDL_GetTicks();
@@ -3169,15 +3331,65 @@ struct App {
   }
 
   void alignSelected(JsonObject l, const char* mode) {
-    if (!strcmp(mode, "left")) l["x"] = 4;
-    else if (!strcmp(mode, "hcenter")) l["x"] = 120;
-    else if (!strcmp(mode, "right")) l["x"] = 236;
-    else if (!strcmp(mode, "top")) l["y"] = 4;
-    else if (!strcmp(mode, "vcenter")) l["y"] = 120;
-    else if (!strcmp(mode, "bottom")) l["y"] = 236;
-    viewDirty = true;
-    previewDirty = true;
-    syncJson();
+    const bool horizontal = !strcmp(mode, "left") || !strcmp(mode, "hcenter") || !strcmp(mode, "right");
+    float x = 0, y = 0, w = 0, h = 0;
+    if (usageSelectedKind && selected >= 0) {
+      JsonObject box = usageLayoutBox(usageSelectedKind, usageSelectedRow);
+      JsonArray draw = view["draw"].as<JsonArray>();
+      if (!box.isNull() && selected < (int)draw.size()) {
+        int cardW = draw[selected]["w"] | 240;
+        int cardH = draw[selected]["h"] | 240;
+        const int mx = box["mx"] | 0, my = box["my"] | 0;
+        const int bw = box["w"] | 0, bh = box["h"] | 0;
+        int targetX = 4, targetY = 4;
+        if (!strcmp(mode, "hcenter")) targetX = (cardW - bw) / 2;
+        else if (!strcmp(mode, "right")) targetX = cardW - bw - 4;
+        else if (!strcmp(mode, "vcenter")) targetY = (cardH - bh) / 2;
+        else if (!strcmp(mode, "bottom")) targetY = cardH - bh - 4;
+        if (horizontal) box["x"] = targetX - mx;
+        else box["y"] = targetY - my;
+        markViewChanged();
+        return;
+      }
+    }
+
+    if (selection.size() > 1) {
+      bool first = true;
+      float x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+      JsonArray draw = view["draw"].as<JsonArray>();
+      for (int i : selection) {
+        if (i < 0 || i >= (int)draw.size()) continue;
+        float bx, by, bw, bh;
+        layer_bounds(draw[i], bx, by, bw, bh);
+        if (first) { x0 = bx; y0 = by; x1 = bx + bw; y1 = by + bh; first = false; }
+        else { x0 = std::min(x0, bx); y0 = std::min(y0, by); x1 = std::max(x1, bx + bw); y1 = std::max(y1, by + bh); }
+      }
+      if (first) return;
+      x = x0; y = y0; w = x1 - x0; h = y1 - y0;
+    } else {
+      layer_bounds(l, x, y, w, h);
+    }
+
+    float dx = 0, dy = 0;
+    if (!strcmp(mode, "left")) dx = 4 - x;
+    else if (!strcmp(mode, "hcenter")) dx = 120 - (x + w / 2);
+    else if (!strcmp(mode, "right")) dx = 236 - (x + w);
+    else if (!strcmp(mode, "top")) dy = 4 - y;
+    else if (!strcmp(mode, "vcenter")) dy = 120 - (y + h / 2);
+    else if (!strcmp(mode, "bottom")) dy = 236 - (y + h);
+
+    if (selection.size() > 1) {
+      JsonArray draw = view["draw"].as<JsonArray>();
+      for (int i : selection) {
+        if (i < 0 || i >= (int)draw.size() || (draw[i]["locked"] | false)) continue;
+        draw[i]["x"] = (int)((draw[i]["x"] | 0) + dx);
+        draw[i]["y"] = (int)((draw[i]["y"] | 0) + dy);
+      }
+    } else {
+      l["x"] = (int)((l["x"] | 0) + dx);
+      l["y"] = (int)((l["y"] | 0) + dy);
+    }
+    markViewChanged();
   }
 
   void bitmapGrid(JsonObject l) {
@@ -3253,6 +3465,13 @@ struct App {
     return false;
   }
 
+  void syncUsagePx(JsonObject style) {
+    style["namePx"] = (int)(style["nameSize"] | 2) * 8;
+    style["labelPx"] = (int)(style["labelSize"] | 0) * 8;
+    style["valuePx"] = (int)(style["valueSize"] | 0) * 8;
+    style["resetPx"] = (int)(style["resetSize"] | 1) * 8;
+  }
+
   void applyUsagePreset(JsonObject style, int preset) {
     if (preset <= 0) return;
     style["showName"] = true;
@@ -3284,6 +3503,7 @@ struct App {
       style["showPanel"] = false; style["showReset"] = false;
       style["showLabel"] = false;
     }
+    syncUsagePx(style);
   }
 
   static void setUsageBox(JsonObject box, int x, int y, int w, int h,
@@ -3325,14 +3545,14 @@ struct App {
     ImGui::PushID(label);
     bool changed = false;
     ImGui::SeparatorText(label);
-    changed |= input_int_json(box, "x", "X", -512, 512, 0);
-    changed |= input_int_json(box, "y", "Y", -512, 512, 0);
-    changed |= input_int_json(box, "w", "Width", 0, 240, 0);
-    changed |= input_int_json(box, "h", "Height", 0, 240, 0);
-    changed |= input_int_json(box, "mx", "Margin X", -128, 127, 0);
-    changed |= input_int_json(box, "my", "Margin Y", -128, 127, 0);
-    changed |= input_int_json(box, "padX", "Padding X", 0, 60, 0);
-    changed |= input_int_json(box, "padY", "Padding Y", 0, 60, 0);
+    changed |= input_int_json(box, "x", "X (px)", -512, 512, 0);
+    changed |= input_int_json(box, "y", "Y (px)", -512, 512, 0);
+    changed |= input_int_json(box, "w", "Width (px)", 0, 240, 0);
+    changed |= input_int_json(box, "h", "Height (px)", 0, 240, 0);
+    changed |= input_int_json(box, "mx", "Margin X (px)", -128, 127, 0);
+    changed |= input_int_json(box, "my", "Margin Y (px)", -128, 127, 0);
+    changed |= input_int_json(box, "padX", "Padding X (px)", 0, 60, 0);
+    changed |= input_int_json(box, "padY", "Padding Y (px)", 0, 60, 0);
     static const char* aligns[] = {"l", "c", "r"};
     const char* cur = box["a"] | "l";
     int ai = !strcmp(cur, "c") ? 1 : !strcmp(cur, "r") ? 2 : 0;
@@ -3374,21 +3594,22 @@ struct App {
         } else {
           l["style"].set(clip.as<JsonObject>());
           style = l["style"].as<JsonObject>();
+          syncUsagePx(style);
           changed = true;
           notify("Usage style pasted");
         }
       }
-      changed |= input_int_json(style, "nameSize", "Name size (0 auto)", 0, 6, 2);
-      changed |= input_int_json(style, "labelSize", "Label size (0 auto)", 0, 6, 0);
-      changed |= input_int_json(style, "valueSize", "Value size (0 auto)", 0, 6, 0);
-      changed |= input_int_json(style, "resetSize", "Reset size", 0, 6, 1);
+      changed |= input_px_size(style, "namePx", "nameSize", "Name height (px, 0 auto)", 8, 0, 48, 6, 2);
+      changed |= input_px_size(style, "labelPx", "labelSize", "Label height (px, 0 auto)", 8, 0, 48, 6, 0);
+      changed |= input_px_size(style, "valuePx", "valueSize", "Value height (px, 0 auto)", 8, 0, 48, 6, 0);
+      changed |= input_px_size(style, "resetPx", "resetSize", "Reset height (px)", 8, 0, 48, 6, 1);
       changed |= style_align(style, "nameAlign", "Name align", "l");
       changed |= style_align(style, "labelAlign", "Label align", "auto");
       changed |= style_align(style, "valueAlign", "Value align", "auto");
       changed |= style_align(style, "resetAlign", "Reset align", "l");
-      changed |= input_int_json(style, "barHeight", "Bar height", 1, 32, 8);
-      changed |= input_int_json(style, "radius", "Panel radius", 0, 32, 8);
-      changed |= input_int_json(style, "padding", "Padding", 0, 60, 12);
+      changed |= input_int_json(style, "barHeight", "Bar height (px)", 1, 32, 8);
+      changed |= input_int_json(style, "radius", "Panel radius (px)", 0, 32, 8);
+      changed |= input_int_json(style, "padding", "Padding (px)", 0, 60, 12);
       changed |= style_checkbox(style, "showName", "Show name", true);
       changed |= style_checkbox(style, "showDot", "Show status dot", true);
       changed |= style_checkbox(style, "showLabel", "Show metric label", true);
@@ -3458,6 +3679,7 @@ struct App {
             *out = label;
             return true;
           }, nullptr, 5);
+          if (usageSelectedKind) usageSelectedRow = usageLayoutRow;
           JsonArray rows = layout["rows"].as<JsonArray>();
           if (rows.isNull()) rows = layout["rows"].to<JsonArray>();
           while ((int)rows.size() <= usageLayoutRow) {
@@ -3521,8 +3743,8 @@ struct App {
     ImGui::SameLine();
     bool locked = l["locked"] | false;
     if (ImGui::Checkbox("Locked", &locked)) { l["locked"] = locked; changed = true; }
-    changed |= input_int_json(l, "x", "X", -512, 512, 0);
-    changed |= input_int_json(l, "y", "Y", -512, 512, 0);
+    changed |= input_int_json(l, "x", "X (px)", -512, 512, 0);
+    changed |= input_int_json(l, "y", "Y (px)", -512, 512, 0);
     changed |= color_edit_json(l, "c", "Colour", "#ffffff");
     if (ImGui::Button("Delete")) { deleteSelected(); return; }
     ImGui::SameLine();
@@ -3530,26 +3752,26 @@ struct App {
     ImGui::Separator();
     if (!strcmp(t, "text")) {
       changed |= input_text_json(l, "v", "Text", false, "Tokens: {HH} {MM} {SS} {DD} {YYYY} {MON} {WD}");
-      changed |= input_int_json(l, "s", "Scale", 1, 6, 1);
+      changed |= input_px_size(l, "sizePx", "s", "Text height (px)", 8, 8, 48, 6, 1);
       static const char* aligns[] = {"l", "c", "r"};
       const char* cur = l["a"] | "l";
       int ai = !strcmp(cur, "c") ? 1 : !strcmp(cur, "r") ? 2 : 0;
       if (ImGui::Combo("Align", &ai, aligns, 3)) { l["a"] = aligns[ai]; changed = true; }
-      changed |= input_int_json(l, "w", "Box width (0 auto)", 0, 240, 0);
-      changed |= input_int_json(l, "h", "Box height (0 auto)", 0, 240, 0);
-      changed |= input_int_json(l, "padX", "Padding X", 0, 60, 0);
-      changed |= input_int_json(l, "padY", "Padding Y", 0, 60, 0);
-      changed |= input_int_json(l, "mx", "Margin X", -128, 127, 0);
-      changed |= input_int_json(l, "my", "Margin Y", -128, 127, 0);
-      changed |= input_int_json(l, "lineGap", "Line gap", 0, 40, 0);
+      changed |= input_int_json(l, "w", "Box width (px, 0 auto)", 0, 240, 0);
+      changed |= input_int_json(l, "h", "Box height (px, 0 auto)", 0, 240, 0);
+      changed |= input_int_json(l, "padX", "Padding X (px)", 0, 60, 0);
+      changed |= input_int_json(l, "padY", "Padding Y (px)", 0, 60, 0);
+      changed |= input_int_json(l, "mx", "Margin X (px)", -128, 127, 0);
+      changed |= input_int_json(l, "my", "Margin Y (px)", -128, 127, 0);
+      changed |= input_int_json(l, "lineGap", "Line gap (px)", 0, 40, 0);
       static const char* valigns[] = {"t", "m", "b"};
       const char* cv = l["va"] | "m";
       int vi = !strcmp(cv, "t") ? 0 : !strcmp(cv, "b") ? 2 : 1;
       if (ImGui::Combo("Vertical align", &vi, valigns, 3)) { l["va"] = valigns[vi]; changed = true; }
     } else if (!strcmp(t, "rect") || !strcmp(t, "rrect") || !strcmp(t, "usage")) {
-      changed |= input_int_json(l, "w", "Width", 1, 480, 10);
-      changed |= input_int_json(l, "h", "Height", 1, 480, 10);
-      if (!strcmp(t, "rrect")) changed |= input_int_json(l, "r", "Radius", 0, 255, 0);
+      changed |= input_int_json(l, "w", "Width (px)", 1, 480, 10);
+      changed |= input_int_json(l, "h", "Height (px)", 1, 480, 10);
+      if (!strcmp(t, "rrect")) changed |= input_int_json(l, "r", "Radius (px)", 0, 255, 0);
       if (!strcmp(t, "usage")) {
         static const char* providers[] = {"claude", "chatgpt", "deepseek"};
         const char* cur = l["provider"] | "claude";
@@ -3561,10 +3783,10 @@ struct App {
         if (selected >= 0 && selected < (int)draw.size()) l = draw[selected];
       }
     } else if (!strcmp(t, "circle")) {
-      changed |= input_int_json(l, "r", "Radius", 1, 255, 20);
+      changed |= input_int_json(l, "r", "Radius (px)", 1, 255, 20);
     } else if (!strcmp(t, "line")) {
-      changed |= input_int_json(l, "x2", "X2", -512, 512, 0);
-      changed |= input_int_json(l, "y2", "Y2", -512, 512, 0);
+      changed |= input_int_json(l, "x2", "X2 (px)", -512, 512, 0);
+      changed |= input_int_json(l, "y2", "Y2 (px)", -512, 512, 0);
     } else if (!strcmp(t, "icon")) {
       static const char* icons[] = {
         "alert", "arrow-down", "arrow-up", "battery", "check", "cloud",
@@ -3578,14 +3800,18 @@ struct App {
       if (ImGui::Combo("Icon", &ii, icons, (int)(sizeof(icons) / sizeof(icons[0])))) {
         l["v"] = icons[ii]; changed = true;
       }
-      changed |= input_int_json(l, "s", "Scale", 1, 8, 1);
+      changed |= input_px_size(l, "sizePx", "s", "Icon size (px)", 24, 24, 192, 8, 1);
       static const char* aligns[] = {"l", "c", "r"};
       const char* a = l["a"] | "l";
       int ai = !strcmp(a, "c") ? 1 : !strcmp(a, "r") ? 2 : 0;
       if (ImGui::Combo("Align", &ai, aligns, 3)) { l["a"] = aligns[ai]; changed = true; }
     } else if (!strcmp(t, "image")) {
       ImGui::TextDisabled("Asset: %s", (const char*)(l["src"] | "-"));
-      changed |= input_int_json(l, "s", "Scale", 1, 8, 1);
+      changed |= input_int_json(l, "displayW", "Display width (px)", 1, 480,
+                                (int)(l["w"] | 0) * std::max(1, (int)(l["s"] | 1)));
+      changed |= input_int_json(l, "displayH", "Display height (px)", 1, 480,
+                                (int)(l["h"] | 0) * std::max(1, (int)(l["s"] | 1)));
+      if (changed) syncDisplayScale(l);
       if (theme::secondaryButton("Replace image...", ImVec2(-1, 0)))
         dialog.openOpen("Replace image or GIF", ".png,.jpg,.jpeg,.gif,.bmp",
                         [this](const std::string& p) { replaceSelectedImage(p); });
@@ -3597,9 +3823,13 @@ struct App {
       const char* bg = view["bgImage"] | "";
       if (!strcmp(bg, l["src"] | "")) ImGui::TextDisabled("This asset is the background.");
     } else if (!strcmp(t, "bitmap")) {
-      changed |= input_int_json(l, "w", "Width", 1, 48, 8);
-      changed |= input_int_json(l, "h", "Height", 1, 48, 8);
-      changed |= input_int_json(l, "s", "Scale", 1, 4, 1);
+      changed |= input_int_json(l, "w", "Source width (px)", 1, 48, 8);
+      changed |= input_int_json(l, "h", "Source height (px)", 1, 48, 8);
+      changed |= input_int_json(l, "displayW", "Display width (px)", 1, 480,
+                                (int)(l["w"] | 8) * std::max(1, (int)(l["s"] | 1)));
+      changed |= input_int_json(l, "displayH", "Display height (px)", 1, 480,
+                                (int)(l["h"] | 8) * std::max(1, (int)(l["s"] | 1)));
+      if (changed) syncDisplayScale(l);
       changed |= input_text_json(l, "d", "Hex data");
       if (theme::secondaryButton("Import image/GIF...", ImVec2(-1, 0)))
         dialog.openOpen("Import image or GIF", ".png,.jpg,.jpeg,.gif,.bmp",
@@ -3608,7 +3838,7 @@ struct App {
     } else if (!strcmp(t, "fill")) {
       ImGui::TextDisabled("Background fill");
     }
-    ImGui::SeparatorText("Align on canvas");
+    ImGui::SeparatorText(usageSelectedKind ? "Align in component" : "Align on canvas");
     if (ImGui::Button("Left")) alignSelected(l, "left");
     ImGui::SameLine();
     if (ImGui::Button("Centre")) alignSelected(l, "hcenter");
@@ -3627,6 +3857,21 @@ struct App {
   }
 
   void editorToolbar() {
+    if (theme::secondaryButton("Components")) {
+      componentsDrawerOpen = !componentsDrawerOpen;
+      if (componentsDrawerOpen) documentDrawerOpen = false;
+    }
+    ImGui::SameLine();
+    if (theme::secondaryButton("Document")) {
+      documentDrawerOpen = !documentDrawerOpen;
+      if (documentDrawerOpen) componentsDrawerOpen = false;
+    }
+    ImGui::SameLine();
+    if (!selection.empty()) {
+      if (theme::secondaryButton(inspectorDismissed ? "Show Inspector" : "Inspector"))
+        inspectorDismissed = !inspectorDismissed;
+    }
+    ImGui::NewLine();
     if (theme::secondaryButton("Undo")) undo();
     ImGui::SameLine();
     if (theme::secondaryButton("Redo")) redo();
@@ -3664,7 +3909,6 @@ struct App {
   }
 
   void editorLayerPane() {
-    paneTitle("COMPONENTS");
     ImGui::Spacing();
     ImGui::SetNextItemWidth(-1);
     if (ImGui::BeginCombo("##addcomponent", "Add component...")) {
@@ -3680,22 +3924,6 @@ struct App {
       if (ImGui::Selectable("Template: clock")) addTemplate("clock");
       if (ImGui::Selectable("Template: usage stack")) addTemplate("usage");
       ImGui::EndCombo();
-    }
-    if (theme::secondaryButton("Background image...", ImVec2(-1, 0)))
-      dialog.openOpen("Background image or GIF", ".png,.jpg,.jpeg,.gif,.bmp",
-                      [this](const std::string& p) { importBackground(p); });
-    {
-      const char* bg = view["bgImage"] | "";
-      if (bg[0]) {
-        ImGui::TextDisabled("Background: %s", bg);
-        if (theme::secondaryButton("Clear background", ImVec2(-1, 0))) {
-          pushUndo();
-          view.remove("bgImage");
-          viewDirty = true;
-          previewDirty = true;
-          syncJson();
-        }
-      }
     }
     JsonArray groups = view["groups"].as<JsonArray>();
     if (groups.size() > 0) {
@@ -3765,6 +3993,28 @@ struct App {
     if (theme::secondaryButton("Group", ImVec2(half, 0))) groupSelected();
     ImGui::SameLine();
     if (theme::secondaryButton("Ungroup", ImVec2(half, 0))) ungroupSelected();
+  }
+
+  void documentDrawerContent() {
+    JsonObject vo = view.as<JsonObject>();
+    bool changed = false;
+    changed |= color_edit_json(vo, "bg", "Background colour", "#0b1420");
+    changed |= input_int_json(vo, "priority", "Priority", 0, 255, 0);
+    changed |= input_int_json(vo, "ttl", "TTL (seconds)", 0, 86400, 15);
+    if (theme::secondaryButton("Background image...", ImVec2(-1, 0)))
+      dialog.openOpen("Background image or GIF", ".png,.jpg,.jpeg,.gif,.bmp",
+                      [this](const std::string& p) { importBackground(p); });
+    const char* bg = view["bgImage"] | "";
+    if (bg[0]) {
+      ImGui::TextDisabled("Background: %s", bg);
+      if (theme::secondaryButton("Clear background", ImVec2(-1, 0))) {
+        view.remove("bgImage");
+        changed = true;
+      }
+    }
+    if (changed) markViewChanged();
+    ImGui::Separator();
+    editorActions();
   }
 
   void editorActions() {
@@ -3877,7 +4127,7 @@ struct App {
     }
     auto snapAxis = [&](float value, float size, const std::vector<float>& lines,
                         float& guide) {
-      float best = 7.0f;
+      float best = 4.0f;
       float adjusted = value;
       for (float edge : {value, value + size / 2, value + size}) {
         for (float line : lines) {
@@ -3917,29 +4167,47 @@ struct App {
     JsonArray draw = view["draw"].as<JsonArray>();
     static int dragMode = 0;
     static bool undoPushed = false;
+    static bool dragThresholdMet = false;
     static bool boxSelecting = false;
     static ImVec2 boxStart{};
-    static ImVec2 press{};
+    static ImVec2 dragOrigin{};
+    static int dragSubKind = 0;
+    static int dragSubRow = 0;
+    static int dragSubX = 0, dragSubY = 0;
+    static int dragPrimaryX = 0, dragPrimaryY = 0;
+    static int dragPrimaryW = 0, dragPrimaryH = 0;
+    static std::vector<int> dragIndices;
+    static std::vector<int> dragStartX;
+    static std::vector<int> dragStartY;
     if (ImGui::IsItemClicked(0)) {
       const bool additive = ImGui::GetIO().KeyShift || ImGui::GetIO().KeyCtrl;
+      const bool alt = ImGui::GetIO().KeyAlt;
       bool usageHit = false;
-      if (selected >= 0 && selected < (int)draw.size()) {
+      if (!alt && selected >= 0 && selected < (int)draw.size()) {
         JsonObject layout = usageLayoutFor(draw[selected]);
         if (!layout.isNull()) {
           float cardX = draw[selected]["x"] | 0, cardY = draw[selected]["y"] | 0;
-          const int kinds[] = {1, 2, 3, 4, 5};
-          for (int kind : kinds) {
-            JsonObject box = usageLayoutBox(kind, usageLayoutRow);
+          auto tryBox = [&](int kind, int row) {
+            JsonObject box = usageLayoutBox(kind, row);
             float bx, by, bw, bh;
-            if (!usageBoxBounds(box, cardX, cardY, bx, by, bw, bh)) continue;
-            if (mx >= bx && mx <= bx + bw && my >= by && my <= by + bh) {
-              usageDragKind = kind;
-              usageDragRow = usageLayoutRow;
-              dragMode = 3;
-              press = ImVec2(mx, my);
-              undoPushed = false;
-              usageHit = true;
-              break;
+            if (!usageBoxBounds(box, cardX, cardY, bx, by, bw, bh)) return false;
+            if (mx < bx || mx > bx + bw || my < by || my > by + bh) return false;
+            usageSelectedKind = kind;
+            usageSelectedRow = usageLayoutRow = row;
+            usageDragKind = dragSubKind = kind;
+            usageDragRow = dragSubRow = row;
+            dragSubX = box["x"] | 0;
+            dragSubY = box["y"] | 0;
+            dragMode = 3;
+            dragOrigin = ImVec2(mx, my);
+            undoPushed = false;
+            dragThresholdMet = false;
+            usageHit = true;
+            return true;
+          };
+          if (!tryBox(1, 0) && !tryBox(2, 0)) {
+            for (int row = 0; row < (int)layout["rows"].as<JsonArray>().size() && !usageHit; row++) {
+              tryBox(3, row) || tryBox(4, row) || tryBox(5, row);
             }
           }
         }
@@ -3960,6 +4228,7 @@ struct App {
           if (mx >= x && mx <= x + w && my >= y && my <= y + h) { hit = i; break; }
         }
         if (hit >= 0) {
+          usageSelectedKind = 0;
           if (additive) selectComponent(hit, true);
           else {
             selection.clear();
@@ -3967,62 +4236,81 @@ struct App {
             selected = hit;
           }
         } else {
-          if (!additive) {
-            selected = -1;
-            selection.clear();
-          }
+          if (!additive) clearSelection();
           boxSelecting = true;
           boxStart = ImVec2(mx, my);
         }
       }
       if (!usageHit && selected >= 0 && selected < (int)draw.size()) {
+        usageSelectedKind = 0;
         const bool locked = draw[selected]["locked"] | false;
         dragMode = locked ? 0 : (onHandle && selection.size() == 1 ? 2 : 1);
-        press = ImVec2(mx, my);
+        dragOrigin = ImVec2(mx, my);
         undoPushed = false;
+        dragThresholdMet = false;
+        dragPrimaryX = draw[selected]["x"] | 0;
+        dragPrimaryY = draw[selected]["y"] | 0;
+        dragPrimaryW = draw[selected]["w"] | 0;
+        dragPrimaryH = draw[selected]["h"] | 0;
+        if (!strcmp(draw[selected]["t"] | "", "circle")) {
+          dragPrimaryW = dragPrimaryH = 2 * (draw[selected]["r"] | 0);
+        }
+        dragIndices.clear();
+        dragStartX.clear();
+        dragStartY.clear();
+        if (dragMode == 1) {
+          for (int i : effectiveSelection()) {
+            if (i < 0 || i >= (int)draw.size()) continue;
+            dragIndices.push_back(i);
+            dragStartX.push_back(draw[i]["x"] | 0);
+            dragStartY.push_back(draw[i]["y"] | 0);
+          }
+        }
         snapGuideX = snapGuideY = -1;
       }
     }
     if (active && ImGui::IsMouseDragging(0) && selected >= 0 &&
         selected < (int)draw.size() && dragMode) {
-      if (!undoPushed) { pushUndo(); undoPushed = true; }
-      JsonObject primary = draw[selected];
-      float dx = mx - press.x, dy = my - press.y;
-      if (dragMode == 3) {
-        JsonObject box = usageLayoutBox(usageDragKind, usageDragRow);
-        if (!box.isNull()) {
-          box["x"] = (int)((box["x"] | 0) + dx);
-          box["y"] = (int)((box["y"] | 0) + dy);
-        }
-      } else if (dragMode == 2) {
-        const char* t = primary["t"] | "";
-        if (!strcmp(t, "circle")) {
-          int r = std::max(1, (int)((primary["r"] | 1) + std::max(dx, dy)));
-          primary["r"] = std::min(255, r);
-        } else {
-          primary["w"] = std::max(1, (int)((primary["w"] | 1) + dx));
-          primary["h"] = std::max(1, (int)((primary["h"] | 1) + dy));
-        }
+      float dx = mx - dragOrigin.x, dy = my - dragOrigin.y;
+      if (!dragThresholdMet && std::abs(dx) < 3.0f && std::abs(dy) < 3.0f) {
+        // Do not move on a tiny accidental drag.
       } else {
-        std::set<int> moving = effectiveSelection();
-        const float x = (primary["x"] | 0) + dx;
-        const float y = (primary["y"] | 0) + dy;
-        float w = primary["w"] | 0, h = primary["h"] | 0;
-        if (!strcmp(primary["t"] | "", "circle")) w = h = 2 * (primary["r"] | 0);
-        float sx = x, sy = y;
-        snapPosition(sx, sy, w, h, moving);
-        dx = sx - (primary["x"] | 0);
-        dy = sy - (primary["y"] | 0);
-        for (int i : moving) {
-          if (i < 0 || i >= (int)draw.size() || (draw[i]["locked"] | false)) continue;
-          draw[i]["x"] = (int)((draw[i]["x"] | 0) + dx);
-          draw[i]["y"] = (int)((draw[i]["y"] | 0) + dy);
+        dragThresholdMet = true;
+        if (!undoPushed) { pushUndo(); undoPushed = true; }
+        if (dragMode == 3) {
+          JsonObject box = usageLayoutBox(dragSubKind, dragSubRow);
+          if (!box.isNull()) {
+            box["x"] = dragSubX + (int)std::round(dx);
+            box["y"] = dragSubY + (int)std::round(dy);
+          }
+        } else if (dragMode == 2) {
+          JsonObject primary = draw[selected];
+          const char* t = primary["t"] | "";
+          if (!strcmp(t, "circle")) {
+            int r = std::max(1, dragPrimaryW / 2 + (int)std::max(dx, dy));
+            primary["r"] = std::min(255, r);
+          } else {
+            primary["w"] = std::max(1, dragPrimaryW + (int)std::round(dx));
+            primary["h"] = std::max(1, dragPrimaryH + (int)std::round(dy));
+          }
+        } else {
+          std::set<int> moving(dragIndices.begin(), dragIndices.end());
+          float sx = (float)dragPrimaryX + dx;
+          float sy = (float)dragPrimaryY + dy;
+          snapPosition(sx, sy, (float)dragPrimaryW, (float)dragPrimaryH, moving);
+          const int finalDx = (int)std::round(sx - dragPrimaryX);
+          const int finalDy = (int)std::round(sy - dragPrimaryY);
+          for (size_t k = 0; k < dragIndices.size(); k++) {
+            const int i = dragIndices[k];
+            if (i < 0 || i >= (int)draw.size() || (draw[i]["locked"] | false)) continue;
+            draw[i]["x"] = dragStartX[k] + finalDx;
+            draw[i]["y"] = dragStartY[k] + finalDy;
+          }
         }
+        viewDirty = true;
+        previewDirty = true;
+        syncJson();
       }
-      press = ImVec2(mx, my);
-      viewDirty = true;
-      previewDirty = true;
-      syncJson();
     }
     if (boxSelecting && active && ImGui::IsMouseDragging(0)) {
       ImDrawList* boxDraw = ImGui::GetWindowDrawList();
@@ -4099,14 +4387,22 @@ struct App {
       JsonObject layout = usageLayoutFor(draw[selected]);
       if (!layout.isNull()) {
         float cardX = draw[selected]["x"] | 0, cardY = draw[selected]["y"] | 0;
-        const int kinds[] = {1, 2, 3, 4, 5};
-        for (int kind : kinds) {
-          JsonObject box = usageLayoutBox(kind, usageLayoutRow);
-          float bx, by, bw, bh;
-          if (!usageBoxBounds(box, cardX, cardY, bx, by, bw, bh)) continue;
-          ImVec2 a(imgPos.x + bx * S, imgPos.y + by * S);
-          ImVec2 b(imgPos.x + (bx + bw) * S, imgPos.y + (by + bh) * S);
-          dl->AddRect(a, b, IM_COL32(80, 190, 230, 150), 0, 0, 1.0f);
+        static const int nameKinds[] = {1, 2, 3, 4, 5};
+        static const int rowKinds[] = {3, 4, 5};
+        for (int row = 0; row < 5; row++) {
+          const int* kinds = row == 0 ? nameKinds : rowKinds;
+          const int count = row == 0 ? 5 : 3;
+          for (int k = 0; k < count; k++) {
+            const int kind = kinds[k];
+            JsonObject box = usageLayoutBox(kind, row);
+            float bx, by, bw, bh;
+            if (!usageBoxBounds(box, cardX, cardY, bx, by, bw, bh)) continue;
+            ImVec2 a(imgPos.x + bx * S, imgPos.y + by * S);
+            ImVec2 b(imgPos.x + (bx + bw) * S, imgPos.y + (by + bh) * S);
+            const bool active = kind == usageSelectedKind && row == usageSelectedRow;
+            dl->AddRect(a, b, active ? IM_COL32(255, 200, 60, 235) : IM_COL32(80, 190, 230, 110),
+                        0, 0, active ? 2.0f : 1.0f);
+          }
         }
       }
     }
@@ -4128,6 +4424,11 @@ struct App {
 
   void editor() {
     if (!viewLoaded) initView();
+    const std::string signature = selectionSignature();
+    if (signature != lastSelectionSignature) {
+      lastSelectionSignature = signature;
+      if (!signature.empty()) inspectorDismissed = false;
+    }
     ImGuiIO& io = ImGui::GetIO();
     if (!io.WantTextInput) {
       if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
@@ -4138,7 +4439,10 @@ struct App {
       if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_V, false)) pasteComponents();
       if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_D, false)) duplicateSelected();
       if (ImGui::IsKeyPressed(ImGuiKey_Delete, false)) deleteSelected();
-      if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) { selection.clear(); selected = -1; }
+      if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+        if (usageSelectedKind) usageSelectedKind = 0;
+        else clearSelection();
+      }
       if (ImGui::IsKeyPressed(ImGuiKey_LeftBracket, false)) moveSelectedZ(-1);
       if (ImGui::IsKeyPressed(ImGuiKey_RightBracket, false)) moveSelectedZ(1);
       int nx = 0, ny = 0;
@@ -4147,29 +4451,54 @@ struct App {
       if (ImGui::IsKeyPressed(ImGuiKey_UpArrow, true)) ny = -1;
       if (ImGui::IsKeyPressed(ImGuiKey_DownArrow, true)) ny = 1;
       if ((nx || ny) && !selection.empty()) {
-        pushUndo();
         const int step = io.KeyShift ? 10 : 1;
-        JsonArray draw = view["draw"].as<JsonArray>();
-        for (int i : effectiveSelection()) {
-          if (i < 0 || i >= (int)draw.size() || (draw[i]["locked"] | false)) continue;
-          draw[i]["x"] = (draw[i]["x"] | 0) + nx * step;
-          draw[i]["y"] = (draw[i]["y"] | 0) + ny * step;
+        pushUndo();
+        if (usageSelectedKind && selected >= 0) {
+          JsonObject box = usageLayoutBox(usageSelectedKind, usageSelectedRow);
+          if (!box.isNull()) {
+            box["x"] = (int)((box["x"] | 0) + nx * step);
+            box["y"] = (int)((box["y"] | 0) + ny * step);
+          }
+        } else {
+          JsonArray draw = view["draw"].as<JsonArray>();
+          for (int i : effectiveSelection()) {
+            if (i < 0 || i >= (int)draw.size() || (draw[i]["locked"] | false)) continue;
+            draw[i]["x"] = (draw[i]["x"] | 0) + nx * step;
+            draw[i]["y"] = (draw[i]["y"] | 0) + ny * step;
+          }
         }
-        viewDirty = true;
-        previewDirty = true;
-        syncJson();
+        markViewChanged();
+      }
+      if (usageSelectedKind && ImGui::IsKeyPressed(ImGuiKey_Tab, false)) {
+        usageSelectedKind = usageSelectedKind >= 5 ? 1 : usageSelectedKind + 1;
       }
     }
     ImGui::BeginChild("##designbody", ImVec2(0, 0), false);
+    const ImVec2 bodyPos = ImGui::GetWindowPos();
+    const ImVec2 bodySize = ImGui::GetWindowSize();
     const ImVec2 avail = ImGui::GetContentRegionAvail();
-    const float gap = 12.0f;
-    const float leftW = avail.x > 920 ? 220.0f : 190.0f;
-    const float rightW = avail.x > 920 ? 300.0f : 260.0f;
-    const float centerW = std::max(240.0f, avail.x - leftW - rightW - 2.0f * gap);
-    beginPane("##layerspane", ImVec2(leftW, avail.y), true);
-    editorLayerPane();
-    endPane();
-    ImGui::SameLine(0, gap);
+    const bool hasSelection = !selection.empty() && selected >= 0;
+    const bool showInspector = hasSelection && !inspectorDismissed;
+    const float leftWidth = documentDrawerOpen ? documentDrawerWidth
+                          : componentsDrawerOpen ? componentsDrawerWidth : 0.0f;
+    const float rightWidth = showInspector ? inspectorDrawerWidth : 0.0f;
+    const float centerW = std::max(240.0f, avail.x - leftWidth - rightWidth);
+
+    if (leftWidth > 0) {
+      bool open = documentDrawerOpen ? documentDrawerOpen : componentsDrawerOpen;
+      if (beginDrawer("##leftdrawer", leftWidth,
+                      documentDrawerOpen ? "DOCUMENT" : "COMPONENTS", &open)) {
+        if (documentDrawerOpen) documentDrawerContent();
+        else editorLayerPane();
+      }
+      endDrawer();
+      if (!open) {
+        documentDrawerOpen = false;
+        componentsDrawerOpen = false;
+      }
+      ImGui::SameLine(0, 0);
+    }
+
     beginPane("##canvaspane", ImVec2(centerW, avail.y), false);
     drawGrid(IM_COL32(42, 47, 54, 65));
     editorToolbar();
@@ -4185,22 +4514,40 @@ struct App {
                  ImVec2(p.x + side + 8, p.y + side + 8), theme::surfaceAlt(), theme::border());
     editorCanvas(side);
     ImGui::SetCursorPosY(ImGui::GetWindowHeight() - 26);
-    ImGui::TextDisabled("240 × 240  ·  %d components  ·  %s",
-                        (int)view["draw"].as<JsonArray>().size(),
-                        viewError.empty() ? "ready" : viewError.c_str());
+    const char* element = usageSelectedKind == 1 ? "name" :
+                          usageSelectedKind == 2 ? "reset" :
+                          usageSelectedKind == 3 ? "label" :
+                          usageSelectedKind == 4 ? "value" :
+                          usageSelectedKind == 5 ? "bar" : "";
+    if (element[0])
+      ImGui::TextDisabled("240 × 240  ·  %d components  ·  row %d %s  ·  %s",
+                          (int)view["draw"].as<JsonArray>().size(),
+                          usageSelectedRow + 1, element,
+                          viewError.empty() ? "ready" : viewError.c_str());
+    else
+      ImGui::TextDisabled("240 × 240  ·  %d components  ·  %s",
+                          (int)view["draw"].as<JsonArray>().size(),
+                          viewError.empty() ? "ready" : viewError.c_str());
     endPane();
-    ImGui::SameLine(0, gap);
-    beginPane("##inspectorpane", ImVec2(rightW, avail.y), true);
-    paneTitle("INSPECTOR");
-    ImGui::Spacing();
-    layerProperties();
-    ImGui::Spacing();
-    ImGui::Separator();
-    if (ImGui::CollapsingHeader("File & device")) {
-      ImGui::Spacing();
-      editorActions();
+
+    if (showInspector) {
+      ImGui::SameLine(0, 0);
+      bool open = true;
+      beginDrawer("##inspectordrawer", rightWidth, "INSPECTOR", &open);
+      layerProperties();
+      endDrawer();
+      if (!open) inspectorDismissed = true;
     }
-    endPane();
+
+    // A click on empty design background clears the selection. Clicks inside
+    // the drawers, canvas or toolbar are consumed by their child windows.
+    if (ImGui::IsMouseClicked(0) &&
+        ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
+        !ImGui::IsAnyItemHovered()) {
+      clearSelection();
+    }
+    (void)bodyPos;
+    (void)bodySize;
     ImGui::EndChild();
   }
 

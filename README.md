@@ -122,11 +122,12 @@ emulator/build/smalltv-emulator --view examples/view.json --usage daemon/usage.e
 Use the **Device**, **Design**, **Usage** and **Settings** tabs. The Design
 editor calls its draw-list entries **components** and supports multi-select,
 copy/paste, keyboard nudging, snapping, rulers, guides, groups, visibility,
-locking, explicit Z order, snapping/rulers, distribute controls, usage preview
-states, device image management, portable dashboard bundles and autosave
-recovery. The device web UI password uses HTTP Digest; app self-update, firmware
-release selection, manual firmware upload and settings export/import are handled
-directly by the app. See
+locking, explicit Z order, distribute controls, usage preview states, device
+image management, portable dashboard bundles and autosave recovery. Components,
+Document and Inspector are collapsible drawers; the Inspector appears only when
+something is selected and can be closed. The device web UI password uses HTTP
+Digest; app self-update, firmware release selection, manual firmware upload and
+settings export/import are handled directly by the app. See
 [`emulator/README.md`](emulator/README.md) for details and Windows/MSYS2
 instructions.
 
@@ -164,9 +165,13 @@ and do not add recursive/nested group support.
 
 Text components support an optional box with `w`, `h`, `padX`, `padY`,
 `mx`, `my`, `va` and `lineGap`, so the text can be anchored inside a fixed
-region. Usage components can add an independent `style.layout` geometry for
-the card title, reset line and every metric row's label, value and bar. The
-desktop inspector exposes numeric fields and draggable sub-element boxes.
+region. Sizes are exposed as pixels through `sizePx`. Usage components can add
+an independent `style.layout` geometry for the card title, reset line and every
+metric row's label, value and bar. Usage text sizes are exposed as `namePx`,
+`labelPx`, `valuePx` and `resetPx`. Bitmap/image display sizes use
+`displayW`/`displayH` in pixels. The desktop inspector exposes numeric pixel
+fields and draggable sub-element boxes; legacy scale fields remain in saved
+views for older firmware compatibility.
 
 Image and GIF backgrounds are imported by the native desktop app, not the web
 editor. The app converts PNG/JPEG/BMP to RGB565 and animated GIF to indexed
@@ -333,7 +338,7 @@ Progress is live for uploads started by the desktop app or the manual web upload
 
 ## Notes
 
-- The ESP8266 image is about 818 KB flash / 60 KB static RAM in this build,
+- The ESP8266 image is about 814 KB flash / 60 KB static RAM in this build,
   down from the upstream full image, so the old `smalltv_lean` variant is gone.
 - `src/config.h` points the desktop updater at `JPHultra/smalltv-mod-custom`; change it
   if the repository moves.

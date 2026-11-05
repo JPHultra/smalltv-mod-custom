@@ -92,6 +92,16 @@ static bool parseUsageStyle(JsonObjectConst s, ViewScreen& sc, UsageStyle& style
   style.labelSize = (uint8_t)constrain((int)(s["labelSize"] | 0), 0, 6);
   style.valueSize = (uint8_t)constrain((int)(s["valueSize"] | 0), 0, 6);
   style.resetSize = (uint8_t)constrain((int)(s["resetSize"] | 1), 0, 6);
+  auto pxSize = [](JsonObjectConst o, const char* key, uint8_t fallback) {
+    if (o[key].isNull()) return fallback;
+    const int px = (int)o[key];
+    if (px <= 0) return (uint8_t)0;
+    return (uint8_t)constrain((px + 4) / 8, 1, 6);
+  };
+  style.nameSize = pxSize(s, "namePx", style.nameSize);
+  style.labelSize = pxSize(s, "labelPx", style.labelSize);
+  style.valueSize = pxSize(s, "valuePx", style.valueSize);
+  style.resetSize = pxSize(s, "resetPx", style.resetSize);
   style.nameAlign = parseAlign(s["nameAlign"] | "l", VIEW_A_LEFT);
   style.labelAlign = parseAlign(s["labelAlign"] | "r", VIEW_A_RIGHT);
   style.valueAlign = parseAlign(s["valueAlign"] | "l", VIEW_A_LEFT);
@@ -207,6 +217,10 @@ static bool parsePrim(JsonObjectConst p, ViewScreen& sc, ViewPrim& out) {
     const char* v = p["v"];
     if (!v) return false;
     int s = p["s"] | 1;
+    if (!p["sizePx"].isNull()) {
+      const int px = (int)p["sizePx"];
+      s = px > 0 ? (px + 4) / 8 : 1;
+    }
     if (s < 1) return false;
     char buf[VIEW_MAX_TEXT];
     size_t n = 0;
@@ -262,6 +276,10 @@ static bool parsePrim(JsonObjectConst p, ViewScreen& sc, ViewPrim& out) {
     const char* v = p["v"];
     if (!v) return false;
     int s = p["s"] | 1;
+    if (!p["sizePx"].isNull()) {
+      const int px = (int)p["sizePx"];
+      s = px > 0 ? (px + 12) / 24 : 1;
+    }
     if (s < 1) return false;
     size_t L = strlen(v);
     if (!L || L > VIEW_MAX_ICON_LEN) return false;
@@ -291,6 +309,15 @@ static bool parsePrim(JsonObjectConst p, ViewScreen& sc, ViewPrim& out) {
     out.x2    = (int16_t)w;
     out.y2    = (int16_t)h;
     out.aux   = (uint8_t)s;
+    const int displayW = p["displayW"] | 0;
+    const int displayH = p["displayH"] | 0;
+    if (displayW > 0 && displayH > 0 && sc.bitmapStyleCount < VIEW_MAX_BITMAP_STYLES) {
+      ViewBitmapStyle bs;
+      bs.displayW = (uint16_t)constrain(displayW, 1, TFT_WIDTH * 2);
+      bs.displayH = (uint16_t)constrain(displayH, 1, TFT_HEIGHT * 2);
+      out._pad = (uint8_t)(sc.bitmapStyleCount + 1);
+      sc.bitmapStyles[sc.bitmapStyleCount++] = bs;
+    }
     const char* a = p["a"] | "l";
     out.align = (a[0] == 'c') ? VIEW_A_CENTER : (a[0] == 'r') ? VIEW_A_RIGHT : VIEW_A_LEFT;
     out.voff  = sc.bitmapUsed;
@@ -307,8 +334,8 @@ static bool parsePrim(JsonObjectConst p, ViewScreen& sc, ViewPrim& out) {
     const char* a = p["a"] | "l";
     out.align = (a[0] == 'c') ? VIEW_A_CENTER : (a[0] == 'r') ? VIEW_A_RIGHT : VIEW_A_LEFT;
     out.voff  = offset;
-    out.x2    = (int16_t)constrain((int)(p["w"] | 0), 0, TFT_WIDTH);
-    out.y2    = (int16_t)constrain((int)(p["h"] | 0), 0, TFT_HEIGHT);
+    out.x2    = (int16_t)constrain((int)(p["displayW"] | 0), 0, TFT_WIDTH * 2);
+    out.y2    = (int16_t)constrain((int)(p["displayH"] | 0), 0, TFT_HEIGHT * 2);
   } else if (!strcmp(t, "usage")) {
     const char* provider = p["provider"];
     if (!provider || !provider[0]) return false;
@@ -444,6 +471,13 @@ const TextStyle* viewPrimTextStyle(const ViewScreen& screen, const ViewPrim& pri
   const uint8_t index = (uint8_t)(prim._pad - 1);
   if (index >= screen.textStyleCount) return nullptr;
   return &screen.textStyles[index];
+}
+
+const ViewBitmapStyle* viewPrimBitmapStyle(const ViewScreen& screen, const ViewPrim& prim) {
+  if (prim.type != VIEW_P_BITMAP || !prim._pad) return nullptr;
+  const uint8_t index = (uint8_t)(prim._pad - 1);
+  if (index >= screen.bitmapStyleCount) return nullptr;
+  return &screen.bitmapStyles[index];
 }
 
 const char* viewUsageTitle(const ViewScreen& screen, const UsageStyle& style) {

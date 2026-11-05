@@ -693,18 +693,23 @@ static void drawPrims(const ViewScreen& screen, Arduino_GFX* gfx, int yOffset,
       }
       case VIEW_P_BITMAP: {
         const int w = p.x2, h = p.y2, s = p.aux ? p.aux : 1;
-        const int rw = w * s;
+        const ViewBitmapStyle* bs = viewPrimBitmapStyle(screen, p);
+        const int rw = bs ? bs->displayW : w * s;
+        const int rh = bs ? bs->displayH : h * s;
         const int x = (p.align == VIEW_A_CENTER) ? p.x - rw / 2
                     : (p.align == VIEW_A_RIGHT)  ? p.x - rw : p.x;
         const uint8_t* bits = screen.bitmap + p.voff;
-        for (int py = 0; py < h; py++)
-          for (int px = 0; px < w; px++) {
-            const int idx = py * w + px;
+        for (int py = 0; py < rh; py++) {
+          const int sy = py * h / rh;
+          for (int px = 0; px < rw; px++) {
+            const int sx = px * w / rw;
+            const int idx = sy * w + sx;
             if (bits[idx >> 3] & (0x80 >> (idx & 7))) {
-              if (s == 1) gfx->drawPixel(x + px, p.y + py, c);
-              else        gfx->fillRect(x + px * s, p.y + py * s, s, s, c);
+              if (bs || s != 1) gfx->fillRect(x + px, p.y + py, 1, 1, c);
+              else gfx->drawPixel(x + px, p.y + py, c);
             }
           }
+        }
         break;
       }
       case VIEW_P_IMAGE: {
@@ -712,8 +717,8 @@ static void drawPrims(const ViewScreen& screen, Arduino_GFX* gfx, int yOffset,
         ViewImageInfo info;
         const char* name = viewPrimImage(screen, p);
         if (name && images && images->info(name, info)) {
-          const int w = info.width * s;
-          const int h = info.height * s;
+          const int w = p.x2 > 0 ? p.x2 : info.width * s;
+          const int h = p.y2 > 0 ? p.y2 : info.height * s;
           const int x = (p.align == VIEW_A_CENTER) ? p.x - w / 2
                       : (p.align == VIEW_A_RIGHT)  ? p.x - w : p.x;
           drawImageAsset(gfx, images, name, elapsedMs, x, p.y + yOffset, w, h,

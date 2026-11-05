@@ -33,6 +33,9 @@ HTML/WebView assets.
   - properties, icon picker, bitmap pixel grid
   - configurable usage-card text, alignment, colours, bars, panels and labels
   - numeric and draggable text/usage geometry with padding and margins
+  - pixel-based size controls with automatic legacy-view migration
+  - collapsible Components, Document and Inspector drawers; Inspector opens only with selection
+  - empty-canvas/background deselection and live background colour preview
   - PNG/JPEG/BMP and animated GIF import with RGB565 stills and indexed GIF frames
   - full-screen image/GIF backgrounds with cover cropping
   - undo/redo, JSON apply/copy

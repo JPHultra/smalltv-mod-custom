@@ -85,6 +85,11 @@ struct UsageBox {
   uint8_t reserved = 0;
 };
 
+struct ViewBitmapStyle {
+  uint16_t displayW = 0;
+  uint16_t displayH = 0;
+};
+
 struct UsageRowLayout {
   UsageBox label;
   UsageBox value;
@@ -130,6 +135,8 @@ struct ViewScreen {
   UsageLayout usageLayouts[VIEW_MAX_USAGE_STYLES];
   uint8_t  textStyleCount;
   TextStyle textStyles[VIEW_MAX_TEXT_STYLES];
+  uint8_t  bitmapStyleCount;
+  ViewBitmapStyle bitmapStyles[VIEW_MAX_BITMAP_STYLES];
   ViewPrim prims[VIEW_MAX_PRIMS];
   char     text[VIEW_TEXT_POOL];
   uint8_t  bitmap[VIEW_BITMAP_POOL];
@@ -156,6 +163,7 @@ const char* viewBackgroundImage(const ViewScreen& screen);
 const UsageStyle* viewPrimUsageStyle(const ViewScreen& screen, const ViewPrim& prim);
 const UsageLayout* viewPrimUsageLayout(const ViewScreen& screen, const ViewPrim& prim);
 const TextStyle* viewPrimTextStyle(const ViewScreen& screen, const ViewPrim& prim);
+const ViewBitmapStyle* viewPrimBitmapStyle(const ViewScreen& screen, const ViewPrim& prim);
 const char* viewUsageTitle(const ViewScreen& screen, const UsageStyle& style);
 const char* viewUsageMetricLabel(const ViewScreen& screen, const UsageStyle& style, int metric);
 
