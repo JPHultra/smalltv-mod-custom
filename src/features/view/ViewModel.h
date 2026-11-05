@@ -59,6 +59,46 @@ struct UsageStyle {
   uint16_t labelsOffset = 0xFFFF;
 };
 
+struct TextStyle {
+  int8_t marginX = 0;
+  int8_t marginY = 0;
+  uint8_t padX = 0;
+  uint8_t padY = 0;
+  uint8_t lineGap = 0;
+  uint8_t valign = 1;  // 0 top, 1 middle, 2 bottom
+};
+
+// Absolute geometry for configurable usage-card elements. x/y/w/h are relative
+// to the card origin; margins and padding are applied inside that box.
+struct UsageBox {
+  int16_t x = 0;
+  int16_t y = 0;
+  int16_t w = 0;
+  int16_t h = 0;
+  int8_t marginX = 0;
+  int8_t marginY = 0;
+  uint8_t padX = 0;
+  uint8_t padY = 0;
+  uint8_t align = 0;
+  uint8_t valign = 1;
+  uint8_t flags = 0;   // 1 = position set, 2 = size set
+  uint8_t reserved = 0;
+};
+
+struct UsageRowLayout {
+  UsageBox label;
+  UsageBox value;
+  UsageBox bar;
+};
+
+struct UsageLayout {
+  uint8_t configured = 0;
+  uint8_t reserved = 0;
+  UsageBox name;
+  UsageBox reset;
+  UsageRowLayout rows[USAGE_MAX_METRICS];
+};
+
 // One draw primitive, 16 bytes. Text, icon names, provider ids and decoded
 // bitmap data live in the owning screen's pools; voff indexes the matching one.
 struct ViewPrim {
@@ -87,6 +127,9 @@ struct ViewScreen {
   uint8_t  priority;    // overlay priority, 0..3
   uint8_t  usageStyleCount;
   UsageStyle usageStyles[VIEW_MAX_USAGE_STYLES];
+  UsageLayout usageLayouts[VIEW_MAX_USAGE_STYLES];
+  uint8_t  textStyleCount;
+  TextStyle textStyles[VIEW_MAX_TEXT_STYLES];
   ViewPrim prims[VIEW_MAX_PRIMS];
   char     text[VIEW_TEXT_POOL];
   uint8_t  bitmap[VIEW_BITMAP_POOL];
@@ -111,6 +154,8 @@ const char* viewBackgroundImage(const ViewScreen& screen);
 
 // Usage style/text accessors. Return defaults when a component has no style.
 const UsageStyle* viewPrimUsageStyle(const ViewScreen& screen, const ViewPrim& prim);
+const UsageLayout* viewPrimUsageLayout(const ViewScreen& screen, const ViewPrim& prim);
+const TextStyle* viewPrimTextStyle(const ViewScreen& screen, const ViewPrim& prim);
 const char* viewUsageTitle(const ViewScreen& screen, const UsageStyle& style);
 const char* viewUsageMetricLabel(const ViewScreen& screen, const UsageStyle& style, int metric);
 

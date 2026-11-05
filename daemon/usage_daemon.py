@@ -67,6 +67,14 @@ def numeric(value):
     return None
 
 
+def remaining_pct(value):
+    """Convert a consumed percentage from a provider into remaining percent."""
+    amount = numeric(value)
+    if amount is None:
+        return None
+    return 100.0 - max(0.0, min(100.0, amount))
+
+
 def make_metric(label, pct, reset_min, value=None):
     amount = numeric(pct)
     if amount is None and not value:
@@ -117,8 +125,8 @@ def claude_legacy(source, spec):
     if numeric(source.get("s")) is None:
         raise ValueError("missing s")
     metrics = [
-        make_metric("5h", source.get("s"), source.get("sr")),
-        make_metric("7d", source.get("w"), source.get("wr")),
+        make_metric("5h", remaining_pct(source.get("s")), source.get("sr")),
+        make_metric("7d", remaining_pct(source.get("w")), source.get("wr")),
     ]
     return {
         "id": str(spec["id"]),
@@ -144,8 +152,10 @@ def generic(source, spec):
             continue
         reset = path_get(source, item["resetPath"]) if item.get("resetPath") else 0
         value = path_get(source, item["valuePath"]) if item.get("valuePath") else None
-        metric = make_metric(item.get("label", "--"), path_get(source, item["pctPath"]) if item.get("pctPath") else None,
-                             reset, value)
+        pct = path_get(source, item["pctPath"]) if item.get("pctPath") else None
+        if item.get("pctMode", "used") == "used":
+            pct = remaining_pct(pct)
+        metric = make_metric(item.get("label", "--"), pct, reset, value)
         if metric:
             metrics.append(metric)
     if not metrics:
@@ -199,7 +209,7 @@ def codex_window_metric(window, prefix=""):
         label = f"{prefix[:5]} {label}"[:11]
     return make_metric(
         label,
-        window.get("used_percent"),
+        remaining_pct(window.get("used_percent")),
         (numeric(window.get("reset_after_seconds")) or 0) / 60,
     )
 
@@ -595,8 +605,8 @@ def map_claude_usage(payload, spec):
     five = five if isinstance(five, dict) else {}
     seven = seven if isinstance(seven, dict) else {}
     metrics = [
-        make_metric("5h", five.get("utilization"), minutes_until(five.get("resets_at"))),
-        make_metric("7d", seven.get("utilization"), minutes_until(seven.get("resets_at"))),
+        make_metric("5h", remaining_pct(five.get("utilization")), minutes_until(five.get("resets_at"))),
+        make_metric("7d", remaining_pct(seven.get("utilization")), minutes_until(seven.get("resets_at"))),
     ]
     metrics = [metric for metric in metrics if metric]
     if not metrics:
@@ -705,9 +715,10 @@ def map_deepseek_balance(payload, spec, usage_source=None):
         tokens = path_get(usage_source, spec.get("usagePath", "total_tokens"))
         if numeric(tokens) is not None:
             budget = numeric(spec.get("usageBudget")) or 0
-            pct = (numeric(tokens) * 100.0 / budget) if budget > 0 else 0
+            used = (numeric(tokens) * 100.0 / budget) if budget > 0 else 0
             metrics.append(make_metric(
-                spec.get("usageLabel", "tokens"), pct, 0, compact_tokens(tokens),
+                spec.get("usageLabel", "tokens"), remaining_pct(used) if budget > 0 else 0,
+                0, compact_tokens(tokens),
             ))
 
     return {

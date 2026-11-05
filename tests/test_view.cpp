@@ -78,6 +78,21 @@ int main() {
   assert(!strcmp(viewUsageMetricLabel(s, *st, 0), "Five hour"));
   assert(!strcmp(viewUsageMetricLabel(s, *st, 1), "Weekly"));
 
+  const char* text_box = R"({"draw":[{"t":"text","x":10,"y":12,"w":120,"h":40,"padX":4,"padY":3,"mx":1,"my":-1,"lineGap":2,"va":"b","s":2,"c":"#ffffff","v":"box"}]})";
+  assert(viewScreenParse(text_box, strlen(text_box), s, error));
+  assert(s.primCount == 1 && s.prims[0].x2 == 120 && s.prims[0].y2 == 40);
+  const TextStyle* text_style = viewPrimTextStyle(s, s.prims[0]);
+  assert(text_style && text_style->padX == 4 && text_style->padY == 3);
+  assert(text_style->marginX == 1 && text_style->marginY == -1 && text_style->valign == 2);
+
+  const char* custom_layout = R"({"draw":[{"t":"usage","x":0,"y":0,"w":224,"h":100,"c":"#ffffff","provider":"claude","metric":-1,"style":{"layout":{"auto":false,"name":{"x":8,"y":6,"w":100,"h":16,"a":"c"},"rows":[{"label":{"x":10,"y":30,"w":80,"h":12,"a":"l"},"value":{"x":100,"y":28,"w":100,"h":20,"a":"r"},"bar":{"x":10,"y":52,"w":180,"h":5}},{"label":{"x":20,"y":70,"w":80,"h":12,"a":"l"},"value":{"x":110,"y":68,"w":100,"h":20,"a":"r"},"bar":{"x":20,"y":92,"w":180,"h":5}}]}}}]})";
+  assert(viewScreenParse(custom_layout, strlen(custom_layout), s, error));
+  const UsageLayout* layout = viewPrimUsageLayout(s, s.prims[0]);
+  assert(layout && layout->configured);
+  assert(layout->name.x == 8 && layout->name.align == VIEW_A_CENTER);
+  assert(layout->rows[0].label.x == 10 && layout->rows[1].label.y == 70);
+  assert(layout->rows[1].bar.w == 180);
+
   // An omitted metric means "all metrics" (the renderer stacks them).
   const char* all_metrics = R"({"draw":[{"t":"usage","x":0,"y":0,"w":100,"h":50,"c":"#ffffff","provider":"claude"}]})";
   assert(viewScreenParse(all_metrics, strlen(all_metrics), s, error));

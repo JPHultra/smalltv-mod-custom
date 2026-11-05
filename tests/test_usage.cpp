@@ -29,7 +29,7 @@ int main() {
   // The legacy Claude daemon keeps working and updates the same provider.
   assert(usageApply(String(R"({"s":50,"sr":10,"w":20,"wr":100,"st":"normal","ok":true})")));
   claude = usageFind("claude");
-  assert(claude && claude->metrics[0].pct == 50.0f && claude->metrics[1].pct == 20.0f);
+  assert(claude && claude->metrics[0].pct == 50.0f && claude->metrics[1].pct == 80.0f);
 
   // ok:false without metrics keeps the previous metrics and flags the error.
   assert(usageApply(String(R"({"providers":[{"id":"claude","ok":false}]})")));
@@ -41,7 +41,7 @@ int main() {
   assert(usageApply(String(R"({"providers":[{"id":"chatgpt","ok":true,"metrics":[{"label":"5h","pct":70}]}]})")));
   chatgpt = usageFind("chatgpt");
   assert(chatgpt && chatgpt->metrics[0].pct == 70.0f);
-  assert(usageFind("claude") && usageFind("claude")->metrics[1].pct == 20.0f);
+  assert(usageFind("claude") && usageFind("claude")->metrics[1].pct == 80.0f);
 
   assert(!usageApply(String("not json")));
   assert(!usageApply(String(R"({"providers":[]})")));

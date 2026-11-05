@@ -119,9 +119,65 @@ static void drawTextPrim(Arduino_GFX* gfx, const ViewScreen& screen,
   char out[VIEW_MAX_TEXT * 2];
   expandText(viewPrimText(screen, p), out, sizeof(out));
   const uint8_t size = p.aux ? p.aux : 1;
-  int x;
-  textAnchor(out, size, p.align, p.x, x);
-  drawGlyphString(gfx, out, x, p.y, size, color);
+  const TextStyle* ts = viewPrimTextStyle(screen, p);
+  const int marginX = ts ? ts->marginX : 0;
+  const int marginY = ts ? ts->marginY : 0;
+  const int padX = ts ? ts->padX : 0;
+  const int padY = ts ? ts->padY : 0;
+  const int lineGap = ts ? ts->lineGap : 0;
+  const bool boxed = p.x2 > 0 || p.y2 > 0 || ts;
+  if (!boxed) {
+    int x;
+    textAnchor(out, size, p.align, p.x, x);
+    drawGlyphString(gfx, out, x, p.y, size, color);
+    return;
+  }
+
+  int lines = 1;
+  int maxWidth = 0;
+  int current = 0;
+  for (const char* q = out; ; q++) {
+    if (*q == '\n' || *q == 0) {
+      if (current > maxWidth) maxWidth = current;
+      current = 0;
+      if (*q == 0) break;
+      lines++;
+    } else {
+      current += 6 * size;
+    }
+  }
+  const int lineHeight = 8 * size;
+  const int textHeight = lines * lineHeight + (lines - 1) * lineGap;
+  const int boxW = p.x2 > 0 ? p.x2 : maxWidth;
+  const int boxH = p.y2 > 0 ? p.y2 : textHeight;
+  const int left = p.x + marginX;
+  const int top = p.y + marginY;
+  const int contentLeft = left + padX;
+  const int contentWidth = std::max(0, boxW - 2 * padX);
+  const int contentHeight = std::max(0, boxH - 2 * padY);
+  const int startY = top + padY +
+      (ts && ts->valign == 1 ? std::max(0, (contentHeight - textHeight) / 2)
+       : ts && ts->valign == 2 ? std::max(0, contentHeight - textHeight) : 0);
+
+  char line[VIEW_MAX_TEXT * 2];
+  int used = 0, y = startY, lineIndex = 0;
+  for (const char* q = out; ; q++) {
+    if (*q == '\n' || *q == 0) {
+      line[used] = 0;
+      int width = textWidth(line, size);
+      int tx = contentLeft;
+      if (p.align == VIEW_A_CENTER) tx = contentLeft + (contentWidth - width) / 2;
+      else if (p.align == VIEW_A_RIGHT) tx = contentLeft + contentWidth - width;
+      if (line[0]) drawGlyphString(gfx, line, tx, y, size, color);
+      used = 0;
+      if (*q == 0) break;
+      y += lineHeight + lineGap;
+      lineIndex++;
+    } else {
+      if (used + 1 < (int)sizeof(line)) line[used++] = *q;
+    }
+  }
+  (void)lineIndex;
 }
 
 // ---------------------------------------------------------------------------
@@ -136,9 +192,9 @@ static void fmtReset(int mins, char* out, size_t n) {
   else            snprintf(out, n, "%dm", m);
 }
 
-static uint16_t barColor(float pct) {
-  if (pct >= 90) return gfxTint(0xF800);
-  if (pct >= 75) return gfxTint(0xDBAA);
+static uint16_t barColor(float remaining) {
+  if (remaining <= 10) return gfxTint(0xF800);
+  if (remaining <= 25) return gfxTint(0xDBAA);
   return gfxTint(0x7C6B);
 }
 
@@ -175,6 +231,132 @@ static void drawUsageBar(Arduino_GFX* gfx, int x, int y, int w, int h,
   int filled = (int)(w * constrain(pct, 0.0f, 100.0f) / 100.0f);
   if (filled >= h)    gfx->fillRoundRect(x, y, filled, h, h / 2, fill);
   else if (filled > 0) gfx->fillRect(x, y, filled, h, fill);
+}
+
+static bool usageBoxReady(const UsageBox& box) {
+  return (box.flags & 3) == 3 && box.w > 0 && box.h > 0;
+}
+
+static void drawUsageBoxText(Arduino_GFX* gfx, const ViewScreen& screen,
+                             const UsageStyle& style, const UsageBox& box,
+                             int cardX, int cardY, const char* text, uint8_t size,
+                             uint16_t color, uint8_t defaultAlign) {
+  (void)screen;
+  (void)style;
+  if (!text || !text[0] || !usageBoxReady(box)) return;
+  const int avail = std::max(1, box.w - 2 * box.padX);
+  size = usageFitSize(text, size ? size : 1, avail);
+  const uint8_t align = (box.flags & 4) ? box.align : defaultAlign;
+  const int width = textWidth(text, size);
+  const int left = cardX + box.x + box.marginX + box.padX;
+  const int right = cardX + box.x + box.marginX + box.w - box.padX;
+  int x = usageTextX(left, right, align, width);
+  int y = cardY + box.y + box.marginY + box.padY;
+  const int contentH = std::max(0, box.h - 2 * box.padY);
+  if (box.valign == 1) y += std::max(0, (contentH - 8 * size) / 2);
+  else if (box.valign == 2) y += std::max(0, contentH - 8 * size);
+  drawGlyphString(gfx, text, x, y, size, color);
+}
+
+static void drawUsageBoxBar(Arduino_GFX* gfx, const ViewScreen& style, const UsageBox& box,
+                            int cardX, int cardY, float pct, uint16_t track,
+                            uint16_t fill) {
+  (void)style;
+  if (!usageBoxReady(box)) return;
+  const int x = cardX + box.x + box.marginX + box.padX;
+  const int y = cardY + box.y + box.marginY + box.padY;
+  const int w = std::max(0, box.w - 2 * box.padX);
+  const int h = std::max(0, box.h - 2 * box.padY);
+  drawUsageBar(gfx, x, y, w, h, pct, track, fill);
+}
+
+static void drawUsageCustomSingle(Arduino_GFX* gfx, const ViewScreen& screen,
+                                  const ViewPrim& p, const UsageStyle& style,
+                                  const UsageLayout& layout, const UsageMetric& m,
+                                  int metric, uint16_t accent, uint16_t dim,
+                                  uint16_t track) {
+  const UsageRowLayout& row = layout.rows[metric < USAGE_MAX_METRICS ? metric : 0];
+  const uint16_t valueColor = usageColor(style.valueColor, gfxTint(0xFFFF));
+  const uint16_t labelColor = usageColor(style.labelColor, dim);
+  const uint16_t resetColor = usageColor(style.resetColor, dim);
+  if ((style.flags & USAGE_SHOW_LABEL) && usageBoxReady(row.label)) {
+    const char* custom = viewUsageMetricLabel(screen, style, metric);
+    drawUsageBoxText(gfx, screen, style, row.label, p.x, p.y,
+                     custom ? custom : m.label,
+                     style.labelSize ? style.labelSize : 2, labelColor,
+                     usageAlign(style.labelAlign, false, true));
+  }
+  char pct[10];
+  snprintf(pct, sizeof(pct), "%d%%", (int)lroundf(constrain(m.pct, 0.0f, 100.0f)));
+  const bool hasValue = m.value[0] != 0;
+  char big[USAGE_VALUE_MAX + 1];
+  strlcpy(big, hasValue ? m.value : pct, sizeof(big));
+  if ((style.flags & USAGE_SHOW_VALUE) && usageBoxReady(row.value)) {
+    drawUsageBoxText(gfx, screen, style, row.value, p.x, p.y, big,
+                     style.valueSize ? style.valueSize : usageAutoSize(p.y2),
+                     valueColor, usageAlign(style.valueAlign, false, false));
+  }
+  if ((style.flags & USAGE_SHOW_BAR) && usageBoxReady(row.bar) &&
+      (m.pct > 0 || !hasValue)) {
+    const uint16_t fill = (style.flags & USAGE_BAR_AUTO)
+                              ? barColor(m.pct) : usageColor(style.barColor, accent);
+    drawUsageBoxBar(gfx, screen, row.bar, p.x, p.y, m.pct, track, fill);
+  }
+  if ((style.flags & USAGE_SHOW_RESET) && usageBoxReady(layout.reset) &&
+      (!hasValue || m.resetMin > 0)) {
+    char reset[20], line[36];
+    fmtReset(m.resetMin, reset, sizeof(reset));
+    snprintf(line, sizeof(line), "Resets in %s", reset);
+    drawUsageBoxText(gfx, screen, style, layout.reset, p.x, p.y, line,
+                     style.resetSize ? style.resetSize : 1, resetColor,
+                     style.resetAlign);
+  }
+}
+
+static void drawUsageCustomRows(Arduino_GFX* gfx, const ViewScreen& screen,
+                                const ViewPrim& p, const UsageStyle& style,
+                                const UsageLayout& layout, const ProviderUsage& u,
+                                uint16_t accent, uint16_t dim, uint16_t track) {
+  const uint16_t valueColor = usageColor(style.valueColor, gfxTint(0xFFFF));
+  const uint16_t labelColor = usageColor(style.labelColor, dim);
+  for (int i = 0; i < u.metricCount && i < USAGE_MAX_METRICS; i++) {
+    const UsageMetric& m = u.metrics[i];
+    const UsageRowLayout& row = layout.rows[i];
+    const char* custom = viewUsageMetricLabel(screen, style, i);
+    if ((style.flags & USAGE_SHOW_LABEL) && usageBoxReady(row.label)) {
+      drawUsageBoxText(gfx, screen, style, row.label, p.x, p.y,
+                       custom ? custom : m.label,
+                       style.labelSize ? style.labelSize : 1, labelColor,
+                       usageAlign(style.labelAlign, true, true));
+    }
+    char pct[10];
+    snprintf(pct, sizeof(pct), "%d%%", (int)lroundf(constrain(m.pct, 0.0f, 100.0f)));
+    char right[USAGE_VALUE_MAX + 1];
+    strlcpy(right, m.value[0] ? m.value : pct, sizeof(right));
+    if ((style.flags & USAGE_SHOW_VALUE) && usageBoxReady(row.value)) {
+      drawUsageBoxText(gfx, screen, style, row.value, p.x, p.y, right,
+                       style.valueSize ? style.valueSize : 2, valueColor,
+                       usageAlign(style.valueAlign, true, false));
+    }
+    if ((style.flags & USAGE_SHOW_BAR) && usageBoxReady(row.bar) &&
+        m.pct > 0) {
+      const uint16_t fill = (style.flags & USAGE_BAR_AUTO)
+                                ? barColor(m.pct) : usageColor(style.barColor, accent);
+      drawUsageBoxBar(gfx, screen, row.bar, p.x, p.y, m.pct, track, fill);
+    }
+  }
+  if ((style.flags & USAGE_SHOW_RESET) && usageBoxReady(layout.reset)) {
+    // Rows share a reset position; only show it when the last metric has one.
+    const UsageMetric& last = u.metrics[u.metricCount - 1];
+    if (last.resetMin > 0) {
+      char reset[20], line[36];
+      fmtReset(last.resetMin, reset, sizeof(reset));
+      snprintf(line, sizeof(line), "Resets in %s", reset);
+      drawUsageBoxText(gfx, screen, style, layout.reset, p.x, p.y, line,
+                       style.resetSize ? style.resetSize : 1,
+                       usageColor(style.resetColor, dim), style.resetAlign);
+    }
+  }
 }
 
 static void drawUsageSingle(Arduino_GFX* gfx, const ViewScreen& screen,
@@ -305,6 +487,7 @@ static void drawUsage(Arduino_GFX* gfx, const ViewScreen& screen, const ViewPrim
   UsageStyle fallback;
   const UsageStyle* found = viewPrimUsageStyle(screen, p);
   const UsageStyle& style = found ? *found : fallback;
+  const UsageLayout* layout = viewPrimUsageLayout(screen, p);
   const uint16_t panel = gfxTint(style.panelColor);
   const uint16_t dim = gfxTint(style.labelColor ? style.labelColor : 0xB574);
   const uint16_t track = gfxTint(style.trackColor);
@@ -315,13 +498,19 @@ static void drawUsage(Arduino_GFX* gfx, const ViewScreen& screen, const ViewPrim
   const char* title = viewUsageTitle(screen, style);
   if (!title) title = (u && u->name[0]) ? u->name : id;
   if ((style.flags & USAGE_SHOW_NAME) && title && title[0]) {
-    const int dotRoom = (style.flags & USAGE_SHOW_DOT) ? 24 : 0;
-    uint8_t size = style.nameSize ? style.nameSize : 2;
-    size = usageFitSize(title, size, w - style.padding - 8 - dotRoom);
-    const int tx = usageTextX(x + 8, x + w - 8 - dotRoom, style.nameAlign,
-                              textWidth(title, size));
-    drawGlyphString(gfx, title, tx, y + 6, size,
-                    usageColor(style.nameColor, accent));
+    if (layout && usageBoxReady(layout->name)) {
+      drawUsageBoxText(gfx, screen, style, layout->name, x, y, title,
+                       style.nameSize ? style.nameSize : 2,
+                       usageColor(style.nameColor, accent), style.nameAlign);
+    } else {
+      const int dotRoom = (style.flags & USAGE_SHOW_DOT) ? 24 : 0;
+      uint8_t size = style.nameSize ? style.nameSize : 2;
+      size = usageFitSize(title, size, w - style.padding - 8 - dotRoom);
+      const int tx = usageTextX(x + 8, x + w - 8 - dotRoom, style.nameAlign,
+                                textWidth(title, size));
+      drawGlyphString(gfx, title, tx, y + 6, size,
+                      usageColor(style.nameColor, accent));
+    }
   }
 
   if (u && (style.flags & USAGE_SHOW_DOT)) {
@@ -341,11 +530,22 @@ static void drawUsage(Arduino_GFX* gfx, const ViewScreen& screen, const ViewPrim
   }
 
   if (p.aux == 0xFF && u->metricCount > 1) {
-    drawUsageRows(gfx, screen, p, style, *u, accent, dim, track);
+    if (layout && layout->configured && usageBoxReady(layout->rows[0].label) &&
+        usageBoxReady(layout->rows[0].value)) {
+      drawUsageCustomRows(gfx, screen, p, style, *layout, *u, accent, dim, track);
+    } else {
+      drawUsageRows(gfx, screen, p, style, *u, accent, dim, track);
+    }
     return;
   }
   const int idx = (p.aux == 0xFF) ? 0 : (p.aux < u->metricCount ? p.aux : 0);
-  drawUsageSingle(gfx, screen, p, style, u->metrics[idx], idx, accent, dim, track);
+  if (layout && layout->configured && usageBoxReady(layout->rows[idx].label) &&
+      usageBoxReady(layout->rows[idx].value)) {
+    drawUsageCustomSingle(gfx, screen, p, style, *layout, u->metrics[idx], idx,
+                          accent, dim, track);
+  } else {
+    drawUsageSingle(gfx, screen, p, style, u->metrics[idx], idx, accent, dim, track);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -563,8 +763,9 @@ bool viewRenderText(const ViewScreen& screen, uint32_t elapsedMs,
     const ViewPrim& p = screen.prims[i];
     if (p.type != VIEW_P_TEXT || !strchr(viewPrimText(screen, p), '{')) continue;
     const int size = p.aux ? p.aux : 1;
+    const int height = p.y2 > 0 ? p.y2 : 8 * size;
     if (p.y - 1 < y0) y0 = p.y - 1;
-    if (p.y + 8 * size + 1 > y1) y1 = p.y + 8 * size + 1;
+    if (p.y + height + 1 > y1) y1 = p.y + height + 1;
   }
   return y1 > y0 && renderRegion(screen, y0, y1, elapsedMs, images);
 }

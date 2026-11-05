@@ -29,21 +29,21 @@ def demo_document() -> dict:
                 "ok": True,
                 "status": "normal",
                 "metrics": [
-                    {"label": "5h", "pct": 29, "resetMin": 142},
-                    {"label": "7d", "pct": 4, "resetMin": 9876},
+                    {"label": "5h", "pct": 71, "resetMin": 142},
+                    {"label": "7d", "pct": 96, "resetMin": 9876},
                 ],
             },
             {
                 "id": "chatgpt",
                 "name": "ChatGPT",
                 "ok": True,
-                "metrics": [{"label": "5h", "pct": 62, "resetMin": 88}],
+                "metrics": [{"label": "5h", "pct": 38, "resetMin": 88}],
             },
             {
                 "id": "deepseek",
                 "name": "DeepSeek",
                 "ok": True,
-                "metrics": [{"label": "balance", "pct": 81, "resetMin": 0}],
+                "metrics": [{"label": "balance", "value": "110 CNY", "pct": 0, "resetMin": 0}],
             },
         ]
     }

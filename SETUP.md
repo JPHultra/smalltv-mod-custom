@@ -487,9 +487,9 @@ python daemon/usage_daemon.py --config daemon/usage-daemon.json --once
 curl http://<device-ip>/api/status
 ```
 
-A metric can carry a `pct` (0-100), a `value` (for example `110 CNY` or
-`1.2M`), or both. The dashboard's usage cards show the value; `pct > 0` adds a
-fill bar.
+A metric can carry a remaining `pct` (0-100), a `value` (for example
+`110 CNY` or `1.2M`), or both. The dashboard's usage cards show the value;
+`pct > 0` adds a fill bar.
 
 ### 7.7 Optional: run them at login (Linux)
 
@@ -787,7 +787,7 @@ builds.
 | Poll URL returns 401 | Set **Auth header** and **Auth value** in **View**; leave the value blank to keep the saved secret |
 | DeepSeek balance is `unavailable` | Enter the API key in the setup UI and press Save, then Test |
 | DeepSeek token usage is missing/0 | The client is not using `http://127.0.0.1:8789`; start the proxy and set the provider's `usageUrl`; use `usagePath: "today.total_tokens"` for a daily number |
-| Usage card shows 0% and no value | The daemon is not sending a `value`/`pct`; check `/api/status` and `--dry-run` |
+| Usage card shows 0% and no value | The daemon is not sending a `value`/remaining `pct`; check `/api/status` and `--dry-run` |
 | `smalltv.local` does not resolve | Use the IP or the actual `smalltv-xxxx.local` shown on screen |
 | Image/GIF preview missing | Import it again in the desktop app; assets are not embedded in the view JSON |
 | Web UI password lost | Reflash over USB/UART; there is no recovery |

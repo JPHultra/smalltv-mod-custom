@@ -46,7 +46,7 @@ class UsageDaemonTests(unittest.TestCase):
         self.assertTrue(out["ok"])
         self.assertEqual(out["id"], "claude")
         self.assertEqual([m["label"] for m in out["metrics"]], ["5h", "7d"])
-        self.assertEqual(out["metrics"][0]["pct"], 29.0)
+        self.assertEqual(out["metrics"][0]["pct"], 71.0)
         self.assertEqual(out["metrics"][0]["resetMin"], 142)
         self.assertFalse(claude_legacy({"ok": False}, spec)["ok"])
 
@@ -66,6 +66,7 @@ class UsageDaemonTests(unittest.TestCase):
         self.assertEqual(out["status"], "normal")
         self.assertEqual(len(out["metrics"]), 1)
         self.assertEqual(out["metrics"][0]["label"], "5h")
+        self.assertEqual(out["metrics"][0]["pct"], 38.0)
         self.assertEqual(out["metrics"][0]["resetMin"], 88)
         with self.assertRaises(ValueError):
             generic({"limits": {}}, spec)
@@ -96,7 +97,8 @@ class UsageDaemonTests(unittest.TestCase):
         self.assertTrue(out["ok"])
         self.assertEqual(out["status"], "plus")
         self.assertEqual([m["label"] for m in out["metrics"]], ["5h", "7d", "plan"])
-        self.assertEqual(out["metrics"][0]["pct"], 1.0)
+        self.assertEqual(out["metrics"][0]["pct"], 99.0)
+        self.assertEqual(out["metrics"][1]["pct"], 55.0)
         self.assertEqual(out["metrics"][0]["resetMin"], 295)
         self.assertEqual(out["metrics"][1]["resetMin"], 6375)
         self.assertEqual(out["metrics"][2]["value"], "plus")
@@ -117,8 +119,8 @@ class UsageDaemonTests(unittest.TestCase):
         self.assertTrue(out["ok"])
         self.assertEqual(out["status"], "normal")
         self.assertEqual([m["label"] for m in out["metrics"]], ["5h", "7d"])
-        self.assertEqual(out["metrics"][0]["pct"], 29.0)
-        self.assertEqual(out["metrics"][1]["pct"], 4.0)
+        self.assertEqual(out["metrics"][0]["pct"], 71.0)
+        self.assertEqual(out["metrics"][1]["pct"], 96.0)
 
     def test_hostile_provider_payloads(self):
         for bad in (
@@ -250,7 +252,7 @@ class UsageDaemonTests(unittest.TestCase):
                 }
                 out = collect_claude(spec, 5)
                 self.assertTrue(out["ok"])
-                self.assertEqual(out["metrics"][0]["pct"], 7.0)
+                self.assertEqual(out["metrics"][0]["pct"], 93.0)
                 with open(path, encoding="utf-8") as handle:
                     credentials = json.load(handle)
                 self.assertEqual(credentials["claudeAiOauth"]["accessToken"], "new")
@@ -351,7 +353,7 @@ class UsageDaemonTests(unittest.TestCase):
                          ["5h", "7d", "plan", "credits", "codex 5m"])
         self.assertEqual(out["metrics"][2]["value"], "pro")
         self.assertEqual(out["metrics"][3]["value"], "5.00")
-        self.assertEqual(out["metrics"][4]["pct"], 30.0)
+        self.assertEqual(out["metrics"][4]["pct"], 70.0)
 
     def test_deepseek_mapping(self):
         self.assertEqual(compact_number("110.00"), "110")

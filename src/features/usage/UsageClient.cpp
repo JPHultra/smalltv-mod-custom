@@ -79,10 +79,10 @@ bool usageApply(const String& body) {
       memset(&dst->metrics[0], 0, sizeof(dst->metrics[0]));
       memset(&dst->metrics[1], 0, sizeof(dst->metrics[1]));
       strlcpy(dst->metrics[0].label, "5h", sizeof(dst->metrics[0].label));
-      dst->metrics[0].pct = constrain(doc["s"] | 0.0f, 0.0f, 100.0f);
+      dst->metrics[0].pct = 100.0f - constrain(doc["s"] | 0.0f, 0.0f, 100.0f);
       dst->metrics[0].resetMin = doc["sr"] | 0;
       strlcpy(dst->metrics[1].label, "7d", sizeof(dst->metrics[1].label));
-      dst->metrics[1].pct = constrain(doc["w"] | 0.0f, 0.0f, 100.0f);
+      dst->metrics[1].pct = 100.0f - constrain(doc["w"] | 0.0f, 0.0f, 100.0f);
       dst->metrics[1].resetMin = doc["wr"] | 0;
       const bool ok = doc["ok"].is<bool>() ? doc["ok"].as<bool>() : true;
       if (ok) {

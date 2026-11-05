@@ -162,6 +162,12 @@ editor metadata stored in a top-level `groups` array. Groups support move,
 duplicate, delete, hide, lock and Z order; they are not sent as render commands
 and do not add recursive/nested group support.
 
+Text components support an optional box with `w`, `h`, `padX`, `padY`,
+`mx`, `my`, `va` and `lineGap`, so the text can be anchored inside a fixed
+region. Usage components can add an independent `style.layout` geometry for
+the card title, reset line and every metric row's label, value and bar. The
+desktop inspector exposes numeric fields and draggable sub-element boxes.
+
 Image and GIF backgrounds are imported by the native desktop app, not the web
 editor. The app converts PNG/JPEG/BMP to RGB565 and animated GIF to indexed
 256-color frames, uploads the asset to the device, and stores only a reference
@@ -249,15 +255,17 @@ The external daemon normalizes the three providers and POSTs the document to
 
 ```json
 {"providers":[
-  {"id":"claude","name":"Claude","ok":true,"metrics":[{"label":"5h","pct":29,"resetMin":142}]},
-  {"id":"chatgpt","name":"Codex","ok":true,"metrics":[{"label":"5h","pct":1,"resetMin":292},
-                                                       {"label":"7d","pct":45,"resetMin":6372},
+  {"id":"claude","name":"Claude","ok":true,"metrics":[{"label":"5h","pct":71,"resetMin":142}]},
+  {"id":"chatgpt","name":"Codex","ok":true,"metrics":[{"label":"5h","pct":99,"resetMin":292},
+                                                       {"label":"7d","pct":55,"resetMin":6372},
                                                        {"label":"plan","value":"plus","pct":0,"resetMin":0}]},
   {"id":"deepseek","name":"DeepSeek","ok":true,"metrics":[{"label":"balance","value":"110 CNY","pct":0,"resetMin":0},
                                                           {"label":"tokens today","value":"1.2M","pct":0,"resetMin":0}]}
 ]}
 ```
 
+`pct` is the **percentage remaining** (0-100), not the percentage consumed.
+The daemon converts provider utilization/used percentages before sending them.
 `daemon/usage_daemon.py` aggregates the providers:
 
 - **Claude** via the native `claude` adapter. Paste a Claude Code credentials
@@ -325,7 +333,7 @@ Progress is live for uploads started by the desktop app or the manual web upload
 
 ## Notes
 
-- The ESP8266 image is about 812 KB flash / 55 KB static RAM in this build,
+- The ESP8266 image is about 814 KB flash / 60 KB static RAM in this build,
   down from the upstream full image, so the old `smalltv_lean` variant is gone.
 - `src/config.h` points the desktop updater at `JPHultra/smalltv-mod-custom`; change it
   if the repository moves.

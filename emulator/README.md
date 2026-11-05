@@ -32,6 +32,7 @@ HTML/WebView assets.
   - distribute horizontally/vertically and measurement guides
   - properties, icon picker, bitmap pixel grid
   - configurable usage-card text, alignment, colours, bars, panels and labels
+  - numeric and draggable text/usage geometry with padding and margins
   - PNG/JPEG/BMP and animated GIF import with RGB565 stills and indexed GIF frames
   - full-screen image/GIF backgrounds with cover cropping
   - undo/redo, JSON apply/copy

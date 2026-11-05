@@ -7,11 +7,11 @@ Codex/ChatGPT and DeepSeek usage and POSTs it to the device:
 {
   "providers": [
     {"id":"claude","name":"Claude","ok":true,"status":"normal",
-     "metrics":[{"label":"5h","pct":29,"resetMin":142},
-                {"label":"7d","pct":4,"resetMin":9876}]},
+     "metrics":[{"label":"5h","pct":71,"resetMin":142},
+                {"label":"7d","pct":96,"resetMin":9876}]},
     {"id":"chatgpt","name":"Codex","ok":true,"status":"plus",
-     "metrics":[{"label":"5h","pct":1,"resetMin":292},
-                {"label":"7d","pct":45,"resetMin":6372},
+     "metrics":[{"label":"5h","pct":99,"resetMin":292},
+                {"label":"7d","pct":55,"resetMin":6372},
                 {"label":"plan","value":"plus","pct":0,"resetMin":0}]},
     {"id":"deepseek","name":"DeepSeek","ok":true,
      "metrics":[{"label":"balance","value":"110 CNY","pct":0,"resetMin":0},
@@ -20,9 +20,10 @@ Codex/ChatGPT and DeepSeek usage and POSTs it to the device:
 }
 ```
 
-`pct` is 0-100, `resetMin` is minutes until reset (`0` means now/unknown), and
-`value` is an optional display string. A metric with a value and `pct: 0` has no
-fill bar; give it a `pct` (for example a budget percentage) to add one.
+`pct` is the percentage remaining (0-100), `resetMin` is minutes until reset
+(`0` means now/unknown), and `value` is an optional display string. A metric
+with a value and `pct: 0` has no fill bar; give it a remaining percentage (for
+example a token budget) to add one.
 Providers are optional; a missing provider keeps its last snapshot. `ok:false`
 marks the provider as errored while keeping its previous metrics.
 
@@ -132,7 +133,7 @@ not used on Windows.
 | `claude-legacy` | the old `{s,sr,w,wr,st,ok}` payload from a local clawdmeter |
 | `codex` | the ChatGPT/Codex subscription usage endpoint, using setup-UI credentials |
 | `deepseek` | the DeepSeek balance API, plus optional token usage from a local proxy |
-| `generic` | any JSON object, with dotted `statusPath`, `pctPath`, `resetPath`, `valuePath` |
+| `generic` | any JSON object, with dotted `statusPath`, `pctPath`, `resetPath`, `valuePath`; `pctMode` defaults to `used` and can be `remaining` |
 | `normalized` | a provider object already shaped like the contract |
 
 A failed provider is sent as `{"id":...,"name":...,"ok":false}` so the device

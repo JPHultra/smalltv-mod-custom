@@ -136,6 +136,46 @@ static bool parseUsageStyle(JsonObjectConst s, ViewScreen& sc, UsageStyle& style
   return true;
 }
 
+static uint8_t parseValign(const char* value, uint8_t fallback) {
+  if (!value) return fallback;
+  if (value[0] == 't') return 0;
+  if (value[0] == 'm' || value[0] == 'c') return 1;
+  if (value[0] == 'b') return 2;
+  return fallback;
+}
+
+static bool parseUsageBox(JsonObjectConst o, UsageBox& box) {
+  if (o.isNull()) return false;
+  bool any = false;
+  if (!o["x"].isNull()) { box.x = (int16_t)constrain((int)o["x"], -512, 512); box.flags |= 1; any = true; }
+  if (!o["y"].isNull()) { box.y = (int16_t)constrain((int)o["y"], -512, 512); box.flags |= 1; any = true; }
+  if (!o["w"].isNull()) { box.w = (int16_t)constrain((int)o["w"], 0, TFT_WIDTH); box.flags |= 2; any = true; }
+  if (!o["h"].isNull()) { box.h = (int16_t)constrain((int)o["h"], 0, TFT_HEIGHT); box.flags |= 2; any = true; }
+  if (!o["mx"].isNull()) { box.marginX = (int8_t)constrain((int)o["mx"], -128, 127); any = true; }
+  if (!o["my"].isNull()) { box.marginY = (int8_t)constrain((int)o["my"], -128, 127); any = true; }
+  if (!o["padX"].isNull()) { box.padX = (uint8_t)constrain((int)o["padX"], 0, 60); any = true; }
+  if (!o["padY"].isNull()) { box.padY = (uint8_t)constrain((int)o["padY"], 0, 60); any = true; }
+  if (!o["a"].isNull()) { box.align = parseAlign(o["a"] | "l", VIEW_A_LEFT); box.flags |= 4; any = true; }
+  if (!o["va"].isNull()) { box.valign = parseValign(o["va"] | "m", 1); any = true; }
+  return any;
+}
+
+static bool parseUsageLayout(JsonObjectConst lo, UsageLayout& layout) {
+  if (lo.isNull() || (lo["auto"] | false)) return false;
+  layout = UsageLayout();
+  layout.configured = 1;
+  parseUsageBox(lo["name"].as<JsonObjectConst>(), layout.name);
+  parseUsageBox(lo["reset"].as<JsonObjectConst>(), layout.reset);
+  JsonArrayConst rows = lo["rows"].as<JsonArrayConst>();
+  for (int i = 0; i < USAGE_MAX_METRICS && i < (int)rows.size(); i++) {
+    JsonObjectConst row = rows[i].as<JsonObjectConst>();
+    parseUsageBox(row["label"].as<JsonObjectConst>(), layout.rows[i].label);
+    parseUsageBox(row["value"].as<JsonObjectConst>(), layout.rows[i].value);
+    parseUsageBox(row["bar"].as<JsonObjectConst>(), layout.rows[i].bar);
+  }
+  return true;
+}
+
 static bool parsePrim(JsonObjectConst p, ViewScreen& sc, ViewPrim& out) {
   const char* t = p["t"] | "";
   if (!t[0]) return false;
@@ -194,6 +234,23 @@ static bool parsePrim(JsonObjectConst p, ViewScreen& sc, ViewPrim& out) {
     memcpy(sc.text + sc.textUsed, buf, n);
     sc.textUsed += n;
     sc.text[sc.textUsed++] = 0;
+    const int boxW = p["w"] | 0, boxH = p["h"] | 0;
+    if (boxW > 0) out.x2 = (int16_t)constrain(boxW, 1, TFT_WIDTH);
+    if (boxH > 0) out.y2 = (int16_t)constrain(boxH, 1, TFT_HEIGHT);
+    const bool hasTextStyle = !p["mx"].isNull() || !p["my"].isNull() ||
+                              !p["padX"].isNull() || !p["padY"].isNull() ||
+                              !p["lineGap"].isNull() || !p["va"].isNull();
+    if (hasTextStyle && sc.textStyleCount < VIEW_MAX_TEXT_STYLES) {
+      TextStyle ts;
+      ts.marginX = (int8_t)constrain((int)(p["mx"] | 0), -128, 127);
+      ts.marginY = (int8_t)constrain((int)(p["my"] | 0), -128, 127);
+      ts.padX = (uint8_t)constrain((int)(p["padX"] | 0), 0, 60);
+      ts.padY = (uint8_t)constrain((int)(p["padY"] | 0), 0, 60);
+      ts.lineGap = (uint8_t)constrain((int)(p["lineGap"] | 0), 0, 40);
+      ts.valign = parseValign(p["va"] | "m", 1);
+      out._pad = (uint8_t)(sc.textStyleCount + 1);
+      sc.textStyles[sc.textStyleCount++] = ts;
+    }
     if (memchr(buf, '{', n)) sc.needsClock = true;
     for (size_t i = 0; i + 3 < n; i++) {
       if (buf[i] == '{' && buf[i + 1] == 'S' && buf[i + 2] == 'S' && buf[i + 3] == '}') {
@@ -265,6 +322,10 @@ static bool parsePrim(JsonObjectConst p, ViewScreen& sc, ViewPrim& out) {
     if (!styleJson.isNull() && !parseUsageStyle(styleJson, sc, style)) return false;
     const uint8_t styleIndex = sc.usageStyleCount++;
     sc.usageStyles[styleIndex] = style;
+    UsageLayout layout;
+    if (!styleJson.isNull())
+      parseUsageLayout(styleJson["layout"].as<JsonObjectConst>(), layout);
+    sc.usageLayouts[styleIndex] = layout;
     if (sc.textUsed + L + 1 > sizeof(sc.text)) return false;
     out.type  = VIEW_P_USAGE;
     out.x2    = (int16_t)w;
@@ -369,6 +430,20 @@ const UsageStyle* viewPrimUsageStyle(const ViewScreen& screen, const ViewPrim& p
   const uint8_t index = (uint8_t)(prim._pad - 1);
   if (index >= screen.usageStyleCount) return nullptr;
   return &screen.usageStyles[index];
+}
+
+const UsageLayout* viewPrimUsageLayout(const ViewScreen& screen, const ViewPrim& prim) {
+  if (prim.type != VIEW_P_USAGE || !prim._pad) return nullptr;
+  const uint8_t index = (uint8_t)(prim._pad - 1);
+  if (index >= screen.usageStyleCount) return nullptr;
+  return screen.usageLayouts[index].configured ? &screen.usageLayouts[index] : nullptr;
+}
+
+const TextStyle* viewPrimTextStyle(const ViewScreen& screen, const ViewPrim& prim) {
+  if (prim.type != VIEW_P_TEXT || !prim._pad) return nullptr;
+  const uint8_t index = (uint8_t)(prim._pad - 1);
+  if (index >= screen.textStyleCount) return nullptr;
+  return &screen.textStyles[index];
 }
 
 const char* viewUsageTitle(const ViewScreen& screen, const UsageStyle& style) {

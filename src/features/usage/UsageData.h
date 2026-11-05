@@ -10,7 +10,7 @@
 struct UsageMetric {
   char  label[USAGE_MAX_LABEL];
   char  value[USAGE_VALUE_MAX];  // optional display value (balance, token count)
-  float pct;        // 0..100; 0 with a value means "value only, no bar"
+  float pct;        // 0..100 remaining; 0 with a value means "value only, no bar"
   int   resetMin;   // minutes until reset; <= 0 means "now"/unknown
 };
 

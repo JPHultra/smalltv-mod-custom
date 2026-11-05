@@ -6,8 +6,8 @@
       "ok": true,
       "status": "normal",
       "metrics": [
-        {"label": "5h", "pct": 29, "resetMin": 142},
-        {"label": "7d", "pct": 4, "resetMin": 9876}
+        {"label": "5h", "pct": 71, "resetMin": 142},
+        {"label": "7d", "pct": 96, "resetMin": 9876}
       ]
     },
     {
@@ -15,7 +15,7 @@
       "name": "ChatGPT",
       "ok": true,
       "metrics": [
-        {"label": "5h", "pct": 62, "resetMin": 88}
+        {"label": "5h", "pct": 38, "resetMin": 88}
       ]
     },
     {
@@ -23,7 +23,7 @@
       "name": "DeepSeek",
       "ok": true,
       "metrics": [
-        {"label": "balance", "pct": 81, "resetMin": 0}
+        {"label": "balance", "pct": 0, "resetMin": 0}
       ]
     }
   ]

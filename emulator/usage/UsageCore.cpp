@@ -81,6 +81,10 @@ std::string windowLabel(int seconds) {
   return std::to_string(std::max(1, seconds / 60)) + "m";
 }
 
+double remainingPct(double used) {
+  return 100.0 - std::max(0.0, std::min(100.0, used));
+}
+
 bool addMetric(std::vector<Metric>& metrics, const std::string& label,
                double pct, int resetMin, const std::string& value = {}) {
   if (pct <= 0 && value.empty()) return false;
@@ -235,9 +239,9 @@ Result collectClaude(JsonDocument& credentials, int timeoutMs) {
   result.name = "Claude";
   result.ok = true;
   result.status = "allowed";
-  addMetric(result.metrics, "5h", number(five["utilization"]),
+  addMetric(result.metrics, "5h", remainingPct(number(five["utilization"])),
             (int)isoMinutes(text(five["resets_at"])));
-  addMetric(result.metrics, "7d", number(seven["utilization"]),
+  addMetric(result.metrics, "7d", remainingPct(number(seven["utilization"])),
             (int)isoMinutes(text(seven["resets_at"])));
   JsonArray limits = payload["limits"].as<JsonArray>();
   for (JsonObject limit : limits) {
@@ -301,7 +305,7 @@ Result collectCodex(JsonDocument& credentials, int timeoutMs) {
     JsonObject window = rate[key].as<JsonObject>();
     if (window.isNull()) continue;
     const int seconds = (int)number(window["limit_window_seconds"]);
-    addMetric(result.metrics, windowLabel(seconds), number(window["used_percent"]),
+    addMetric(result.metrics, windowLabel(seconds), remainingPct(number(window["used_percent"])),
               (int)(number(window["reset_after_seconds"]) / 60));
   }
   if (result.metrics.empty())
@@ -359,7 +363,8 @@ Result collectDeepSeek(JsonDocument& credentials, const std::string& usageUrl,
           if (tokens >= 1000000) snprintf(value, sizeof(value), "%.1fM", tokens / 1000000);
           else if (tokens >= 1000) snprintf(value, sizeof(value), "%.1fk", tokens / 1000);
           else snprintf(value, sizeof(value), "%.0f", tokens);
-          addMetric(result.metrics, "tokens", budget > 0 ? tokens * 100 / budget : 0, 0, value);
+          addMetric(result.metrics, "tokens",
+                    budget > 0 ? remainingPct(tokens * 100 / budget) : 0, 0, value);
         }
       }
     }

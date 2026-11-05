@@ -502,6 +502,9 @@ struct App {
   int snapGrid = 8;
   float snapGuideX = -1.0f;
   float snapGuideY = -1.0f;
+  int usageLayoutRow = 0;
+  int usageDragKind = 0;  // 1 name, 2 reset, 3 label, 4 value, 5 bar
+  int usageDragRow = 0;
   char viewJsonBuf[65536] = {};
   std::vector<std::string> undoStack;
   std::vector<std::string> redoStack;
@@ -1987,20 +1990,20 @@ struct App {
     } else if (mode == 2) {
       mock = "{\"providers\":["
              "{\"id\":\"claude\",\"name\":\"Claude\",\"ok\":false,\"status\":\"error\",\"metrics\":["
-             "{\"label\":\"5h\",\"pct\":29,\"resetMin\":142},{\"label\":\"7d\",\"pct\":4,\"resetMin\":9876}]},"
+             "{\"label\":\"5h\",\"pct\":71,\"resetMin\":142},{\"label\":\"7d\",\"pct\":96,\"resetMin\":9876}]},"
              "{\"id\":\"chatgpt\",\"name\":\"ChatGPT\",\"ok\":false,\"status\":\"error\",\"metrics\":["
-             "{\"label\":\"5h\",\"pct\":62,\"resetMin\":88}]},"
+             "{\"label\":\"5h\",\"pct\":38,\"resetMin\":88}]},"
              "{\"id\":\"deepseek\",\"name\":\"DeepSeek\",\"ok\":false,\"status\":\"error\",\"metrics\":["
-             "{\"label\":\"balance\",\"pct\":81,\"resetMin\":0,\"value\":\"110 CNY\"}]}]}";
+             "{\"label\":\"balance\",\"pct\":0,\"resetMin\":0,\"value\":\"110 CNY\"}]}]}";
     } else {
       mock = "{\"providers\":["
              "{\"id\":\"claude\",\"name\":\"Claude\",\"ok\":true,\"status\":\"normal\",\"metrics\":["
-             "{\"label\":\"Very long five-hour metric label\",\"pct\":72,\"resetMin\":142,\"value\":\"1,234,567,890 tokens\"},"
-             "{\"label\":\"Weekly usage window\",\"pct\":4,\"resetMin\":9876}]},"
+             "{\"label\":\"Very long five-hour metric label\",\"pct\":28,\"resetMin\":142,\"value\":\"1,234,567,890 tokens\"},"
+             "{\"label\":\"Weekly usage window\",\"pct\":96,\"resetMin\":9876}]},"
              "{\"id\":\"chatgpt\",\"name\":\"ChatGPT\",\"ok\":true,\"status\":\"normal\",\"metrics\":["
-             "{\"label\":\"Five-hour window\",\"pct\":62,\"resetMin\":88,\"value\":\"62 percent used\"}]},"
+             "{\"label\":\"Five-hour window\",\"pct\":38,\"resetMin\":88,\"value\":\"38 percent remaining\"}]},"
              "{\"id\":\"deepseek\",\"name\":\"DeepSeek\",\"ok\":true,\"status\":\"normal\",\"metrics\":["
-             "{\"label\":\"Account balance remaining\",\"pct\":81,\"resetMin\":0,\"value\":\"12,345,678,901 CNY\"}]}]}";
+             "{\"label\":\"Account balance remaining\",\"pct\":0,\"resetMin\":0,\"value\":\"12,345,678,901 CNY\"}]}]}";
     }
     usageApply(String(mock));
     previewDirty = true;
@@ -3283,6 +3286,65 @@ struct App {
     }
   }
 
+  static void setUsageBox(JsonObject box, int x, int y, int w, int h,
+                         int padX = 0, int padY = 0) {
+    box["x"] = x; box["y"] = y; box["w"] = w; box["h"] = h;
+    box["padX"] = padX; box["padY"] = padY;
+    box["mx"] = 0; box["my"] = 0;
+    box["a"] = "l"; box["va"] = "m";
+  }
+
+  void ensureUsageLayout(JsonObject style, JsonObject l) {
+    JsonObject layout = style["layout"].as<JsonObject>();
+    if (!layout.isNull() && !(layout["auto"] | false)) return;
+    layout = style["layout"].to<JsonObject>();
+    layout["auto"] = false;
+    const int w = l["w"] | 224;
+    const int h = l["h"] | 82;
+    const int padding = style["padding"] | 12;
+    const int count = 3;
+    const int rowH = std::max(14, (h - 20) / count);
+    setUsageBox(layout["name"].to<JsonObject>(), 8, 6, std::max(1, w - 16), 16);
+    setUsageBox(layout["reset"].to<JsonObject>(), padding, h - 28,
+                std::max(1, w - 2 * padding), 10);
+    JsonArray rows = layout["rows"].to<JsonArray>();
+    for (int i = 0; i < 5; i++) {
+      JsonObject row = rows.add<JsonObject>();
+      const int ry = 20 + i * rowH;
+      setUsageBox(row["label"].to<JsonObject>(), padding, ry,
+                  std::max(1, (w - 2 * padding) * 55 / 100), 12);
+      setUsageBox(row["value"].to<JsonObject>(), padding + (w - 2 * padding) * 55 / 100,
+                  std::max(0, ry - 2), std::max(1, (w - 2 * padding) * 45 / 100), 18);
+      setUsageBox(row["bar"].to<JsonObject>(), padding, ry + rowH - 7,
+                  std::max(1, w - 2 * padding), 4);
+    }
+  }
+
+  bool usageBoxEditor(JsonObject box, const char* label) {
+    if (box.isNull()) return false;
+    ImGui::PushID(label);
+    bool changed = false;
+    ImGui::SeparatorText(label);
+    changed |= input_int_json(box, "x", "X", -512, 512, 0);
+    changed |= input_int_json(box, "y", "Y", -512, 512, 0);
+    changed |= input_int_json(box, "w", "Width", 0, 240, 0);
+    changed |= input_int_json(box, "h", "Height", 0, 240, 0);
+    changed |= input_int_json(box, "mx", "Margin X", -128, 127, 0);
+    changed |= input_int_json(box, "my", "Margin Y", -128, 127, 0);
+    changed |= input_int_json(box, "padX", "Padding X", 0, 60, 0);
+    changed |= input_int_json(box, "padY", "Padding Y", 0, 60, 0);
+    static const char* aligns[] = {"l", "c", "r"};
+    const char* cur = box["a"] | "l";
+    int ai = !strcmp(cur, "c") ? 1 : !strcmp(cur, "r") ? 2 : 0;
+    if (ImGui::Combo("Align", &ai, aligns, 3)) { box["a"] = aligns[ai]; changed = true; }
+    static const char* valigns[] = {"t", "m", "b"};
+    const char* cv = box["va"] | "m";
+    int vi = !strcmp(cv, "t") ? 0 : !strcmp(cv, "b") ? 2 : 1;
+    if (ImGui::Combo("Vertical align", &vi, valigns, 3)) { box["va"] = valigns[vi]; changed = true; }
+    ImGui::PopID();
+    return changed;
+  }
+
   void usageStyleEditor(JsonObject l, bool& changed) {
     std::string key = componentId(l);
     if (key.empty()) key = "selected";
@@ -3373,6 +3435,43 @@ struct App {
         for (int i = 0; i < 5; i++) labels.add(labelBuf[i]);
         changed = true;
       }
+      bool custom = !style["layout"].isNull() && !(style["layout"]["auto"] | false);
+      if (ImGui::Checkbox("Custom geometry", &custom)) {
+        if (custom) ensureUsageLayout(style, l);
+        else style.remove("layout");
+        changed = true;
+        style = l["style"].as<JsonObject>();
+      }
+      if (custom) {
+        if (style["layout"].isNull()) ensureUsageLayout(style, l);
+        JsonObject layout = style["layout"].as<JsonObject>();
+        if (!layout.isNull()) {
+          changed |= usageBoxEditor(layout["name"].as<JsonObject>(), "Name box");
+          changed |= usageBoxEditor(layout["reset"].as<JsonObject>(), "Reset box");
+          if (usageLayoutRow < 0) usageLayoutRow = 0;
+          if (usageLayoutRow > 4) usageLayoutRow = 4;
+          ImGui::TextDisabled("Metric row");
+          ImGui::SetNextItemWidth(-1);
+          ImGui::Combo("##layout-row", &usageLayoutRow, [](void*, int i, const char** out) {
+            static char label[24];
+            snprintf(label, sizeof(label), "Row %d", i + 1);
+            *out = label;
+            return true;
+          }, nullptr, 5);
+          JsonArray rows = layout["rows"].as<JsonArray>();
+          if (rows.isNull()) rows = layout["rows"].to<JsonArray>();
+          while ((int)rows.size() <= usageLayoutRow) {
+            JsonObject row = rows.add<JsonObject>();
+            setUsageBox(row["label"].to<JsonObject>(), 12, 20, 100, 12);
+            setUsageBox(row["value"].to<JsonObject>(), 140, 18, 72, 18);
+            setUsageBox(row["bar"].to<JsonObject>(), 12, 30, 200, 4);
+          }
+          JsonObject row = rows[usageLayoutRow];
+          changed |= usageBoxEditor(row["label"].as<JsonObject>(), "Label box");
+          changed |= usageBoxEditor(row["value"].as<JsonObject>(), "Value box");
+          changed |= usageBoxEditor(row["bar"].as<JsonObject>(), "Bar box");
+        }
+      }
       if (ImGui::Button("Reset usage style", ImVec2(-1, 0))) {
         l.remove("style");
         changed = true;
@@ -3436,6 +3535,17 @@ struct App {
       const char* cur = l["a"] | "l";
       int ai = !strcmp(cur, "c") ? 1 : !strcmp(cur, "r") ? 2 : 0;
       if (ImGui::Combo("Align", &ai, aligns, 3)) { l["a"] = aligns[ai]; changed = true; }
+      changed |= input_int_json(l, "w", "Box width (0 auto)", 0, 240, 0);
+      changed |= input_int_json(l, "h", "Box height (0 auto)", 0, 240, 0);
+      changed |= input_int_json(l, "padX", "Padding X", 0, 60, 0);
+      changed |= input_int_json(l, "padY", "Padding Y", 0, 60, 0);
+      changed |= input_int_json(l, "mx", "Margin X", -128, 127, 0);
+      changed |= input_int_json(l, "my", "Margin Y", -128, 127, 0);
+      changed |= input_int_json(l, "lineGap", "Line gap", 0, 40, 0);
+      static const char* valigns[] = {"t", "m", "b"};
+      const char* cv = l["va"] | "m";
+      int vi = !strcmp(cv, "t") ? 0 : !strcmp(cv, "b") ? 2 : 1;
+      if (ImGui::Combo("Vertical align", &vi, valigns, 3)) { l["va"] = valigns[vi]; changed = true; }
     } else if (!strcmp(t, "rect") || !strcmp(t, "rrect") || !strcmp(t, "usage")) {
       changed |= input_int_json(l, "w", "Width", 1, 480, 10);
       changed |= input_int_json(l, "h", "Height", 1, 480, 10);
@@ -3701,6 +3811,42 @@ struct App {
     }
   }
 
+  JsonObject usageLayoutFor(JsonObject l) {
+    if (!l || strcmp(l["t"] | "", "usage")) return JsonObject();
+    JsonObject style = l["style"].as<JsonObject>();
+    if (style.isNull()) return JsonObject();
+    JsonObject layout = style["layout"].as<JsonObject>();
+    if (layout.isNull() || (layout["auto"] | false)) return JsonObject();
+    return layout;
+  }
+
+  JsonObject usageLayoutBox(int kind, int row) {
+    JsonArray draw = view["draw"].as<JsonArray>();
+    if (selected < 0 || selected >= (int)draw.size()) return JsonObject();
+    JsonObject layout = usageLayoutFor(draw[selected]);
+    if (layout.isNull()) return JsonObject();
+    if (kind == 1) return layout["name"].as<JsonObject>();
+    if (kind == 2) return layout["reset"].as<JsonObject>();
+    JsonArray rows = layout["rows"].as<JsonArray>();
+    if (row < 0 || row >= (int)rows.size()) return JsonObject();
+    JsonObject item = rows[row];
+    if (kind == 3) return item["label"].as<JsonObject>();
+    if (kind == 4) return item["value"].as<JsonObject>();
+    if (kind == 5) return item["bar"].as<JsonObject>();
+    return JsonObject();
+  }
+
+  bool usageBoxBounds(JsonObject box, float cardX, float cardY, float& x, float& y,
+                      float& w, float& h) {
+    if (box.isNull()) return false;
+    w = box["w"] | 0;
+    h = box["h"] | 0;
+    if (w <= 0 || h <= 0) return false;
+    x = cardX + (box["x"] | 0) + (box["mx"] | 0);
+    y = cardY + (box["y"] | 0) + (box["my"] | 0);
+    return true;
+  }
+
   std::set<int> effectiveSelection() {
     std::set<int> result = selection;
     if (result.size() == 1 && selected >= 0) {
@@ -3776,6 +3922,28 @@ struct App {
     static ImVec2 press{};
     if (ImGui::IsItemClicked(0)) {
       const bool additive = ImGui::GetIO().KeyShift || ImGui::GetIO().KeyCtrl;
+      bool usageHit = false;
+      if (selected >= 0 && selected < (int)draw.size()) {
+        JsonObject layout = usageLayoutFor(draw[selected]);
+        if (!layout.isNull()) {
+          float cardX = draw[selected]["x"] | 0, cardY = draw[selected]["y"] | 0;
+          const int kinds[] = {1, 2, 3, 4, 5};
+          for (int kind : kinds) {
+            JsonObject box = usageLayoutBox(kind, usageLayoutRow);
+            float bx, by, bw, bh;
+            if (!usageBoxBounds(box, cardX, cardY, bx, by, bw, bh)) continue;
+            if (mx >= bx && mx <= bx + bw && my >= by && my <= by + bh) {
+              usageDragKind = kind;
+              usageDragRow = usageLayoutRow;
+              dragMode = 3;
+              press = ImVec2(mx, my);
+              undoPushed = false;
+              usageHit = true;
+              break;
+            }
+          }
+        }
+      }
       bool onHandle = false;
       if (selected >= 0 && selected < (int)draw.size()) {
         float x, y, w, h;
@@ -3783,7 +3951,7 @@ struct App {
         onHandle = mx >= x + w - 10 && mx <= x + w + 10 &&
                    my >= y + h - 10 && my <= y + h + 10;
       }
-      if (!onHandle) {
+      if (!usageHit && !onHandle) {
         int hit = -1;
         for (int i : componentsByZ(true)) {
           if (i < 0 || i >= (int)draw.size() || (draw[i]["hidden"] | false)) continue;
@@ -3807,7 +3975,7 @@ struct App {
           boxStart = ImVec2(mx, my);
         }
       }
-      if (selected >= 0 && selected < (int)draw.size()) {
+      if (!usageHit && selected >= 0 && selected < (int)draw.size()) {
         const bool locked = draw[selected]["locked"] | false;
         dragMode = locked ? 0 : (onHandle && selection.size() == 1 ? 2 : 1);
         press = ImVec2(mx, my);
@@ -3820,7 +3988,13 @@ struct App {
       if (!undoPushed) { pushUndo(); undoPushed = true; }
       JsonObject primary = draw[selected];
       float dx = mx - press.x, dy = my - press.y;
-      if (dragMode == 2) {
+      if (dragMode == 3) {
+        JsonObject box = usageLayoutBox(usageDragKind, usageDragRow);
+        if (!box.isNull()) {
+          box["x"] = (int)((box["x"] | 0) + dx);
+          box["y"] = (int)((box["y"] | 0) + dy);
+        }
+      } else if (dragMode == 2) {
         const char* t = primary["t"] | "";
         if (!strcmp(t, "circle")) {
           int r = std::max(1, (int)((primary["r"] | 1) + std::max(dx, dy)));
@@ -3875,6 +4049,7 @@ struct App {
         boxSelecting = false;
       }
       dragMode = 0;
+      usageDragKind = 0;
       snapGuideX = snapGuideY = -1;
     }
 
@@ -3919,6 +4094,21 @@ struct App {
       if (i == selected)
         dl->AddRectFilled(ImVec2(b.x - 5, b.y - 5), ImVec2(b.x + 5, b.y + 5),
                           IM_COL32(255, 200, 60, 255));
+    }
+    if (selected >= 0 && selected < (int)draw.size()) {
+      JsonObject layout = usageLayoutFor(draw[selected]);
+      if (!layout.isNull()) {
+        float cardX = draw[selected]["x"] | 0, cardY = draw[selected]["y"] | 0;
+        const int kinds[] = {1, 2, 3, 4, 5};
+        for (int kind : kinds) {
+          JsonObject box = usageLayoutBox(kind, usageLayoutRow);
+          float bx, by, bw, bh;
+          if (!usageBoxBounds(box, cardX, cardY, bx, by, bw, bh)) continue;
+          ImVec2 a(imgPos.x + bx * S, imgPos.y + by * S);
+          ImVec2 b(imgPos.x + (bx + bw) * S, imgPos.y + (by + bh) * S);
+          dl->AddRect(a, b, IM_COL32(80, 190, 230, 150), 0, 0, 1.0f);
+        }
+      }
     }
     if (hovered && !active) {
       for (int i : componentsByZ(true)) {
