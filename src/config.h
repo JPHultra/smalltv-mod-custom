@@ -10,13 +10,13 @@
 // Firmware identity
 // ---------------------------------------------------------------------------
 #define FW_NAME     "smalltv-mod"
-#define FW_VERSION  "4.5.2-custom"
+#define FW_VERSION  "4.5.3-custom"
 
 #define REPO_URL      "https://github.com/JPHultra/smalltv-mod-custom"
 #define REPO_OWNER    "JPHultra"
 #define REPO_NAME     "smalltv-mod-custom"
-// Release asset the GitHub self-updater pulls, and the short variant name shown
-// in the web UI. A device keeps its own variant across a self-update.
+// Release firmware asset name used by release tooling and the desktop app.
+// This is also the short variant name shown in the web UI.
 //
 // Order matters: this is an #if defined() chain, and SMALLTV_ESP32_PRO is
 // defined alongside SMALLTV_ESP32 rather than instead of it, so it has to be
