@@ -699,15 +699,20 @@ static void drawPrims(const ViewScreen& screen, Arduino_GFX* gfx, int yOffset,
         const int x = (p.align == VIEW_A_CENTER) ? p.x - rw / 2
                     : (p.align == VIEW_A_RIGHT)  ? p.x - rw : p.x;
         const uint8_t* bits = screen.bitmap + p.voff;
-        for (int py = 0; py < rh; py++) {
-          const int sy = py * h / rh;
-          for (int px = 0; px < rw; px++) {
-            const int sx = px * w / rw;
+        auto scaleStart = [](int source, int sourceSize, int targetSize) {
+          return (source * targetSize + sourceSize - 1) / sourceSize;
+        };
+        for (int sy = 0; sy < h; sy++) {
+          const int y0 = p.y + scaleStart(sy, h, rh);
+          const int y1 = p.y + scaleStart(sy + 1, h, rh);
+          if (y1 <= y0) continue;
+          for (int sx = 0; sx < w; sx++) {
             const int idx = sy * w + sx;
-            if (bits[idx >> 3] & (0x80 >> (idx & 7))) {
-              if (bs || s != 1) gfx->fillRect(x + px, p.y + py, 1, 1, c);
-              else gfx->drawPixel(x + px, p.y + py, c);
-            }
+            if (!(bits[idx >> 3] & (0x80 >> (idx & 7)))) continue;
+            const int x0 = x + scaleStart(sx, w, rw);
+            const int x1 = x + scaleStart(sx + 1, w, rw);
+            if (x1 <= x0) continue;
+            gfx->fillRect(x0, y0, x1 - x0, y1 - y0, c);
           }
         }
         break;

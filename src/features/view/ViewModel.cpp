@@ -373,7 +373,9 @@ static bool parsePrim(JsonObjectConst p, ViewScreen& sc, ViewPrim& out) {
 }
 
 bool viewScreenParse(const char* json, size_t length, ViewScreen& screen, String& error) {
-  screen = ViewScreen();
+  // Clear in place. Constructing a ViewScreen temporary here puts ~3.7 KB on
+  // the 4 KB loop stack before the JSON document has even been parsed.
+  memset(static_cast<void*>(&screen), 0, sizeof(screen));
   if (!json || length == 0 || length > VIEW_MAX_JSON) {
     error = F("empty or oversized view");
     return false;
