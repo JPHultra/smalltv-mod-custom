@@ -67,6 +67,75 @@ static bool addImageName(ViewScreen& sc, const char* name, uint16_t& offset) {
   return true;
 }
 
+static uint8_t parseAlign(const char* value, uint8_t fallback) {
+  if (!value) return fallback;
+  if (value[0] == 'c') return VIEW_A_CENTER;
+  if (value[0] == 'r') return VIEW_A_RIGHT;
+  if (value[0] == 'l') return VIEW_A_LEFT;
+  return fallback;
+}
+
+static bool appendText(ViewScreen& sc, const char* text, uint16_t& offset) {
+  if (!text || !text[0]) return true;
+  const size_t length = strlen(text);
+  if (length >= VIEW_USAGE_TEXT_MAX) return false;
+  if (sc.textUsed + length + 1 > sizeof(sc.text)) return false;
+  offset = sc.textUsed;
+  memcpy(sc.text + sc.textUsed, text, length);
+  sc.textUsed += (uint16_t)length;
+  sc.text[sc.textUsed++] = 0;
+  return true;
+}
+
+static bool parseUsageStyle(JsonObjectConst s, ViewScreen& sc, UsageStyle& style) {
+  style.nameSize = (uint8_t)constrain((int)(s["nameSize"] | 2), 0, 6);
+  style.labelSize = (uint8_t)constrain((int)(s["labelSize"] | 0), 0, 6);
+  style.valueSize = (uint8_t)constrain((int)(s["valueSize"] | 0), 0, 6);
+  style.resetSize = (uint8_t)constrain((int)(s["resetSize"] | 1), 0, 6);
+  style.nameAlign = parseAlign(s["nameAlign"] | "l", VIEW_A_LEFT);
+  style.labelAlign = parseAlign(s["labelAlign"] | "r", VIEW_A_RIGHT);
+  style.valueAlign = parseAlign(s["valueAlign"] | "l", VIEW_A_LEFT);
+  style.resetAlign = parseAlign(s["resetAlign"] | "l", VIEW_A_LEFT);
+  style.barHeight = (uint8_t)constrain((int)(s["barHeight"] | 8), 1, 32);
+  style.radius = (uint8_t)constrain((int)(s["radius"] | 8), 0, 32);
+  style.padding = (uint8_t)constrain((int)(s["padding"] | 12), 0, 60);
+  style.flags = 0;
+  if (s["showName"] | true) style.flags |= USAGE_SHOW_NAME;
+  if (s["showDot"] | true) style.flags |= USAGE_SHOW_DOT;
+  if (s["showLabel"] | true) style.flags |= USAGE_SHOW_LABEL;
+  if (s["showValue"] | true) style.flags |= USAGE_SHOW_VALUE;
+  if (s["showBar"] | true) style.flags |= USAGE_SHOW_BAR;
+  if (s["showReset"] | true) style.flags |= USAGE_SHOW_RESET;
+  if (s["showPanel"] | true) style.flags |= USAGE_SHOW_PANEL;
+  if (s["barAuto"] | true) style.flags |= USAGE_BAR_AUTO;
+  parseColor(s["panel"] | "", style.panelColor);
+  parseColor(s["track"] | "", style.trackColor);
+  parseColor(s["valueColor"] | "", style.valueColor);
+  parseColor(s["labelColor"] | "", style.labelColor);
+  parseColor(s["resetColor"] | "", style.resetColor);
+  parseColor(s["nameColor"] | "", style.nameColor);
+  parseColor(s["barColor"] | "", style.barColor);
+  if (!appendText(sc, s["title"] | "", style.titleOffset)) return false;
+  if (s["labels"].is<JsonArrayConst>()) {
+    JsonArrayConst labels = s["labels"].as<JsonArrayConst>();
+    const uint16_t start = sc.textUsed;
+    bool any = false;
+    for (int i = 0; i < USAGE_MAX_METRICS; i++) {
+      const char* label = labels[i] | "";
+      const size_t length = strlen(label);
+      if (length >= VIEW_USAGE_TEXT_MAX) return false;
+      if (label[0]) any = true;
+      if (sc.textUsed + length + 1 > sizeof(sc.text)) return false;
+      memcpy(sc.text + sc.textUsed, label, length);
+      sc.textUsed += (uint16_t)length;
+      sc.text[sc.textUsed++] = 0;
+    }
+    if (any) style.labelsOffset = start;
+    else sc.textUsed = start;
+  }
+  return true;
+}
+
 static bool parsePrim(JsonObjectConst p, ViewScreen& sc, ViewPrim& out) {
   const char* t = p["t"] | "";
   if (!t[0]) return false;
@@ -190,6 +259,12 @@ static bool parsePrim(JsonObjectConst p, ViewScreen& sc, ViewPrim& out) {
     if (L >= VIEW_MAX_PROVIDER_LEN) return false;
     int w = p["w"] | 0, h = p["h"] | 0;
     if (w <= 0 || h <= 0 || w > TFT_WIDTH || h > TFT_HEIGHT) return false;
+    if (sc.usageStyleCount >= VIEW_MAX_USAGE_STYLES) return false;
+    UsageStyle style;
+    JsonObjectConst styleJson = p["style"].as<JsonObjectConst>();
+    if (!styleJson.isNull() && !parseUsageStyle(styleJson, sc, style)) return false;
+    const uint8_t styleIndex = sc.usageStyleCount++;
+    sc.usageStyles[styleIndex] = style;
     if (sc.textUsed + L + 1 > sizeof(sc.text)) return false;
     out.type  = VIEW_P_USAGE;
     out.x2    = (int16_t)w;
@@ -197,6 +272,7 @@ static bool parsePrim(JsonObjectConst p, ViewScreen& sc, ViewPrim& out) {
     // -1 (or an omitted metric) means "all metrics"; the renderer stacks them.
     const int metric = p["metric"] | -1;
     out.aux   = metric < 0 ? 255 : (uint8_t)constrain(metric, 0, USAGE_MAX_METRICS - 1);
+    out._pad  = (uint8_t)(styleIndex + 1);
     sc.hasUsage = true;
     out.voff  = sc.textUsed;
     memcpy(sc.text + sc.textUsed, provider, L);
@@ -209,7 +285,7 @@ static bool parsePrim(JsonObjectConst p, ViewScreen& sc, ViewPrim& out) {
 }
 
 bool viewScreenParse(const char* json, size_t length, ViewScreen& screen, String& error) {
-  memset(&screen, 0, sizeof(screen));
+  screen = ViewScreen();
   if (!json || length == 0 || length > VIEW_MAX_JSON) {
     error = F("empty or oversized view");
     return false;
@@ -237,12 +313,33 @@ bool viewScreenParse(const char* json, size_t length, ViewScreen& screen, String
   screen.ttl = (uint16_t)ttl;
   screen.priority = (uint8_t)constrain((int)(o["priority"] | 0), 0, 3);
 
+  int16_t zOrder[VIEW_MAX_PRIMS] = {};
   if (o["draw"].is<JsonArrayConst>()) {
     for (JsonObjectConst p : o["draw"].as<JsonArrayConst>()) {
       if (screen.primCount >= VIEW_MAX_PRIMS) break;
+      if (p["hidden"] | false) continue;
       ViewPrim prim;
-      if (parsePrim(p, screen, prim)) screen.prims[screen.primCount++] = prim;
+      if (parsePrim(p, screen, prim)) {
+        const int index = screen.primCount;
+        screen.prims[index] = prim;
+        zOrder[index] = (int16_t)constrain((int)(p["z"] | index), -32768, 32767);
+        screen.primCount++;
+      }
     }
+  }
+  // Stable insertion sort by z; array order breaks ties so old views behave
+  // exactly as before when z is omitted.
+  for (int i = 1; i < screen.primCount; i++) {
+    const ViewPrim key = screen.prims[i];
+    const int16_t keyZ = zOrder[i];
+    int j = i - 1;
+    while (j >= 0 && zOrder[j] > keyZ) {
+      screen.prims[j + 1] = screen.prims[j];
+      zOrder[j + 1] = zOrder[j];
+      j--;
+    }
+    screen.prims[j + 1] = key;
+    zOrder[j + 1] = keyZ;
   }
   error = "";
   return true;
@@ -265,6 +362,30 @@ const char* viewPrimImage(const ViewScreen& screen, const ViewPrim& prim) {
 const char* viewBackgroundImage(const ViewScreen& screen) {
   if (screen.bgImage == 0xFFFF || screen.bgImage >= sizeof(screen.images)) return nullptr;
   return screen.images + screen.bgImage;
+}
+
+const UsageStyle* viewPrimUsageStyle(const ViewScreen& screen, const ViewPrim& prim) {
+  if (prim.type != VIEW_P_USAGE || !prim._pad) return nullptr;
+  const uint8_t index = (uint8_t)(prim._pad - 1);
+  if (index >= screen.usageStyleCount) return nullptr;
+  return &screen.usageStyles[index];
+}
+
+const char* viewUsageTitle(const ViewScreen& screen, const UsageStyle& style) {
+  if (style.titleOffset == 0xFFFF || style.titleOffset >= sizeof(screen.text)) return nullptr;
+  return screen.text + style.titleOffset;
+}
+
+const char* viewUsageMetricLabel(const ViewScreen& screen, const UsageStyle& style, int metric) {
+  if (style.labelsOffset == 0xFFFF || style.labelsOffset >= sizeof(screen.text) ||
+      metric < 0 || metric >= USAGE_MAX_METRICS)
+    return nullptr;
+  const char* p = screen.text + style.labelsOffset;
+  for (int i = 0; i < metric; i++) {
+    p += strlen(p) + 1;
+    if ((size_t)(p - screen.text) >= sizeof(screen.text)) return nullptr;
+  }
+  return p[0] ? p : nullptr;
 }
 
 uint32_t viewClockKey(bool includeSeconds) {

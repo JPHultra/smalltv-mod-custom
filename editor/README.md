@@ -34,7 +34,7 @@ The token is a write credential for `/api/dashboard`, `/api/view` and
 
 ## Editing
 
-- Click a component to add it, click a layer to select it, drag on the canvas to
+- Click a component to add it, click a component to select it, drag on the canvas to
   move it, and edit its properties on the right.
 - The JSON pane is the source of truth: **Apply** loads pasted JSON, **Copy**
   copies the current view, **Download JSON** saves it as `view.json`.

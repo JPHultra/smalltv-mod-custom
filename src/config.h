@@ -95,6 +95,8 @@
 #define VIEW_MAX_IMAGES         4
 #define VIEW_IMAGE_NAME_LEN    32
 #define VIEW_IMAGE_POOL       128
+#define VIEW_MAX_USAGE_STYLES   6
+#define VIEW_USAGE_TEXT_MAX    32
 #define VIEW_MAX_PROVIDER_LEN  16
 #define VIEW_TTL_MAX_SEC   604800UL   // payload clamp; the overlay uses less
 #define VIEW_OVERLAY_TTL_MIN_SEC   2

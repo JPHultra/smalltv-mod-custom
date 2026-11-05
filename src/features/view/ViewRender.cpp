@@ -142,80 +142,156 @@ static uint16_t barColor(float pct) {
   return gfxTint(0x7C6B);
 }
 
+static uint8_t usageAutoSize(int height) {
+  return (uint8_t)(height >= 74 ? 4 : height >= 56 ? 3 : 2);
+}
+
+static uint8_t usageFitSize(const char* text, uint8_t size, int maxWidth) {
+  if (size < 1) size = 1;
+  while (size > 1 && textWidth(text, size) > maxWidth) size--;
+  return size;
+}
+
+static uint8_t usageAlign(uint8_t value, bool rows, bool label) {
+  if (value != 0xFF) return value;
+  return label ? (rows ? VIEW_A_LEFT : VIEW_A_RIGHT)
+               : (rows ? VIEW_A_RIGHT : VIEW_A_LEFT);
+}
+
+static int usageTextX(int left, int right, uint8_t align, int width) {
+  if (align == VIEW_A_CENTER) return left + (right - left - width) / 2;
+  if (align == VIEW_A_RIGHT) return right - width;
+  return left;
+}
+
+static uint16_t usageColor(uint16_t color, uint16_t fallback) {
+  return color ? gfxTint(color) : fallback;
+}
+
 static void drawUsageBar(Arduino_GFX* gfx, int x, int y, int w, int h,
-                         float pct, uint16_t track) {
+                         float pct, uint16_t track, uint16_t fill) {
   if (w <= 0 || h <= 0) return;
   gfx->fillRoundRect(x, y, w, h, h / 2, track);
   int filled = (int)(w * constrain(pct, 0.0f, 100.0f) / 100.0f);
-  if (filled >= h)    gfx->fillRoundRect(x, y, filled, h, h / 2, barColor(pct));
-  else if (filled > 0) gfx->fillRect(x, y, filled, h, barColor(pct));
+  if (filled >= h)    gfx->fillRoundRect(x, y, filled, h, h / 2, fill);
+  else if (filled > 0) gfx->fillRect(x, y, filled, h, fill);
 }
 
-static void drawUsageSingle(Arduino_GFX* gfx, int x, int y, int w, int h,
-                            const UsageMetric& m, uint16_t dim, uint16_t track) {
-  drawGlyphString(gfx, m.label, x + w - textWidth(m.label, 2) - 16, y + 8, 2, dim);
+static void drawUsageSingle(Arduino_GFX* gfx, const ViewScreen& screen,
+                            const ViewPrim& p, const UsageStyle& style,
+                            const UsageMetric& m, int metric,
+                            uint16_t accent, uint16_t dim, uint16_t track) {
+  const int x = p.x, y = p.y, w = p.x2, h = p.y2;
+  const int padding = style.padding;
+  const uint16_t valueColor = usageColor(style.valueColor, gfxTint(0xFFFF));
+  const uint16_t labelColor = usageColor(style.labelColor, dim);
+  const uint16_t resetColor = usageColor(style.resetColor, dim);
+
+  if (style.flags & USAGE_SHOW_LABEL) {
+    const char* custom = viewUsageMetricLabel(screen, style, metric);
+    const char* label = custom ? custom : m.label;
+    if (label && label[0]) {
+      uint8_t size = style.labelSize ? style.labelSize : 2;
+      size = usageFitSize(label, size, w - 2 * padding);
+      const uint8_t align = usageAlign(style.labelAlign, false, true);
+      const int tx = usageTextX(x + padding, x + w - padding, align,
+                                textWidth(label, size));
+      drawGlyphString(gfx, label, tx, y + 8, size, labelColor);
+    }
+  }
 
   char pct[10];
   snprintf(pct, sizeof(pct), "%d%%", (int)lroundf(constrain(m.pct, 0.0f, 100.0f)));
   const bool hasValue = m.value[0] != 0;
   char big[USAGE_VALUE_MAX + 1];
   strlcpy(big, hasValue ? m.value : pct, sizeof(big));
-  uint8_t size = (h >= 74) ? 4 : (h >= 56 ? 3 : 2);
-  while (size > 1 && textWidth(big, size) > w - 24) size--;
-  if (textWidth(big, 1) > w - 24 && w > 24) {
-    int maxChars = (w - 24) / 6;
-    if (maxChars < 1) maxChars = 1;
-    if ((size_t)maxChars < strlen(big)) big[maxChars] = 0;
+  if (style.flags & USAGE_SHOW_VALUE) {
+    uint8_t size = style.valueSize ? style.valueSize : usageAutoSize(h);
+    size = usageFitSize(big, size, w - 2 * padding);
+    const uint8_t align = usageAlign(style.valueAlign, false, false);
+    const int tx = usageTextX(x + padding, x + w - padding, align,
+                              textWidth(big, size));
+    drawGlyphString(gfx, big, tx, y + 20, size, valueColor);
   }
-  drawGlyphString(gfx, big, x + 12, y + 20, size, gfxTint(0xFFFF));
 
-  const int bx = x + 12, bw = w - 24;
-  const int by = y + h - 14;
-  if (bw > 0 && by > y + 18 && (m.pct > 0 || !hasValue))
-    drawUsageBar(gfx, bx, by, bw, 8, m.pct, track);
+  const int barH = style.barHeight;
+  const int barY = y + h - 6 - barH;
+  const int barW = w - 2 * padding;
+  if ((style.flags & USAGE_SHOW_BAR) && barW > 0 && barY > y + 18 &&
+      (m.pct > 0 || !hasValue)) {
+    const uint16_t fill = (style.flags & USAGE_BAR_AUTO)
+                              ? barColor(m.pct) : usageColor(style.barColor, accent);
+    drawUsageBar(gfx, x + padding, barY, barW, barH, m.pct, track, fill);
+  }
 
-  if (h >= 80 && (!hasValue || m.resetMin > 0)) {
+  if ((style.flags & USAGE_SHOW_RESET) && h >= 72 && (!hasValue || m.resetMin > 0)) {
     char reset[20], line[36];
     fmtReset(m.resetMin, reset, sizeof(reset));
     snprintf(line, sizeof(line), "Resets in %s", reset);
-    drawGlyphString(gfx, line, x + 12, y + h - 28, 1, dim);
+    uint8_t size = style.resetSize ? style.resetSize : 1;
+    size = usageFitSize(line, size, w - 2 * padding);
+    const uint8_t align = style.resetAlign;
+    const int tx = usageTextX(x + padding, x + w - padding, align,
+                              textWidth(line, size));
+    drawGlyphString(gfx, line, tx, y + h - 28, size, resetColor);
   }
 }
 
-// -1/omitted metric: stack every metric the provider sent, compactly.
-static void drawUsageRows(Arduino_GFX* gfx, int x, int y, int w, int h,
-                          const ProviderUsage& u, uint16_t dim, uint16_t track) {
+static void drawUsageRows(Arduino_GFX* gfx, const ViewScreen& screen,
+                          const ViewPrim& p, const UsageStyle& style,
+                          const ProviderUsage& u, uint16_t accent,
+                          uint16_t dim, uint16_t track) {
+  const int x = p.x, y = p.y, w = p.x2, h = p.y2;
   const int count = u.metricCount;
   if (count <= 0) return;
+  const int padding = style.padding;
   const int top = y + 20;
   const int rowH = (h - 20) / count;
+  if (rowH <= 0) return;
+  const uint16_t valueColor = usageColor(style.valueColor, gfxTint(0xFFFF));
+  const uint16_t labelColor = usageColor(style.labelColor, dim);
   for (int i = 0; i < count; i++) {
     const UsageMetric& m = u.metrics[i];
     const int ry = top + i * rowH;
     const bool large = rowH >= 24;
-    drawGlyphString(gfx, m.label, x + 12, ry, 1, dim);
+    const char* custom = viewUsageMetricLabel(screen, style, i);
+    const char* label = custom ? custom : m.label;
+    int labelWidth = 0;
+    if ((style.flags & USAGE_SHOW_LABEL) && label && label[0]) {
+      uint8_t size = style.labelSize ? style.labelSize : 1;
+      size = usageFitSize(label, size, w / 2);
+      labelWidth = textWidth(label, size);
+      const uint8_t align = usageAlign(style.labelAlign, true, true);
+      const int tx = usageTextX(x + padding, x + w - padding, align, labelWidth);
+      drawGlyphString(gfx, label, tx, ry, size, labelColor);
+    }
 
     char pct[10];
     snprintf(pct, sizeof(pct), "%d%%", (int)lroundf(constrain(m.pct, 0.0f, 100.0f)));
     char right[USAGE_VALUE_MAX + 1];
     strlcpy(right, m.value[0] ? m.value : pct, sizeof(right));
-    int maxRight = w - 12 - textWidth(m.label, 1) - 8;
-    if (maxRight < 12) maxRight = 12;
-    uint8_t ps = large ? 2 : 1;
-    while (ps > 1 && textWidth(right, ps) > maxRight) ps--;
-    if (textWidth(right, 1) > maxRight) {
-      int maxChars = maxRight / 6;
-      if (maxChars < 1) maxChars = 1;
-      if ((size_t)maxChars < strlen(right)) right[maxChars] = 0;
+    if (style.flags & USAGE_SHOW_VALUE) {
+      const int labelRoom = labelWidth ? labelWidth + 8 : 0;
+      int maxRight = w - 2 * padding - labelRoom;
+      if (maxRight < 12) maxRight = 12;
+      uint8_t size = style.valueSize ? style.valueSize : (large ? 2 : 1);
+      size = usageFitSize(right, size, maxRight);
+      const uint8_t align = usageAlign(style.valueAlign, true, false);
+      const int tx = usageTextX(x + padding, x + w - padding, align,
+                                textWidth(right, size));
+      drawGlyphString(gfx, right, tx, ry - (large ? 2 : 0), size, valueColor);
     }
-    drawGlyphString(gfx, right, x + w - textWidth(right, ps) - 12,
-                    ry - (large ? 2 : 0), ps, gfxTint(0xFFFF));
 
-    const int by = ry + (large ? 13 : 9);
-    const int bh = large ? 6 : 4;
-    const int bw = w - 24;
-    if (m.pct > 0 && bw > 0 && by + bh <= y + h)
-      drawUsageBar(gfx, x + 12, by, bw, bh, m.pct, track);
+    if (style.flags & USAGE_SHOW_BAR) {
+      const int bh = std::min<int>(style.barHeight, large ? 6 : 4);
+      const int by = ry + (large ? 13 : 9);
+      const int bw = w - 2 * padding;
+      if (m.pct > 0 && bw > 0 && by + bh <= y + h) {
+        const uint16_t fill = (style.flags & USAGE_BAR_AUTO)
+                                  ? barColor(m.pct) : usageColor(style.barColor, accent);
+        drawUsageBar(gfx, x + padding, by, bw, bh, m.pct, track, fill);
+      }
+    }
   }
 }
 
@@ -226,43 +302,50 @@ static void drawUsage(Arduino_GFX* gfx, const ViewScreen& screen, const ViewPrim
   const int x = p.x, y = p.y, w = p.x2, h = p.y2;
   if (w <= 0 || h <= 0) return;
 
-  const uint16_t panel = gfxTint(0x18E3);
-  const uint16_t dim   = gfxTint(0xB574);
-  const uint16_t track = gfxTint(0x2945);
-  gfx->fillRoundRect(x, y, w, h, 8, panel);
+  UsageStyle fallback;
+  const UsageStyle* found = viewPrimUsageStyle(screen, p);
+  const UsageStyle& style = found ? *found : fallback;
+  const uint16_t panel = gfxTint(style.panelColor);
+  const uint16_t dim = gfxTint(style.labelColor ? style.labelColor : 0xB574);
+  const uint16_t track = gfxTint(style.trackColor);
 
-  char label[USAGE_MAX_NAME];
-  strlcpy(label, (u && u->name[0]) ? u->name : id, sizeof(label));
-  uint8_t nameSize = 2;
-  while (nameSize > 1 && textWidth(label, nameSize) > w - 60) nameSize--;
-  if (textWidth(label, nameSize) > w - 60) {
-    int maxChars = (w - 60) / (6 * (int)nameSize);
-    if (maxChars < 1) maxChars = 1;
-    if ((size_t)maxChars < strlen(label)) label[maxChars] = 0;
+  if (style.flags & USAGE_SHOW_PANEL)
+    gfx->fillRoundRect(x, y, w, h, style.radius, panel);
+
+  const char* title = viewUsageTitle(screen, style);
+  if (!title) title = (u && u->name[0]) ? u->name : id;
+  if ((style.flags & USAGE_SHOW_NAME) && title && title[0]) {
+    const int dotRoom = (style.flags & USAGE_SHOW_DOT) ? 24 : 0;
+    uint8_t size = style.nameSize ? style.nameSize : 2;
+    size = usageFitSize(title, size, w - style.padding - 8 - dotRoom);
+    const int tx = usageTextX(x + 8, x + w - 8 - dotRoom, style.nameAlign,
+                              textWidth(title, size));
+    drawGlyphString(gfx, title, tx, y + 6, size,
+                    usageColor(style.nameColor, accent));
   }
-  drawGlyphString(gfx, label, x + 8, y + 6, nameSize, accent);
 
-  // State dot: green when data is fresh, red when the last push failed, dim
-  // when the provider has no data yet or the snapshot is stale.
-  if (u) {
-    uint16_t dot = u->error ? gfxTint(0xF800)
-                 : (u->valid && !usageStale(*u) ? gfxTint(0x07E0) : dim);
+  if (u && (style.flags & USAGE_SHOW_DOT)) {
+    const uint16_t dot = u->error ? gfxTint(0xF800)
+                       : (u->valid && !usageStale(*u) ? gfxTint(0x07E0) : dim);
     gfx->fillCircle(x + w - 8, y + 10, 3, dot);
   }
 
   if (!u || u->metricCount == 0) {
     const char* waiting = "waiting";
-    const int ww = textWidth(waiting, 2);
-    drawGlyphString(gfx, waiting, x + (w - ww) / 2, y + h / 2 - 8, 2, dim);
+    uint8_t size = style.valueSize ? style.valueSize : 2;
+    size = usageFitSize(waiting, size, w - 2 * style.padding);
+    const int tx = usageTextX(x + style.padding, x + w - style.padding,
+                              VIEW_A_CENTER, textWidth(waiting, size));
+    drawGlyphString(gfx, waiting, tx, y + h / 2 - 8, size, dim);
     return;
   }
 
   if (p.aux == 0xFF && u->metricCount > 1) {
-    drawUsageRows(gfx, x, y, w, h, *u, dim, track);
+    drawUsageRows(gfx, screen, p, style, *u, accent, dim, track);
     return;
   }
   const int idx = (p.aux == 0xFF) ? 0 : (p.aux < u->metricCount ? p.aux : 0);
-  drawUsageSingle(gfx, x, y, w, h, u->metrics[idx], dim, track);
+  drawUsageSingle(gfx, screen, p, style, u->metrics[idx], idx, accent, dim, track);
 }
 
 // ---------------------------------------------------------------------------

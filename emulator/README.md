@@ -21,12 +21,20 @@ HTML/WebView assets.
 - Live status and usage
 - Native visual dashboard editor:
   - text, rectangle, rounded rectangle, circle, line, icon, bitmap, image, usage
-    and fill layers
-  - drag, resize, layer ordering, duplicate/delete
+    and fill components
+  - drag, resize, multi-select, explicit Z order, duplicate/delete and groups
+  - copy/paste, keyboard nudging, snapping, rulers, guides and alignment
+  - component names, visibility/lock state and starter templates
+  - usage preview states (live, waiting, error and long values)
+  - usage style presets plus copy/paste style
+  - device image asset manager and local autosave recovery
+  - dashboard bundles containing the view and referenced image assets
+  - distribute horizontally/vertically and measurement guides
   - properties, icon picker, bitmap pixel grid
+  - configurable usage-card text, alignment, colours, bars, panels and labels
   - PNG/JPEG/BMP and animated GIF import with RGB565 stills and indexed GIF frames
   - full-screen image/GIF backgrounds with cover cropping
-  - undo/redo, alignment, JSON apply/copy
+  - undo/redo, JSON apply/copy
   - load/save from a file or the device
   - overlay test and clear
 - Firmware upload (`.bin`) with the in-app file browser
@@ -129,12 +137,16 @@ Options:
 
 ## Native editor
 
-The editor has three panes: layers on the left, a scaled real firmware render
-in the centre, and layer/view properties on the right. Device and file actions
-live in the inspector. Click a layer to select it, drag to move, and drag the
-yellow corner handle to resize. **Add layer** inserts a new component at the
-canvas centre. The JSON panel lets you inspect or replace the draw list
-directly.
+The editor has three panes: components on the left, a scaled real firmware
+render in the centre, and component/view properties on the right. Device and
+file actions live in the inspector. Click a component to select it, shift/ctrl
+click or drag a selection box for multiple components, drag to move, and drag
+the yellow corner handle to resize. **Add component** inserts a new component;
+the toolbar also exposes Z order, groups, copy/paste, snapping, rulers, guides,
+distribution and usage preview states. Usage components have style presets,
+style copy/paste and custom title/metric labels. The JSON panel lets you
+inspect or replace the draw list directly. Dashboard bundles include the view
+and any referenced image assets; autosave keeps a local recovery copy.
 
 ## Release packages
 

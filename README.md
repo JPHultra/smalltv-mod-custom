@@ -119,9 +119,14 @@ make -C emulator
 emulator/build/smalltv-emulator --view examples/view.json --usage daemon/usage.example.json
 ```
 
-Use the **Device**, **Design** and **Settings** tabs. The device web UI
-password uses HTTP Digest; app self-update, firmware release selection, manual
-firmware upload and settings export/import are handled directly by the app. See
+Use the **Device**, **Design**, **Usage** and **Settings** tabs. The Design
+editor calls its draw-list entries **components** and supports multi-select,
+copy/paste, keyboard nudging, snapping, rulers, guides, groups, visibility,
+locking, explicit Z order, snapping/rulers, distribute controls, usage preview
+states, device image management, portable dashboard bundles and autosave
+recovery. The device web UI password uses HTTP Digest; app self-update, firmware
+release selection, manual firmware upload and settings export/import are handled
+directly by the app. See
 [`emulator/README.md`](emulator/README.md) for details and Windows/MSYS2
 instructions.
 
@@ -150,6 +155,13 @@ stacks every metric the provider sends; `0`-`4` picks one. Text supports `{HH}`,
 the stored dashboard ignores it. A sample lives in
 [`examples/view.json`](examples/view.json).
 
+Each component may also carry `id`, `name`, `z`, `hidden`, `locked` and `gid`.
+`z` is drawn back-to-front (higher is in front); omitted values use array order.
+`hidden` is omitted by the renderer, `locked` is editor-only, and groups are
+editor metadata stored in a top-level `groups` array. Groups support move,
+duplicate, delete, hide, lock and Z order; they are not sent as render commands
+and do not add recursive/nested group support.
+
 Image and GIF backgrounds are imported by the native desktop app, not the web
 editor. The app converts PNG/JPEG/BMP to RGB565 and animated GIF to indexed
 256-color frames, uploads the asset to the device, and stores only a reference
@@ -166,12 +178,38 @@ in the dashboard:
 ```
 
 `bgImage` is drawn first with a 240x240 cover crop; `t:"image"` is a draggable
-asset layer. The legacy hex `bitmap` primitive remains supported. Assets live
+asset component. The legacy hex `bitmap` primitive remains supported. Assets live
 under `/img` and are managed through `/api/images` and `/api/image`; they are
 never embedded in the view JSON or the small RAM bitmap pool. The ESP8266 and
 4 MB ESP32 boards cap an asset at about 700 KB, while the 8 MB Pro board allows
 up to 3 MB. Animated backgrounds run at a capped frame rate.
 
+### Usage card style
+
+Usage components accept a `style` object so text sizing, alignment, visibility,
+colours, bar layout and custom labels can be changed without rebuilding the
+firmware:
+
+```json
+{
+  "t": "usage",
+  "provider": "claude",
+  "metric": -1,
+  "style": {
+    "nameSize": 2, "labelSize": 1, "valueSize": 4, "resetSize": 1,
+    "nameAlign": "l", "labelAlign": "r", "valueAlign": "l",
+    "showName": true, "showDot": true, "showLabel": true, "showValue": true,
+    "showBar": true, "showReset": true, "showPanel": true,
+    "barHeight": 8, "padding": 12, "radius": 8,
+    "title": "Claude",
+    "labels": ["5 hour", "Weekly"]
+  }
+}
+```
+
+Sizes of `0` mean auto-fit. `labelAlign` and `valueAlign` default to the
+layout-appropriate alignment when omitted. The default style reproduces the
+previous card appearance.
 
 Publish the editor to GitHub Pages from this PC with
 `tools/deploy_pages.sh`; it force-pushes `editor/` to the `gh-pages` branch and
@@ -287,7 +325,7 @@ Progress is live for uploads started by the desktop app or the manual web upload
 
 ## Notes
 
-- The ESP8266 image is about 806 KB flash / 54 KB static RAM in this build,
+- The ESP8266 image is about 808 KB flash / 55 KB static RAM in this build,
   down from the upstream full image, so the old `smalltv_lean` variant is gone.
 - `src/config.h` points the desktop updater at `JPHultra/smalltv-mod-custom`; change it
   if the repository moves.

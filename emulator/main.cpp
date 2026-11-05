@@ -15,6 +15,7 @@
 #include <functional>
 #include <future>
 #include <iostream>
+#include <set>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -448,6 +449,16 @@ struct App {
   std::string status;
   std::string deviceVersion;
   std::string usage;
+  std::string liveUsage;
+  int usagePreviewMode = 0;  // 0 live, 1 waiting, 2 error, 3 long values
+  bool usagePreviewActive = false;
+  std::string styleClipboard;
+  bool imageManagerOpen = false;
+  bool imageManagerLoaded = false;
+  std::string imageListJson;
+  std::string imageManagerError;
+  uint32_t lastAutosave = 0;
+  std::string lastAutosaveContent;
   std::string scanJson;
   JsonDocument scanDoc;
   JsonDocument usageCreds;
@@ -483,6 +494,14 @@ struct App {
   uint32_t previewAnimStart = 0;
   uint32_t lastPreviewTick = 0;
   int selected = -1;
+  std::set<int> selection;
+  std::string clipboard;
+  bool snapEnabled = true;
+  bool showGuides = true;
+  bool showRulers = true;
+  int snapGrid = 8;
+  float snapGuideX = -1.0f;
+  float snapGuideY = -1.0f;
   char viewJsonBuf[65536] = {};
   std::vector<std::string> undoStack;
   std::vector<std::string> redoStack;
@@ -977,7 +996,9 @@ struct App {
     DeviceResponse r;
     if (api("GET", "/api/usage", "", "", r)) {
       usage = json_text(r.body);
-      if (!usage.empty()) {
+      if (usagePreviewActive) {
+        liveUsage = usage;
+      } else if (!usage.empty()) {
         std::string raw = r.body;
         if (usageApply(String(raw.c_str(), raw.size()))) previewDirty = true;
       }
@@ -1715,7 +1736,10 @@ struct App {
     JsonDocument d;
     if (!deserializeJson(d, s)) return;
     view = d;
-    selected = std::min(selected, (int)(view["draw"].as<JsonArray>().size()) - 1);
+    ensureComponentIds();
+    selected = -1;
+    selection.clear();
+    syncSelection();
     previewDirty = true;
     syncJson();
   }
@@ -1728,7 +1752,10 @@ struct App {
     JsonDocument d;
     if (!deserializeJson(d, s)) return;
     view = d;
-    selected = std::min(selected, (int)(view["draw"].as<JsonArray>().size()) - 1);
+    ensureComponentIds();
+    selected = -1;
+    selection.clear();
+    syncSelection();
     previewDirty = true;
     syncJson();
   }
@@ -1750,7 +1777,9 @@ struct App {
       return false;
     }
     view = d;
+    ensureComponentIds();
     selected = -1;
+    selection.clear();
     undoStack.clear();
     redoStack.clear();
     viewDirty = false;
@@ -1864,7 +1893,10 @@ struct App {
     layer["h"] = asset.info.height;
     layer["s"] = 1;
     layer["a"] = "l";
-    selected = (int)draw.size() - 1;
+    layer["z"] = maxZ() + 1;
+    ensureComponentIds();
+    draw = view["draw"].as<JsonArray>();
+    selectOnly((int)draw.size() - 1);
     viewDirty = true;
     previewDirty = true;
     previewAnimStart = SDL_GetTicks();
@@ -1931,6 +1963,233 @@ struct App {
       if (!manager.downloadImage(name, path, error))
         notify("Could not cache image " + name + ": " + error);
     }
+  }
+
+  void setUsagePreviewMode(int mode) {
+    if (mode < 0) mode = 0;
+    if (mode > 3) mode = 3;
+    if (mode == 0) {
+      usagePreviewMode = 0;
+      usagePreviewActive = false;
+      if (!liveUsage.empty()) usageApply(String(liveUsage.c_str(), liveUsage.size()));
+      previewDirty = true;
+      return;
+    }
+    if (!usagePreviewActive) liveUsage = usage;
+    usagePreviewActive = true;
+    usagePreviewMode = mode;
+    const char* mock = nullptr;
+    if (mode == 1) {
+      mock = "{\"providers\":["
+             "{\"id\":\"claude\",\"name\":\"Claude\",\"ok\":true,\"status\":\"waiting\",\"metrics\":[]},"
+             "{\"id\":\"chatgpt\",\"name\":\"ChatGPT\",\"ok\":true,\"status\":\"waiting\",\"metrics\":[]},"
+             "{\"id\":\"deepseek\",\"name\":\"DeepSeek\",\"ok\":true,\"status\":\"waiting\",\"metrics\":[]}]}";
+    } else if (mode == 2) {
+      mock = "{\"providers\":["
+             "{\"id\":\"claude\",\"name\":\"Claude\",\"ok\":false,\"status\":\"error\",\"metrics\":["
+             "{\"label\":\"5h\",\"pct\":29,\"resetMin\":142},{\"label\":\"7d\",\"pct\":4,\"resetMin\":9876}]},"
+             "{\"id\":\"chatgpt\",\"name\":\"ChatGPT\",\"ok\":false,\"status\":\"error\",\"metrics\":["
+             "{\"label\":\"5h\",\"pct\":62,\"resetMin\":88}]},"
+             "{\"id\":\"deepseek\",\"name\":\"DeepSeek\",\"ok\":false,\"status\":\"error\",\"metrics\":["
+             "{\"label\":\"balance\",\"pct\":81,\"resetMin\":0,\"value\":\"110 CNY\"}]}]}";
+    } else {
+      mock = "{\"providers\":["
+             "{\"id\":\"claude\",\"name\":\"Claude\",\"ok\":true,\"status\":\"normal\",\"metrics\":["
+             "{\"label\":\"Very long five-hour metric label\",\"pct\":72,\"resetMin\":142,\"value\":\"1,234,567,890 tokens\"},"
+             "{\"label\":\"Weekly usage window\",\"pct\":4,\"resetMin\":9876}]},"
+             "{\"id\":\"chatgpt\",\"name\":\"ChatGPT\",\"ok\":true,\"status\":\"normal\",\"metrics\":["
+             "{\"label\":\"Five-hour window\",\"pct\":62,\"resetMin\":88,\"value\":\"62 percent used\"}]},"
+             "{\"id\":\"deepseek\",\"name\":\"DeepSeek\",\"ok\":true,\"status\":\"normal\",\"metrics\":["
+             "{\"label\":\"Account balance remaining\",\"pct\":81,\"resetMin\":0,\"value\":\"12,345,678,901 CNY\"}]}]}";
+    }
+    usageApply(String(mock));
+    previewDirty = true;
+  }
+
+  std::string autosavePath() const {
+#if defined(_WIN32)
+    const char* base = std::getenv("APPDATA");
+    return std::string(base ? base : ".") + "/smalltv/editor-autosave.json";
+#else
+    const char* home = std::getenv("HOME");
+    return std::string(home ? home : ".") + "/.config/smalltv/editor-autosave.json";
+#endif
+  }
+
+  void autosaveTick() {
+    if (!viewLoaded || !viewDirty) return;
+    const uint32_t now = SDL_GetTicks();
+    if (lastAutosave && now - lastAutosave < 1500) return;
+    lastAutosave = now;
+    const std::string content = serializeView();
+    if (content == lastAutosaveContent) return;
+    std::error_code error;
+    std::filesystem::create_directories(
+        std::filesystem::path(autosavePath()).parent_path(), error);
+    if (write_file(autosavePath(), content)) lastAutosaveContent = content;
+  }
+
+  static std::string bundleBase64Encode(const std::string& input) {
+    static const char* alphabet =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    out.reserve((input.size() + 2) / 3 * 4);
+    for (size_t i = 0; i < input.size(); i += 3) {
+      const uint32_t a = (uint8_t)input[i];
+      const uint32_t b = i + 1 < input.size() ? (uint8_t)input[i + 1] : 0;
+      const uint32_t c = i + 2 < input.size() ? (uint8_t)input[i + 2] : 0;
+      const uint32_t value = (a << 16) | (b << 8) | c;
+      out += alphabet[(value >> 18) & 63];
+      out += alphabet[(value >> 12) & 63];
+      out += i + 1 < input.size() ? alphabet[(value >> 6) & 63] : '=';
+      out += i + 2 < input.size() ? alphabet[value & 63] : '=';
+    }
+    return out;
+  }
+
+  static bool bundleBase64Decode(const std::string& input, std::string& out) {
+    auto value = [](char c) -> int {
+      if (c >= 'A' && c <= 'Z') return c - 'A';
+      if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+      if (c >= '0' && c <= '9') return c - '0' + 52;
+      if (c == '+') return 62;
+      if (c == '/') return 63;
+      return -1;
+    };
+    out.clear();
+    uint32_t buffer = 0;
+    int bits = 0;
+    for (char c : input) {
+      if (c == '=' || c == '\r' || c == '\n' || c == ' ') continue;
+      const int v = value(c);
+      if (v < 0) return false;
+      buffer = (buffer << 6) | (uint32_t)v;
+      bits += 6;
+      if (bits >= 8) {
+        bits -= 8;
+        out += (char)((buffer >> bits) & 0xFF);
+      }
+    }
+    return true;
+  }
+
+  void exportDashboardBundle(const std::string& path) {
+    JsonDocument bundle;
+    bundle["format"] = "smalltv-dashboard";
+    bundle["version"] = 1;
+    bundle["view"].set(view.as<JsonObject>());
+    JsonObject assets = bundle["assets"].to<JsonObject>();
+    std::vector<std::string> names;
+    collectImageNames(names);
+    for (const auto& name : names) {
+      const std::string assetPath = (std::filesystem::path(imageCacheDir()) /
+                                     (name + ".simg")).string();
+      std::string data;
+      if (!read_file(assetPath.c_str(), data)) {
+        notify("Bundle export failed: missing " + name);
+        return;
+      }
+      assets[name] = bundleBase64Encode(data);
+    }
+    std::string text;
+    serializeJson(bundle, text);
+    if (write_file(path, text)) notify("Exported dashboard bundle");
+    else notify("Cannot write bundle");
+  }
+
+  void importDashboardBundle(const std::string& path) {
+    std::string text;
+    if (!read_file(path.c_str(), text)) { notify("Cannot read bundle"); return; }
+    JsonDocument bundle;
+    if (deserializeJson(bundle, text) || !bundle.is<JsonObject>()) {
+      notify("Invalid dashboard bundle"); return;
+    }
+    JsonObject savedView = bundle["view"].as<JsonObject>();
+    if (savedView.isNull()) { notify("Bundle has no view"); return; }
+    std::error_code error;
+    std::filesystem::create_directories(imageCacheDir(), error);
+    JsonObject assets = bundle["assets"].as<JsonObject>();
+    for (JsonPair asset : assets) {
+      if (!imageAssetNameValid(asset.key().c_str())) {
+        notify("Bundle has an invalid asset name");
+        return;
+      }
+      std::string data;
+      if (!bundleBase64Decode(asset.value().as<const char*>() ? asset.value().as<const char*>() : "", data)) {
+        notify("Bundle has invalid asset data");
+        return;
+      }
+      const std::string pathOut = (std::filesystem::path(imageCacheDir()) /
+                                   (std::string(asset.key().c_str()) + ".simg")).string();
+      if (!write_file(pathOut, data)) { notify("Cannot write bundled asset"); return; }
+      imagecodec::AssetInfo info;
+      std::string err;
+      if (!imagecodec::readAssetInfo(pathOut, info, err)) {
+        notify("Bundle has invalid image asset");
+        return;
+      }
+    }
+    std::string viewText;
+    serializeJson(savedView, viewText);
+    std::string err;
+    if (!loadViewText(viewText, err)) { notify("Bundle view: " + err); return; }
+    viewLoaded = true;
+    notify("Imported dashboard bundle");
+  }
+
+  void refreshImageList() {
+    imageManagerLoaded = true;
+    imageManagerError.clear();
+    DeviceResponse r;
+    if (!api("GET", "/api/images", "", "", r)) {
+      imageListJson.clear();
+      imageManagerError = "Could not load device images";
+      return;
+    }
+    imageListJson = r.body;
+  }
+
+  void openImageManager() {
+    imageManagerOpen = true;
+    imageManagerLoaded = false;
+    refreshImageList();
+  }
+
+  void imageManagerModal() {
+    if (!imageManagerOpen) return;
+    ImGui::SetNextWindowSize(ImVec2(560, 430), ImGuiCond_Appearing);
+    if (!ImGui::BeginPopupModal("Device images", &imageManagerOpen)) return;
+    if (ImGui::Button("Refresh")) refreshImageList();
+    ImGui::SameLine();
+    if (ImGui::Button("Close")) { imageManagerOpen = false; ImGui::CloseCurrentPopup(); }
+    if (!imageManagerError.empty()) ImGui::TextWrapped("%s", imageManagerError.c_str());
+    ImGui::Separator();
+    JsonDocument doc;
+    if (!imageListJson.empty() && !deserializeJson(doc, imageListJson) && doc.is<JsonArray>()) {
+      ImGui::BeginChild("##image-list", ImVec2(0, -36), true);
+      for (JsonObject image : doc.as<JsonArray>()) {
+        const std::string name = image["name"] | "";
+        char label[160];
+        snprintf(label, sizeof(label), "%s  %ux%u  %u frame(s)  %u B",
+                 name.c_str(), (unsigned)(image["width"] | 0),
+                 (unsigned)(image["height"] | 0), (unsigned)(image["frames"] | 0),
+                 (unsigned)(image["size"] | 0));
+        ImGui::PushID(name.c_str());
+        ImGui::TextUnformatted(label);
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Delete")) {
+          DeviceResponse r;
+          if (api("DELETE", "/api/image?name=" + name, "", "", r)) refreshImageList();
+          else imageManagerError = "Delete failed for " + name;
+        }
+        ImGui::PopID();
+      }
+      ImGui::EndChild();
+    } else if (imageListJson.empty() && imageManagerError.empty()) {
+      ImGui::TextDisabled("No images.");
+    }
+    ImGui::TextDisabled("Images are stored on the device; referenced assets are uploaded when saving.");
+    ImGui::EndPopup();
   }
 
   void refreshPreview() {
@@ -2342,6 +2601,121 @@ struct App {
   }
 
   // ---- editor ------------------------------------------------------------
+  std::string componentId(JsonObject l) {
+    const char* id = l["id"] | "";
+    return id;
+  }
+
+  void ensureComponentIds() {
+    JsonArray draw = view["draw"].as<JsonArray>();
+    std::set<std::string> used;
+    for (JsonObject l : draw) {
+      const std::string id = componentId(l);
+      if (!id.empty()) used.insert(id);
+    }
+    int next = 1;
+    const int count = (int)draw.size();
+    for (int i = 0; i < count; i++) {
+      draw = view["draw"].as<JsonArray>();
+      JsonObject l = draw[i];
+      if (!componentId(l).empty()) continue;
+      char id[24];
+      do snprintf(id, sizeof(id), "c%d", next++); while (used.count(id));
+      l["id"] = id;
+      used.insert(id);
+    }
+  }
+
+  int componentZ(JsonObject l, int fallback) const {
+    return l["z"] | fallback;
+  }
+
+  std::vector<int> componentsByZ(bool frontFirst = true) {
+    JsonArray draw = view["draw"].as<JsonArray>();
+    std::vector<int> order;
+    for (int i = 0; i < (int)draw.size(); i++) order.push_back(i);
+    std::stable_sort(order.begin(), order.end(), [&](int a, int b) {
+      const int za = componentZ(draw[a], a), zb = componentZ(draw[b], b);
+      return frontFirst ? za > zb : za < zb;
+    });
+    return order;
+  }
+
+  int maxZ() {
+    JsonArray draw = view["draw"].as<JsonArray>();
+    int z = 0;
+    for (int i = 0; i < (int)draw.size(); i++) z = std::max(z, componentZ(draw[i], i));
+    return z;
+  }
+
+  void selectComponent(int index, bool additive) {
+    JsonArray draw = view["draw"].as<JsonArray>();
+    if (index < 0 || index >= (int)draw.size()) {
+      selected = -1;
+      selection.clear();
+      return;
+    }
+    if (!additive) selection.clear();
+    if (selection.count(index)) selection.erase(index);
+    else selection.insert(index);
+    if (selection.empty()) {
+      selection.insert(index);
+    }
+    selected = index;
+  }
+
+  void selectOnly(int index) {
+    selection.clear();
+    if (index >= 0) selection.insert(index);
+    selected = index;
+  }
+
+  void syncSelection() {
+    JsonArray draw = view["draw"].as<JsonArray>();
+    std::set<int> valid;
+    for (int i : selection) if (i >= 0 && i < (int)draw.size()) valid.insert(i);
+    selection.swap(valid);
+    if (selection.empty()) selected = -1;
+    else if (!selection.count(selected)) selected = *selection.begin();
+  }
+
+  void reindexZFromOrder(const std::vector<int>& order) {
+    JsonArray draw = view["draw"].as<JsonArray>();
+    for (int pos = 0; pos < (int)order.size(); pos++) {
+      if (order[pos] >= 0 && order[pos] < (int)draw.size())
+        draw[order[pos]]["z"] = pos;
+    }
+  }
+
+  void moveSelectedZ(int direction, bool toEnd = false) {
+    if (selection.empty()) return;
+    pushUndo();
+    std::vector<int> order = componentsByZ(false);  // back to front
+    if (toEnd) {
+      std::vector<int> moving, rest;
+      for (int i : order) (selection.count(i) ? moving : rest).push_back(i);
+      if (direction > 0) rest.insert(rest.end(), moving.begin(), moving.end());
+      else rest.insert(rest.begin(), moving.begin(), moving.end());
+      order = std::move(rest);
+    } else if (direction != 0) {
+      if (direction > 0) {
+        for (int i = (int)order.size() - 2; i >= 0; i--) {
+          if (selection.count(order[i]) && !selection.count(order[i + 1]))
+            std::swap(order[i], order[i + 1]);
+        }
+      } else {
+        for (int i = 1; i < (int)order.size(); i++) {
+          if (selection.count(order[i]) && !selection.count(order[i - 1]))
+            std::swap(order[i], order[i - 1]);
+        }
+      }
+    }
+    reindexZFromOrder(order);
+    viewDirty = true;
+    previewDirty = true;
+    syncJson();
+  }
+
   static void layer_bounds(JsonObject l, float& x, float& y, float& w, float& h) {
     const char* t = l["t"] | "";
     x = l["x"] | 0;
@@ -2410,7 +2784,45 @@ struct App {
     } else {
       l["c"] = "#ffffff";
     }
-    selected = (int)draw.size() - 1;
+    l["z"] = maxZ() + 1;
+    ensureComponentIds();
+    draw = view["draw"].as<JsonArray>();
+    selectOnly((int)draw.size() - 1);
+    viewDirty = true;
+    previewDirty = true;
+    syncJson();
+  }
+
+  void addTemplate(const char* kind) {
+    pushUndo();
+    JsonArray draw = view["draw"].as<JsonArray>();
+    if (draw.isNull()) draw = view["draw"].to<JsonArray>();
+    if (!strcmp(kind, "clock")) {
+      draw = view["draw"].as<JsonArray>();
+      JsonObject clock = draw.add<JsonObject>();
+      clock["t"] = "text"; clock["x"] = 120; clock["y"] = 22; clock["s"] = 5;
+      clock["c"] = "#e9edf4"; clock["a"] = "c"; clock["v"] = "{HH}:{MM}";
+      clock["z"] = maxZ() + 1;
+      draw = view["draw"].as<JsonArray>();
+      JsonObject date = draw.add<JsonObject>();
+      date["t"] = "text"; date["x"] = 120; date["y"] = 64; date["s"] = 2;
+      date["c"] = "#86e2bf"; date["a"] = "c"; date["v"] = "{WD} {YYYY}-{MON}-{DD}";
+      date["z"] = maxZ() + 1;
+    } else if (!strcmp(kind, "usage")) {
+      static const char* providers[] = {"claude", "chatgpt", "deepseek"};
+      static const char* colors[] = {"#d97757", "#10a37f", "#4d6bfe"};
+      for (int i = 0; i < 3; i++) {
+        draw = view["draw"].as<JsonArray>();
+        JsonObject card = draw.add<JsonObject>();
+        card["t"] = "usage"; card["x"] = 8; card["y"] = 8 + i * 58;
+        card["w"] = 224; card["h"] = 52; card["c"] = colors[i];
+        card["provider"] = providers[i]; card["metric"] = -1;
+        card["z"] = maxZ() + 1;
+      }
+    }
+    ensureComponentIds();
+    draw = view["draw"].as<JsonArray>();
+    if (draw.size() > 0) selectOnly((int)draw.size() - 1);
     viewDirty = true;
     previewDirty = true;
     syncJson();
@@ -2460,14 +2872,105 @@ struct App {
 
   void duplicateSelected() {
     JsonArray draw = view["draw"].as<JsonArray>();
-    if (selected < 0 || selected >= (int)draw.size()) return;
+    if (selection.empty()) return;
+    const std::string sourceGroup = selectedGroupId();
+    std::string newGid;
+    std::string sourceGroupName = "Group";
+    bool duplicateGroup = false;
+    if (!sourceGroup.empty()) {
+      JsonObject sourceGroupObject = groupById(sourceGroup);
+      JsonArray members = sourceGroupObject["members"].as<JsonArray>();
+      sourceGroupName = (const char*)(sourceGroupObject["name"] | "Group");
+      duplicateGroup = members.size() == selection.size();
+      if (duplicateGroup) newGid = newGroupId();
+    }
     pushUndo();
-    JsonObject src = draw[selected];
-    JsonObject dst = draw.add<JsonObject>();
-    for (JsonPair p : src) dst[p.key()] = p.value();
-    dst["x"] = (src["x"] | 0) + 8;
-    dst["y"] = (src["y"] | 0) + 8;
-    selected = (int)draw.size() - 1;
+    std::vector<int> indices(selection.begin(), selection.end());
+    std::sort(indices.begin(), indices.end());
+    std::vector<int> added;
+    const int baseZ = maxZ() + 1;
+    int offset = 0;
+    for (int index : indices) {
+      draw = view["draw"].as<JsonArray>();
+      if (index < 0 || index >= (int)draw.size()) continue;
+      JsonDocument sourceDoc;
+      sourceDoc.set(draw[index]);
+      JsonObject src = sourceDoc.as<JsonObject>();
+      draw = view["draw"].as<JsonArray>();
+      JsonObject dst = draw.add<JsonObject>();
+      for (JsonPair p : src) dst[p.key()] = p.value();
+      dst["x"] = (src["x"] | 0) + 8;
+      dst["y"] = (src["y"] | 0) + 8;
+      dst["z"] = baseZ + offset++;
+      dst.remove("id");
+      if (duplicateGroup) dst["gid"] = newGid.c_str();
+      else dst.remove("gid");
+      added.push_back((int)draw.size() - 1);
+    }
+    if (added.empty()) return;
+    ensureComponentIds();
+    if (duplicateGroup) {
+      JsonArray groups = view["groups"].as<JsonArray>();
+      JsonObject group = groups.add<JsonObject>();
+      group["id"] = newGid.c_str();
+      group["name"] = sourceGroupName + " copy";
+      JsonArray members = group["members"].to<JsonArray>();
+      draw = view["draw"].as<JsonArray>();
+      for (int i : added) members.add(componentId(draw[i]).c_str());
+    }
+    selection.clear();
+    for (int i : added) selection.insert(i);
+    selected = added.back();
+    viewDirty = true;
+    previewDirty = true;
+    syncJson();
+  }
+
+  void copySelected() {
+    JsonArray draw = view["draw"].as<JsonArray>();
+    JsonDocument doc;
+    JsonArray copy = doc.to<JsonArray>();
+    for (int index : selection) {
+      if (index < 0 || index >= (int)draw.size()) continue;
+      JsonObject item = copy.add<JsonObject>();
+      JsonObject source = draw[index];
+      for (JsonPair p : source) item[p.key()] = p.value();
+    }
+    serializeJson(doc, clipboard);
+    notify(selection.empty() ? "Nothing selected" : "Components copied");
+  }
+
+  void pasteComponents() {
+    JsonDocument doc;
+    if (deserializeJson(doc, clipboard) || !doc.is<JsonArray>()) {
+      notify("Clipboard is empty");
+      return;
+    }
+    JsonArray source = doc.as<JsonArray>();
+    if (source.size() == 0) return;
+    pushUndo();
+    JsonArray draw = view["draw"].as<JsonArray>();
+    const int baseZ = maxZ() + 1;
+    std::vector<int> added;
+    int offset = 0;
+    for (JsonObject src : source) {
+      JsonDocument sourceDoc;
+      sourceDoc.set(src);
+      JsonObject copy = sourceDoc.as<JsonObject>();
+      draw = view["draw"].as<JsonArray>();
+      JsonObject dst = draw.add<JsonObject>();
+      for (JsonPair p : copy) dst[p.key()] = p.value();
+      dst["x"] = (copy["x"] | 0) + 12;
+      dst["y"] = (copy["y"] | 0) + 12;
+      dst["z"] = baseZ + offset++;
+      dst.remove("id");
+      dst.remove("gid");
+      added.push_back((int)draw.size() - 1);
+    }
+    ensureComponentIds();
+    selection.clear();
+    for (int i : added) selection.insert(i);
+    selected = added.back();
     viewDirty = true;
     previewDirty = true;
     syncJson();
@@ -2475,30 +2978,188 @@ struct App {
 
   void deleteSelected() {
     JsonArray draw = view["draw"].as<JsonArray>();
-    if (selected < 0 || selected >= (int)draw.size()) return;
+    if (selection.empty()) return;
     pushUndo();
-    draw.remove(selected);
-    selected = std::min(selected, (int)draw.size() - 1);
+    std::vector<int> indices(selection.begin(), selection.end());
+    std::sort(indices.begin(), indices.end(), std::greater<int>());
+    std::set<std::string> removedIds;
+    for (int index : indices) {
+      if (index < 0 || index >= (int)draw.size()) continue;
+      removedIds.insert(componentId(draw[index]));
+      draw.remove(index);
+    }
+    JsonArray groups = view["groups"].as<JsonArray>();
+    for (int i = (int)groups.size() - 1; i >= 0; i--) {
+      JsonObject group = groups[i];
+      JsonArray members = group["members"].as<JsonArray>();
+      for (int j = (int)members.size() - 1; j >= 0; j--) {
+        const std::string id = members[j] | "";
+        if (removedIds.count(id)) members.remove(j);
+      }
+      if (members.size() == 0) groups.remove(i);
+    }
+    selected = -1;
+    selection.clear();
+    syncSelection();
     viewDirty = true;
     previewDirty = true;
     syncJson();
   }
 
-  void moveLayer(int delta) {
+  JsonObject groupById(const std::string& id) {
+    JsonArray groups = view["groups"].as<JsonArray>();
+    for (JsonObject group : groups) {
+      if (id == (const char*)(group["id"] | "")) return group;
+    }
+    return JsonObject();
+  }
+
+  std::string selectedGroupId() {
     JsonArray draw = view["draw"].as<JsonArray>();
-    if (selected < 0 || selected >= (int)draw.size()) return;
-    int to = selected + delta;
-    if (to < 0 || to >= (int)draw.size()) return;
+    std::string gid;
+    for (int index : selection) {
+      if (index < 0 || index >= (int)draw.size()) continue;
+      const std::string current = draw[index]["gid"] | "";
+      if (current.empty()) return "";
+      if (gid.empty()) gid = current;
+      else if (gid != current) return "";
+    }
+    return gid;
+  }
+
+  void selectGroup(const std::string& gid) {
+    JsonArray draw = view["draw"].as<JsonArray>();
+    selection.clear();
+    for (int i = 0; i < (int)draw.size(); i++) {
+      if (gid == (const char*)(draw[i]["gid"] | "")) selection.insert(i);
+    }
+    selected = selection.empty() ? -1 : *selection.begin();
+    syncSelection();
+  }
+
+  std::string newGroupId() {
+    JsonArray groups = view["groups"].as<JsonArray>();
+    int serial = (int)groups.size() + 1;
+    std::string id;
+    do {
+      id = "g" + std::to_string(serial++);
+    } while (!groupById(id).isNull());
+    return id;
+  }
+
+  void groupSelected() {
+    if (selection.size() < 2) {
+      notify("Select at least two components to group");
+      return;
+    }
     pushUndo();
-    std::string a, b;
-    serializeJson(draw[selected], a);
-    serializeJson(draw[to], b);
-    JsonDocument da, db;
-    deserializeJson(da, a);
-    deserializeJson(db, b);
-    draw[selected].set(db.as<JsonVariant>());
-    draw[to].set(da.as<JsonVariant>());
-    selected = to;
+    JsonArray draw = view["draw"].as<JsonArray>();
+    ensureComponentIds();
+    JsonArray groups = view["groups"].as<JsonArray>();
+    if (groups.isNull()) groups = view["groups"].to<JsonArray>();
+    const std::string gid = newGroupId();
+    JsonObject group = groups.add<JsonObject>();
+    group["id"] = gid;
+    group["name"] = "Group";
+    JsonArray members = group["members"].to<JsonArray>();
+    draw = view["draw"].as<JsonArray>();
+    for (int index : selection) {
+      if (index < 0 || index >= (int)draw.size()) continue;
+      const std::string id = componentId(draw[index]);
+      if (id.empty()) continue;
+      members.add(id.c_str());
+      draw[index]["gid"] = gid.c_str();
+    }
+    viewDirty = true;
+    previewDirty = true;
+    syncJson();
+  }
+
+  void ungroupSelected() {
+    const std::string gid = selectedGroupId();
+    if (gid.empty()) return;
+    pushUndo();
+    std::set<std::string> removed;
+    JsonArray draw = view["draw"].as<JsonArray>();
+    for (int index : selection) {
+      if (index >= 0 && index < (int)draw.size()) {
+        removed.insert(componentId(draw[index]));
+        draw[index].remove("gid");
+      }
+    }
+    JsonArray groups = view["groups"].as<JsonArray>();
+    for (int i = 0; i < (int)groups.size(); i++) {
+      JsonObject group = groups[i];
+      if (gid != (const char*)(group["id"] | "")) continue;
+      JsonArray members = group["members"].as<JsonArray>();
+      for (int j = (int)members.size() - 1; j >= 0; j--) {
+        const std::string id = members[j] | "";
+        if (removed.count(id)) members.remove(j);
+      }
+      if (members.size() == 0) groups.remove(i);
+      break;
+    }
+    viewDirty = true;
+    previewDirty = true;
+    syncJson();
+  }
+
+  void setGroupHidden(const std::string& gid, bool hidden) {
+    JsonArray draw = view["draw"].as<JsonArray>();
+    for (JsonObject l : draw) {
+      if (gid == (const char*)(l["gid"] | "")) l["hidden"] = hidden;
+    }
+    JsonObject group = groupById(gid);
+    if (!group.isNull()) group["hidden"] = hidden;
+  }
+
+  void setGroupLocked(const std::string& gid, bool locked) {
+    JsonArray draw = view["draw"].as<JsonArray>();
+    for (JsonObject l : draw) {
+      if (gid == (const char*)(l["gid"] | "")) l["locked"] = locked;
+    }
+    JsonObject group = groupById(gid);
+    if (!group.isNull()) group["locked"] = locked;
+  }
+
+  void moveLayer(int delta) { moveSelectedZ(delta); }
+
+  void distributeSelected(bool horizontal) {
+    if (selection.size() < 3) {
+      notify("Select at least three components to distribute");
+      return;
+    }
+    pushUndo();
+    JsonArray draw = view["draw"].as<JsonArray>();
+    std::vector<int> indices;
+    for (int i : selection) if (i >= 0 && i < (int)draw.size()) indices.push_back(i);
+    std::sort(indices.begin(), indices.end(), [&](int a, int b) {
+      float ax, ay, aw, ah, bx, by, bw, bh;
+      layer_bounds(draw[a], ax, ay, aw, ah);
+      layer_bounds(draw[b], bx, by, bw, bh);
+      return horizontal ? ax < bx : ay < by;
+    });
+    float first = 0, last = 0, total = 0;
+    for (int i = 0; i < (int)indices.size(); i++) {
+      float x, y, w, h;
+      layer_bounds(draw[indices[i]], x, y, w, h);
+      if (i == 0) first = horizontal ? x : y;
+      last = horizontal ? x + w : y + h;
+      total += horizontal ? w : h;
+    }
+    const float gap = (last - first - total) / (float)(indices.size() - 1);
+    float cursor = first;
+    for (int index : indices) {
+      float x, y, w, h;
+      layer_bounds(draw[index], x, y, w, h);
+      if (horizontal) {
+        draw[index]["x"] = (int)lroundf(cursor);
+        cursor += w + gap;
+      } else {
+        draw[index]["y"] = (int)lroundf(cursor);
+        cursor += h + gap;
+      }
+    }
     viewDirty = true;
     previewDirty = true;
     syncJson();
@@ -2566,25 +3227,201 @@ struct App {
     }
   }
 
+  bool style_checkbox(JsonObject style, const char* key, const char* label, bool fallback) {
+    bool value = style[key] | fallback;
+    if (ImGui::Checkbox(label, &value)) {
+      style[key] = value;
+      return true;
+    }
+    return false;
+  }
+
+  bool style_align(JsonObject style, const char* key, const char* label, const char* fallback) {
+    static const char* names[] = {"auto", "l", "c", "r"};
+    static const char* shown[] = {"Auto", "Left", "Centre", "Right"};
+    const char* cur = style[key] | fallback;
+    int index = !strcmp(cur, "l") ? 1 : !strcmp(cur, "c") ? 2 : !strcmp(cur, "r") ? 3 : 0;
+    ImGui::TextDisabled("%s", label);
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::Combo((std::string("##align") + key).c_str(), &index, shown, 4)) {
+      style[key] = names[index];
+      return true;
+    }
+    return false;
+  }
+
+  void applyUsagePreset(JsonObject style, int preset) {
+    if (preset <= 0) return;
+    style["showName"] = true;
+    style["showDot"] = true;
+    style["showLabel"] = true;
+    style["showValue"] = true;
+    style["showBar"] = true;
+    style["showReset"] = true;
+    style["showPanel"] = true;
+    style["barAuto"] = true;
+    style["nameAlign"] = "l";
+    style["labelAlign"] = "auto";
+    style["valueAlign"] = "auto";
+    style["resetAlign"] = "l";
+    style["resetSize"] = 1;
+    if (preset == 1) {          // Standard
+      style["nameSize"] = 2; style["labelSize"] = 0; style["valueSize"] = 0;
+      style["barHeight"] = 8; style["radius"] = 8; style["padding"] = 12;
+    } else if (preset == 2) {   // Compact
+      style["nameSize"] = 1; style["labelSize"] = 1; style["valueSize"] = 2;
+      style["barHeight"] = 4; style["radius"] = 6; style["padding"] = 8;
+      style["showReset"] = false;
+    } else if (preset == 3) {   // Large value
+      style["nameSize"] = 2; style["labelSize"] = 0; style["valueSize"] = 5;
+      style["barHeight"] = 8; style["radius"] = 8; style["padding"] = 10;
+    } else if (preset == 4) {   // Minimal
+      style["nameSize"] = 1; style["labelSize"] = 1; style["valueSize"] = 3;
+      style["barHeight"] = 4; style["radius"] = 4; style["padding"] = 6;
+      style["showPanel"] = false; style["showReset"] = false;
+      style["showLabel"] = false;
+    }
+  }
+
+  void usageStyleEditor(JsonObject l, bool& changed) {
+    std::string key = componentId(l);
+    if (key.empty()) key = "selected";
+    JsonObject style = l["style"].as<JsonObject>();
+    if (style.isNull()) style = l["style"].to<JsonObject>();
+    if (ImGui::CollapsingHeader("Usage style", ImGuiTreeNodeFlags_DefaultOpen)) {
+      static const char* presetNames[] = {"Custom", "Standard", "Compact", "Large value", "Minimal"};
+      int preset = 0;
+      ImGui::TextDisabled("Style preset");
+      ImGui::SetNextItemWidth(-1);
+      if (ImGui::Combo("##usage-preset", &preset, presetNames, 5) && preset) {
+        applyUsagePreset(style, preset);
+        changed = true;
+      }
+      const float styleHalf = std::max(70.0f, ImGui::GetContentRegionAvail().x / 2 - 3);
+      if (ImGui::Button("Copy style", ImVec2(styleHalf, 0))) {
+        JsonDocument clip;
+        clip.set(style);
+        serializeJson(clip, styleClipboard);
+        notify("Usage style copied");
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Paste style", ImVec2(styleHalf, 0))) {
+        JsonDocument clip;
+        if (deserializeJson(clip, styleClipboard) || !clip.is<JsonObject>()) {
+          notify("Usage style clipboard is empty");
+        } else {
+          l["style"].set(clip.as<JsonObject>());
+          style = l["style"].as<JsonObject>();
+          changed = true;
+          notify("Usage style pasted");
+        }
+      }
+      changed |= input_int_json(style, "nameSize", "Name size (0 auto)", 0, 6, 2);
+      changed |= input_int_json(style, "labelSize", "Label size (0 auto)", 0, 6, 0);
+      changed |= input_int_json(style, "valueSize", "Value size (0 auto)", 0, 6, 0);
+      changed |= input_int_json(style, "resetSize", "Reset size", 0, 6, 1);
+      changed |= style_align(style, "nameAlign", "Name align", "l");
+      changed |= style_align(style, "labelAlign", "Label align", "auto");
+      changed |= style_align(style, "valueAlign", "Value align", "auto");
+      changed |= style_align(style, "resetAlign", "Reset align", "l");
+      changed |= input_int_json(style, "barHeight", "Bar height", 1, 32, 8);
+      changed |= input_int_json(style, "radius", "Panel radius", 0, 32, 8);
+      changed |= input_int_json(style, "padding", "Padding", 0, 60, 12);
+      changed |= style_checkbox(style, "showName", "Show name", true);
+      changed |= style_checkbox(style, "showDot", "Show status dot", true);
+      changed |= style_checkbox(style, "showLabel", "Show metric label", true);
+      changed |= style_checkbox(style, "showValue", "Show value", true);
+      changed |= style_checkbox(style, "showBar", "Show bar", true);
+      changed |= style_checkbox(style, "showReset", "Show reset", true);
+      changed |= style_checkbox(style, "showPanel", "Show panel", true);
+      bool barAuto = style["barAuto"] | true;
+      if (ImGui::Checkbox("Automatic bar colour", &barAuto)) {
+        style["barAuto"] = barAuto;
+        changed = true;
+      }
+      changed |= color_edit_json(style, "panel", "Panel colour", "#181818");
+      changed |= color_edit_json(style, "track", "Track colour", "#2a2a28");
+      changed |= color_edit_json(style, "valueColor", "Value colour", "#ffffff");
+      changed |= color_edit_json(style, "labelColor", "Label colour", "#8b96a5");
+      changed |= color_edit_json(style, "resetColor", "Reset colour", "#8b96a5");
+      changed |= color_edit_json(style, "nameColor", "Name colour", "#d97757");
+      if (!barAuto) changed |= color_edit_json(style, "barColor", "Bar colour", "#7c6b52");
+      changed |= input_text_json(style, "title", "Card title", false,
+                                 "Blank uses the provider name");
+      static char labelBuf[5][VIEW_USAGE_TEXT_MAX] = {};
+      static std::string labelKey;
+      if (labelKey != key) {
+        labelKey = key;
+        JsonArray labels = style["labels"].as<JsonArray>();
+        for (int i = 0; i < 5; i++) {
+          const char* value = (i < (int)labels.size()) ? (const char*)(labels[i] | "") : "";
+          snprintf(labelBuf[i], sizeof(labelBuf[i]), "%s", value ? value : "");
+        }
+      }
+      ImGui::TextDisabled("Metric labels (one per metric)");
+      bool labelsChanged = false;
+      for (int i = 0; i < 5; i++) {
+        ImGui::PushID(i);
+        ImGui::SetNextItemWidth(-1);
+        char id[24];
+        snprintf(id, sizeof(id), "##usage-label-%d", i);
+        if (ImGui::InputText(id, labelBuf[i], sizeof(labelBuf[i]))) labelsChanged = true;
+        ImGui::PopID();
+      }
+      if (labelsChanged) {
+        JsonArray labels = style["labels"].to<JsonArray>();
+        for (int i = 0; i < 5; i++) labels.add(labelBuf[i]);
+        changed = true;
+      }
+      if (ImGui::Button("Reset usage style", ImVec2(-1, 0))) {
+        l.remove("style");
+        changed = true;
+        labelKey.clear();
+      }
+    }
+  }
+
   void layerProperties() {
     JsonArray draw = view["draw"].as<JsonArray>();
+    if (selection.size() > 1) {
+      ImGui::Text("%d components selected", (int)selection.size());
+      ImGui::TextDisabled("Drag to move them together.");
+      if (ImGui::Button("Group selected", ImVec2(-1, 0))) groupSelected();
+      if (!selectedGroupId().empty() && ImGui::Button("Ungroup", ImVec2(-1, 0))) ungroupSelected();
+      if (ImGui::Button("Duplicate", ImVec2(-1, 0))) duplicateSelected();
+      if (ImGui::Button("Delete", ImVec2(-1, 0))) deleteSelected();
+      if (theme::secondaryButton("Distribute horizontally", ImVec2(-1, 0))) distributeSelected(true);
+      if (theme::secondaryButton("Distribute vertically", ImVec2(-1, 0))) distributeSelected(false);
+      if (theme::secondaryButton("Bring forward", ImVec2(-1, 0))) moveSelectedZ(1);
+      if (theme::secondaryButton("Send backward", ImVec2(-1, 0))) moveSelectedZ(-1);
+      return;
+    }
     if (selected < 0 || selected >= (int)draw.size()) {
-      ImGui::TextDisabled("Select a layer on the canvas or in the list.");
+      ImGui::TextDisabled("Select a component on the canvas or in the list.");
       ImGui::Spacing();
       ImGui::SeparatorText("View defaults");
       JsonObject vo = view.as<JsonObject>();
       color_edit_json(vo, "bg", "Background", "#0b1420");
       input_int_json(vo, "pr", "Priority", 0, 255, 100);
       input_int_json(vo, "ttl", "TTL (seconds)", 0, 86400, 15);
-      ImGui::TextDisabled("Layers: %d", (int)draw.size());
+      ImGui::TextDisabled("Components: %d", (int)draw.size());
       ImGui::Spacing();
-      ImGui::TextWrapped("Drag a layer to move it. Drag the bottom-right handle to resize.");
+      ImGui::TextWrapped("Drag a component to move it. Drag the bottom-right handle to resize.");
       return;
     }
     JsonObject l = draw[selected];
     const char* t = l["t"] | "";
     bool changed = false;
     ImGui::Text("Type: %s", t);
+    changed |= input_text_json(l, "name", "Component name");
+    changed |= input_int_json(l, "z", "Z order", -32768, 32767, componentZ(l, selected));
+    const std::string cid = componentId(l);
+    if (!cid.empty()) ImGui::TextDisabled("ID: %s", cid.c_str());
+    bool hidden = l["hidden"] | false;
+    if (ImGui::Checkbox("Hidden", &hidden)) { l["hidden"] = hidden; changed = true; }
+    ImGui::SameLine();
+    bool locked = l["locked"] | false;
+    if (ImGui::Checkbox("Locked", &locked)) { l["locked"] = locked; changed = true; }
     changed |= input_int_json(l, "x", "X", -512, 512, 0);
     changed |= input_int_json(l, "y", "Y", -512, 512, 0);
     changed |= color_edit_json(l, "c", "Colour", "#ffffff");
@@ -2609,6 +3446,9 @@ struct App {
         int pi = !strcmp(cur, "chatgpt") ? 1 : !strcmp(cur, "deepseek") ? 2 : 0;
         if (ImGui::Combo("Provider", &pi, providers, 3)) { l["provider"] = providers[pi]; changed = true; }
         changed |= input_int_json(l, "metric", "Metric (-1 all)", -1, 32, -1);
+        usageStyleEditor(l, changed);
+        draw = view["draw"].as<JsonArray>();
+        if (selected >= 0 && selected < (int)draw.size()) l = draw[selected];
       }
     } else if (!strcmp(t, "circle")) {
       changed |= input_int_json(l, "r", "Radius", 1, 255, 20);
@@ -2681,16 +3521,43 @@ struct App {
     ImGui::SameLine();
     if (theme::secondaryButton("Redo")) redo();
     ImGui::SameLine();
+    if (theme::secondaryButton("Copy")) copySelected();
+    ImGui::SameLine();
+    if (theme::secondaryButton("Paste")) pasteComponents();
+    ImGui::SameLine();
     if (theme::secondaryButton("Duplicate")) duplicateSelected();
     ImGui::SameLine();
     if (theme::secondaryButton("Delete")) deleteSelected();
+    ImGui::SameLine();
+    if (theme::secondaryButton("Group")) groupSelected();
+    ImGui::SameLine();
+    if (theme::secondaryButton("Ungroup")) ungroupSelected();
+    ImGui::NewLine();
+    ImGui::Checkbox("Snap", &snapEnabled);
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(70);
+    ImGui::InputInt("##snapgrid", &snapGrid);
+    if (snapGrid < 1) snapGrid = 1;
+    if (snapGrid > 40) snapGrid = 40;
+    ImGui::SameLine();
+    ImGui::Checkbox("Guides", &showGuides);
+    ImGui::SameLine();
+    ImGui::Checkbox("Rulers", &showRulers);
+    ImGui::SameLine();
+    ImGui::TextDisabled("Usage preview");
+    ImGui::SameLine();
+    static const char* previewModes[] = {"Live", "Waiting", "Error", "Long values"};
+    int previewMode = usagePreviewMode;
+    ImGui::SetNextItemWidth(116);
+    if (ImGui::Combo("##usage-preview", &previewMode, previewModes, 4))
+      setUsagePreviewMode(previewMode);
   }
 
   void editorLayerPane() {
-    paneTitle("LAYERS");
+    paneTitle("COMPONENTS");
     ImGui::Spacing();
     ImGui::SetNextItemWidth(-1);
-    if (ImGui::BeginCombo("##addlayer", "Add layer...")) {
+    if (ImGui::BeginCombo("##addcomponent", "Add component...")) {
       const char* types[] = {"text", "rect", "rrect", "circle", "line", "icon",
                              "bitmap", "image", "usage", "fill"};
       for (const char* t : types) {
@@ -2699,6 +3566,9 @@ struct App {
           else addLayer(t);
         }
       }
+      ImGui::Separator();
+      if (ImGui::Selectable("Template: clock")) addTemplate("clock");
+      if (ImGui::Selectable("Template: usage stack")) addTemplate("usage");
       ImGui::EndCombo();
     }
     if (theme::secondaryButton("Background image...", ImVec2(-1, 0)))
@@ -2717,26 +3587,74 @@ struct App {
         }
       }
     }
-    ImGui::Spacing();
+    JsonArray groups = view["groups"].as<JsonArray>();
+    if (groups.size() > 0) {
+      ImGui::SeparatorText("Groups");
+      for (JsonObject group : groups) {
+        const std::string gid = group["id"] | "";
+        if (gid.empty()) continue;
+        const bool selectedGroup = selectedGroupId() == gid;
+        char label[96];
+        snprintf(label, sizeof(label), "group  %s  (%d)", (const char*)(group["name"] | gid.c_str()),
+                 (int)(group["members"].as<JsonArray>().size()));
+        ImGui::PushID(gid.c_str());
+        if (ImGui::Selectable(label, selectedGroup, 0,
+                              ImVec2(std::max(55.0f, ImGui::GetContentRegionAvail().x - 62), 0)))
+          selectGroup(gid);
+        ImGui::SameLine();
+        if (ImGui::SmallButton((group["hidden"] | false) ? "S" : "H")) {
+          pushUndo();
+          setGroupHidden(gid, !(group["hidden"] | false));
+          viewDirty = true;
+          previewDirty = true;
+          syncJson();
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Hide or show group");
+        ImGui::SameLine();
+        if (ImGui::SmallButton((group["locked"] | false) ? "U" : "L")) {
+          pushUndo();
+          setGroupLocked(gid, !(group["locked"] | false));
+          viewDirty = true;
+          previewDirty = true;
+          syncJson();
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Lock or unlock group");
+        ImGui::PopID();
+      }
+    }
+    ImGui::SeparatorText("Component stack");
+    ImGui::BeginChild("##layers", ImVec2(0, -112), true);
     JsonArray draw = view["draw"].as<JsonArray>();
-    ImGui::BeginChild("##layers", ImVec2(0, -42), true);
-    for (int i = (int)draw.size() - 1; i >= 0; i--) {
+    for (int i : componentsByZ(true)) {
       JsonObject l = draw[i];
-      char label[180];
+      char label[220];
       const char* t = l["t"] | "?";
-      if (!strcmp(t, "text")) snprintf(label, sizeof(label), "%02d   TEXT   %s", i, (const char*)(l["v"] | ""));
-      else if (!strcmp(t, "usage")) snprintf(label, sizeof(label), "%02d   USAGE  %s", i, (const char*)(l["provider"] | ""));
-      else if (!strcmp(t, "icon")) snprintf(label, sizeof(label), "%02d   ICON   %s", i, (const char*)(l["v"] | ""));
-      else if (!strcmp(t, "image")) snprintf(label, sizeof(label), "%02d   IMAGE  %s", i, (const char*)(l["src"] | ""));
-      else snprintf(label, sizeof(label), "%02d   %s", i, t);
-      if (ImGui::Selectable(label, selected == i, 0, ImVec2(0, 26))) selected = i;
+      const char* name = l["name"] | "";
+      std::string detail = name;
+      if (detail.empty()) detail = (const char*)(l["v"] | "");
+      if (detail.empty()) detail = (const char*)(l["provider"] | "");
+      if (detail.empty()) detail = (const char*)(l["src"] | "");
+      const int z = componentZ(l, i);
+      snprintf(label, sizeof(label), "%03d  %s  %s%s%s", z, t, detail.c_str(),
+               (l["hidden"] | false) ? "  [hidden]" : "",
+               (l["locked"] | false) ? "  [locked]" : "");
+      if (ImGui::Selectable(label, selection.count(i), 0, ImVec2(0, 26))) {
+        selectComponent(i, ImGui::GetIO().KeyShift || ImGui::GetIO().KeyCtrl);
+      }
     }
     ImGui::EndChild();
-    if (theme::secondaryButton("Up")) moveLayer(-1);
+    const float half = std::max(54.0f, ImGui::GetContentRegionAvail().x / 2 - 3);
+    if (theme::secondaryButton("Up", ImVec2(half, 0))) moveLayer(1);
     ImGui::SameLine();
-    if (theme::secondaryButton("Down")) moveLayer(1);
+    if (theme::secondaryButton("Down", ImVec2(half, 0))) moveLayer(-1);
+    ImGui::NewLine();
+    if (theme::secondaryButton("Front", ImVec2(half, 0))) moveSelectedZ(1, true);
     ImGui::SameLine();
-    if (theme::secondaryButton("Delete")) deleteSelected();
+    if (theme::secondaryButton("Back", ImVec2(half, 0))) moveSelectedZ(-1, true);
+    ImGui::NewLine();
+    if (theme::secondaryButton("Group", ImVec2(half, 0))) groupSelected();
+    ImGui::SameLine();
+    if (theme::secondaryButton("Ungroup", ImVec2(half, 0))) ungroupSelected();
   }
 
   void editorActions() {
@@ -2749,11 +3667,23 @@ struct App {
         else notify("Cannot write " + p);
       });
     }
+    if (theme::secondaryButton("Export bundle...", ImVec2(-1, 0))) {
+      dialog.openSave("Export dashboard bundle", ".smalltv", "dashboard.smalltv",
+                      [this](const std::string& p) { exportDashboardBundle(p); });
+    }
+    if (theme::secondaryButton("Import bundle...", ImVec2(-1, 0))) {
+      dialog.openOpen("Import dashboard bundle", ".smalltv",
+                      [this](const std::string& p) { importDashboardBundle(p); });
+    }
     if (theme::secondaryButton("Load device", ImVec2(-1, 0))) loadViewFromDevice();
     if (theme::secondaryButton("Save device", ImVec2(-1, 0))) saveViewToDevice();
     if (theme::secondaryButton("Send overlay", ImVec2(-1, 0))) sendOverlay(false);
     if (theme::secondaryButton("Clear overlay", ImVec2(-1, 0))) sendOverlay(true);
     if (theme::secondaryButton("Fetch usage", ImVec2(-1, 0))) loadUsage();
+    if (theme::secondaryButton("Manage device images...", ImVec2(-1, 0))) openImageManager();
+    if (std::filesystem::exists(autosavePath()) &&
+        theme::secondaryButton("Recover autosave", ImVec2(-1, 0)))
+      loadViewFile(autosavePath());
     if (theme::secondaryButton("Copy JSON", ImVec2(-1, 0))) {
       std::string s = serializeView();
       ImGui::SetClipboardText(s.c_str());
@@ -2771,6 +3701,60 @@ struct App {
     }
   }
 
+  std::set<int> effectiveSelection() {
+    std::set<int> result = selection;
+    if (result.size() == 1 && selected >= 0) {
+      JsonArray draw = view["draw"].as<JsonArray>();
+      if (selected < (int)draw.size()) {
+        const std::string gid = draw[selected]["gid"] | "";
+        if (!gid.empty()) {
+          for (int i = 0; i < (int)draw.size(); i++)
+            if (gid == (const char*)(draw[i]["gid"] | "")) result.insert(i);
+        }
+      }
+    }
+    return result;
+  }
+
+  void snapPosition(float& x, float& y, float w, float h, const std::set<int>& moving) {
+    snapGuideX = snapGuideY = -1.0f;
+    if (!snapEnabled) return;
+    JsonArray draw = view["draw"].as<JsonArray>();
+    std::vector<float> xs = {0, 120, 240};
+    std::vector<float> ys = {0, 120, 240};
+    for (int i = 0; i < (int)draw.size(); i++) {
+      if (moving.count(i) || (draw[i]["hidden"] | false)) continue;
+      float bx, by, bw, bh;
+      layer_bounds(draw[i], bx, by, bw, bh);
+      xs.push_back(bx); xs.push_back(bx + bw / 2); xs.push_back(bx + bw);
+      ys.push_back(by); ys.push_back(by + bh / 2); ys.push_back(by + bh);
+    }
+    auto snapAxis = [&](float value, float size, const std::vector<float>& lines,
+                        float& guide) {
+      float best = 7.0f;
+      float adjusted = value;
+      for (float edge : {value, value + size / 2, value + size}) {
+        for (float line : lines) {
+          const float delta = line - edge;
+          if (std::abs(delta) < best) {
+            best = std::abs(delta);
+            adjusted = value + delta;
+            guide = line;
+          }
+        }
+        const float grid = std::round(edge / snapGrid) * snapGrid;
+        if (std::abs(grid - edge) < best) {
+          best = std::abs(grid - edge);
+          adjusted = value + grid - edge;
+          guide = grid;
+        }
+      }
+      return adjusted;
+    };
+    x = snapAxis(x, w, xs, snapGuideX);
+    y = snapAxis(y, h, ys, snapGuideY);
+  }
+
   void editorCanvas(float side) {
     const float S = side / 240.0f;
     if (previewDirty) refreshPreview();
@@ -2778,76 +3762,167 @@ struct App {
     ImGui::Image((ImTextureID)(intptr_t)g_texture, ImVec2(side, side));
     ImGui::SetCursorScreenPos(imgPos);
     ImGui::InvisibleButton("##canvas", ImVec2(side, side));
-    bool hovered = ImGui::IsItemHovered();
-    bool active = ImGui::IsItemActive();
+    const bool hovered = ImGui::IsItemHovered();
+    const bool active = ImGui::IsItemActive();
     ImVec2 mouse = ImGui::GetIO().MousePos;
-    float mx = (mouse.x - imgPos.x) / S;
-    float my = (mouse.y - imgPos.y) / S;
+    const float mx = (mouse.x - imgPos.x) / S;
+    const float my = (mouse.y - imgPos.y) / S;
 
     JsonArray draw = view["draw"].as<JsonArray>();
     static int dragMode = 0;
     static bool undoPushed = false;
+    static bool boxSelecting = false;
+    static ImVec2 boxStart{};
     static ImVec2 press{};
     if (ImGui::IsItemClicked(0)) {
+      const bool additive = ImGui::GetIO().KeyShift || ImGui::GetIO().KeyCtrl;
       bool onHandle = false;
       if (selected >= 0 && selected < (int)draw.size()) {
         float x, y, w, h;
         layer_bounds(draw[selected], x, y, w, h);
-        onHandle = mx >= x + w - 10 && mx <= x + w + 10 && my >= y + h - 10 && my <= y + h + 10;
+        onHandle = mx >= x + w - 10 && mx <= x + w + 10 &&
+                   my >= y + h - 10 && my <= y + h + 10;
       }
       if (!onHandle) {
-        selected = -1;
-        for (int i = (int)draw.size() - 1; i >= 0; i--) {
+        int hit = -1;
+        for (int i : componentsByZ(true)) {
+          if (i < 0 || i >= (int)draw.size() || (draw[i]["hidden"] | false)) continue;
           float x, y, w, h;
           layer_bounds(draw[i], x, y, w, h);
-          if (mx >= x && mx <= x + w && my >= y && my <= y + h) { selected = i; break; }
+          if (mx >= x && mx <= x + w && my >= y && my <= y + h) { hit = i; break; }
+        }
+        if (hit >= 0) {
+          if (additive) selectComponent(hit, true);
+          else {
+            selection.clear();
+            selection.insert(hit);
+            selected = hit;
+          }
+        } else {
+          if (!additive) {
+            selected = -1;
+            selection.clear();
+          }
+          boxSelecting = true;
+          boxStart = ImVec2(mx, my);
         }
       }
       if (selected >= 0 && selected < (int)draw.size()) {
-        float x, y, w, h;
-        layer_bounds(draw[selected], x, y, w, h);
-        dragMode = (mx >= x + w - 10 && mx <= x + w + 10 &&
-                    my >= y + h - 10 && my <= y + h + 10) ? 2 : 1;
+        const bool locked = draw[selected]["locked"] | false;
+        dragMode = locked ? 0 : (onHandle && selection.size() == 1 ? 2 : 1);
         press = ImVec2(mx, my);
         undoPushed = false;
+        snapGuideX = snapGuideY = -1;
       }
     }
-    if (active && ImGui::IsMouseDragging(0) && selected >= 0 && selected < (int)draw.size()) {
+    if (active && ImGui::IsMouseDragging(0) && selected >= 0 &&
+        selected < (int)draw.size() && dragMode) {
       if (!undoPushed) { pushUndo(); undoPushed = true; }
-      JsonObject l = draw[selected];
+      JsonObject primary = draw[selected];
       float dx = mx - press.x, dy = my - press.y;
       if (dragMode == 2) {
-        const char* t = l["t"] | "";
+        const char* t = primary["t"] | "";
         if (!strcmp(t, "circle")) {
-          int r = std::max(1, (int)((l["r"] | 1) + std::max(dx, dy)));
-          l["r"] = std::min(255, r);
+          int r = std::max(1, (int)((primary["r"] | 1) + std::max(dx, dy)));
+          primary["r"] = std::min(255, r);
         } else {
-          l["w"] = std::max(1, (int)((l["w"] | 1) + dx));
-          l["h"] = std::max(1, (int)((l["h"] | 1) + dy));
+          primary["w"] = std::max(1, (int)((primary["w"] | 1) + dx));
+          primary["h"] = std::max(1, (int)((primary["h"] | 1) + dy));
         }
       } else {
-        l["x"] = (int)((l["x"] | 0) + dx);
-        l["y"] = (int)((l["y"] | 0) + dy);
+        std::set<int> moving = effectiveSelection();
+        const float x = (primary["x"] | 0) + dx;
+        const float y = (primary["y"] | 0) + dy;
+        float w = primary["w"] | 0, h = primary["h"] | 0;
+        if (!strcmp(primary["t"] | "", "circle")) w = h = 2 * (primary["r"] | 0);
+        float sx = x, sy = y;
+        snapPosition(sx, sy, w, h, moving);
+        dx = sx - (primary["x"] | 0);
+        dy = sy - (primary["y"] | 0);
+        for (int i : moving) {
+          if (i < 0 || i >= (int)draw.size() || (draw[i]["locked"] | false)) continue;
+          draw[i]["x"] = (int)((draw[i]["x"] | 0) + dx);
+          draw[i]["y"] = (int)((draw[i]["y"] | 0) + dy);
+        }
       }
       press = ImVec2(mx, my);
       viewDirty = true;
       previewDirty = true;
       syncJson();
     }
-    if (ImGui::IsItemDeactivated()) dragMode = 0;
+    if (boxSelecting && active && ImGui::IsMouseDragging(0)) {
+      ImDrawList* boxDraw = ImGui::GetWindowDrawList();
+      const ImVec2 a(imgPos.x + std::min(boxStart.x, mx) * S,
+                     imgPos.y + std::min(boxStart.y, my) * S);
+      const ImVec2 b(imgPos.x + std::max(boxStart.x, mx) * S,
+                     imgPos.y + std::max(boxStart.y, my) * S);
+      boxDraw->AddRectFilled(a, b, IM_COL32(70, 140, 230, 36));
+      boxDraw->AddRect(a, b, IM_COL32(90, 170, 255, 180));
+    }
+    if (ImGui::IsItemDeactivated()) {
+      if (boxSelecting) {
+        const float x0 = std::min(boxStart.x, mx), x1 = std::max(boxStart.x, mx);
+        const float y0 = std::min(boxStart.y, my), y1 = std::max(boxStart.y, my);
+        if (x1 - x0 > 2 || y1 - y0 > 2) {
+          for (int i : componentsByZ(true)) {
+            if (i < 0 || i >= (int)draw.size() || (draw[i]["hidden"] | false)) continue;
+            float x, y, w, h;
+            layer_bounds(draw[i], x, y, w, h);
+            if (x + w >= x0 && x <= x1 && y + h >= y0 && y <= y1) selection.insert(i);
+          }
+          if (!selection.empty()) selected = *selection.begin();
+        }
+        boxSelecting = false;
+      }
+      dragMode = 0;
+      snapGuideX = snapGuideY = -1;
+    }
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    for (int i = 0; i < (int)draw.size(); i++) {
-      if (i != selected) continue;
+    if (showRulers) {
+      const ImU32 tick = IM_COL32(120, 135, 155, 110);
+      for (int v = 0; v <= 240; v += 20) {
+        const float px = imgPos.x + v * S;
+        const float py = imgPos.y + v * S;
+        dl->AddLine(ImVec2(px, imgPos.y - 5), ImVec2(px, imgPos.y), tick);
+        dl->AddLine(ImVec2(imgPos.x - 5, py), ImVec2(imgPos.x, py), tick);
+        if (v % 60 == 0) {
+          char label[8];
+          snprintf(label, sizeof(label), "%d", v);
+          dl->AddText(ImVec2(px + 2, imgPos.y - 18), tick, label);
+          dl->AddText(ImVec2(imgPos.x - 28, py + 2), tick, label);
+        }
+      }
+    }
+    if (showGuides) {
+      const ImU32 guide = IM_COL32(90, 135, 210, 70);
+      dl->AddLine(ImVec2(imgPos.x + 120 * S, imgPos.y), ImVec2(imgPos.x + 120 * S, imgPos.y + side), guide);
+      dl->AddLine(ImVec2(imgPos.x, imgPos.y + 120 * S), ImVec2(imgPos.x + side, imgPos.y + 120 * S), guide);
+      if (snapGuideX >= 0)
+        dl->AddLine(ImVec2(imgPos.x + snapGuideX * S, imgPos.y),
+                    ImVec2(imgPos.x + snapGuideX * S, imgPos.y + side),
+                    IM_COL32(90, 210, 140, 180));
+      if (snapGuideY >= 0)
+        dl->AddLine(ImVec2(imgPos.x, imgPos.y + snapGuideY * S),
+                    ImVec2(imgPos.x + side, imgPos.y + snapGuideY * S),
+                    IM_COL32(90, 210, 140, 180));
+    }
+
+    const std::set<int> highlighted = effectiveSelection();
+    for (int i : highlighted) {
+      if (i < 0 || i >= (int)draw.size()) continue;
       float x, y, w, h;
       layer_bounds(draw[i], x, y, w, h);
       ImVec2 a(imgPos.x + x * S, imgPos.y + y * S);
       ImVec2 b(imgPos.x + (x + w) * S, imgPos.y + (y + h) * S);
       dl->AddRect(a, b, IM_COL32(255, 200, 60, 255), 0, 0, 2.0f);
-      dl->AddRectFilled(ImVec2(b.x - 5, b.y - 5), ImVec2(b.x + 5, b.y + 5), IM_COL32(255, 200, 60, 255));
+      if (i == selected)
+        dl->AddRectFilled(ImVec2(b.x - 5, b.y - 5), ImVec2(b.x + 5, b.y + 5),
+                          IM_COL32(255, 200, 60, 255));
     }
     if (hovered && !active) {
-      for (int i = (int)draw.size() - 1; i >= 0; i--) {
+      for (int i : componentsByZ(true)) {
+        if (i < 0 || i >= (int)draw.size() || (draw[i]["hidden"] | false)) continue;
         float x, y, w, h;
         layer_bounds(draw[i], x, y, w, h);
         if (mx >= x && mx <= x + w && my >= y && my <= y + h) {
@@ -2869,7 +3944,31 @@ struct App {
         if (io.KeyShift) redo(); else undo();
       }
       if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y, false)) redo();
+      if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C, false)) copySelected();
+      if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_V, false)) pasteComponents();
+      if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_D, false)) duplicateSelected();
       if (ImGui::IsKeyPressed(ImGuiKey_Delete, false)) deleteSelected();
+      if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) { selection.clear(); selected = -1; }
+      if (ImGui::IsKeyPressed(ImGuiKey_LeftBracket, false)) moveSelectedZ(-1);
+      if (ImGui::IsKeyPressed(ImGuiKey_RightBracket, false)) moveSelectedZ(1);
+      int nx = 0, ny = 0;
+      if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow, true)) nx = -1;
+      if (ImGui::IsKeyPressed(ImGuiKey_RightArrow, true)) nx = 1;
+      if (ImGui::IsKeyPressed(ImGuiKey_UpArrow, true)) ny = -1;
+      if (ImGui::IsKeyPressed(ImGuiKey_DownArrow, true)) ny = 1;
+      if ((nx || ny) && !selection.empty()) {
+        pushUndo();
+        const int step = io.KeyShift ? 10 : 1;
+        JsonArray draw = view["draw"].as<JsonArray>();
+        for (int i : effectiveSelection()) {
+          if (i < 0 || i >= (int)draw.size() || (draw[i]["locked"] | false)) continue;
+          draw[i]["x"] = (draw[i]["x"] | 0) + nx * step;
+          draw[i]["y"] = (draw[i]["y"] | 0) + ny * step;
+        }
+        viewDirty = true;
+        previewDirty = true;
+        syncJson();
+      }
     }
     ImGui::BeginChild("##designbody", ImVec2(0, 0), false);
     const ImVec2 avail = ImGui::GetContentRegionAvail();
@@ -2896,7 +3995,7 @@ struct App {
                  ImVec2(p.x + side + 8, p.y + side + 8), theme::surfaceAlt(), theme::border());
     editorCanvas(side);
     ImGui::SetCursorPosY(ImGui::GetWindowHeight() - 26);
-    ImGui::TextDisabled("240 × 240  ·  %d layers  ·  %s",
+    ImGui::TextDisabled("240 × 240  ·  %d components  ·  %s",
                         (int)view["draw"].as<JsonArray>().size(),
                         viewError.empty() ? "ready" : viewError.c_str());
     endPane();
@@ -3194,6 +4293,7 @@ struct App {
   }
 
   void draw() {
+    autosaveTick();
     pollAppUpdate();
     if (firmwareReleasesLoading && firmwareReleasesFuture.valid() &&
         firmwareReleasesFuture.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
@@ -3276,6 +4376,10 @@ struct App {
     toastWindow();
     appUpdateModal();
     dialog.draw();
+    if (imageManagerOpen) {
+      if (!ImGui::IsPopupOpen("Device images")) ImGui::OpenPopup("Device images");
+      imageManagerModal();
+    }
   }
 };
 
@@ -3398,6 +4502,7 @@ int main(int argc, char** argv) {
   App app;
   app.initialViewPath = viewPath;
   app.executablePath = fs::absolute(argv[0]).string();
+  app.liveUsage = usageJson;
   app.loadAppUpdateState();
   app.checkAppUpdate(false);
   if (tabText) {

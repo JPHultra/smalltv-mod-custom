@@ -55,6 +55,29 @@ int main() {
   assert(viewScreenParse(bad_image, strlen(bad_image), s, error));
   assert(s.primCount == 0);
 
+  // Explicit z order is sorted back-to-front; hidden components do not render.
+  const char* zorder = R"({"draw":[
+    {"t":"rect","x":0,"y":0,"w":4,"h":4,"c":"#ff0000","z":9},
+    {"t":"rect","x":0,"y":0,"w":4,"h":4,"c":"#00ff00","z":-2},
+    {"t":"rect","x":0,"y":0,"w":4,"h":4,"c":"#0000ff","hidden":true,"z":20}
+  ]})";
+  assert(viewScreenParse(zorder, strlen(zorder), s, error));
+  assert(s.primCount == 2);
+  assert(s.prims[0].color == 0x07E0);  // green, z=-2
+  assert(s.prims[1].color == 0xF800);  // red, z=9
+
+  // Usage style values and custom title/labels live in the text pool.
+  const char* usage_style = R"({"draw":[{"t":"usage","x":0,"y":0,"w":224,"h":80,"c":"#d97757","provider":"claude","metric":-1,"style":{"nameSize":3,"labelAlign":"l","valueAlign":"c","barHeight":5,"showBar":false,"title":"Claude custom","labels":["Five hour","Weekly"]}}]})";
+  assert(viewScreenParse(usage_style, strlen(usage_style), s, error));
+  assert(s.primCount == 1);
+  const UsageStyle* st = viewPrimUsageStyle(s, s.prims[0]);
+  assert(st && st->nameSize == 3 && st->labelAlign == VIEW_A_LEFT);
+  assert(st->valueAlign == VIEW_A_CENTER && st->barHeight == 5);
+  assert(!(st->flags & USAGE_SHOW_BAR));
+  assert(!strcmp(viewUsageTitle(s, *st), "Claude custom"));
+  assert(!strcmp(viewUsageMetricLabel(s, *st, 0), "Five hour"));
+  assert(!strcmp(viewUsageMetricLabel(s, *st, 1), "Weekly"));
+
   // An omitted metric means "all metrics" (the renderer stacks them).
   const char* all_metrics = R"({"draw":[{"t":"usage","x":0,"y":0,"w":100,"h":50,"c":"#ffffff","provider":"claude"}]})";
   assert(viewScreenParse(all_metrics, strlen(all_metrics), s, error));

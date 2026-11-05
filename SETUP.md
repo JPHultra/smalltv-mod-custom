@@ -251,10 +251,13 @@ Open `http://localhost:8000`, then:
    **Test overlay** to show it for its TTL.
 5. **Fetch usage** to preview live provider data.
 
-The editor can load/push `/api/dashboard`, push/clear `/api/view`, and read
-`/api/usage`. It supports drag/resize handles, undo/redo (Ctrl/Cmd+Z), alignment
-and z-order controls, real icon previews, and a clickable bitmap pixel grid. The
-token is in the query string; it is a write credential, not the web UI password.
+The web editor can load/push `/api/dashboard`, push/clear `/api/view`, and
+read `/api/usage`. It supports drag/resize handles, undo/redo (Ctrl/Cmd+Z),
+alignment and z-order controls, real icon previews, and a clickable bitmap
+pixel grid. The native desktop Design editor is the advanced editor: it adds
+components, explicit Z, multi-select, groups, snapping/rulers, templates and
+configurable usage-card styles. The token is in the query string; it is a write
+credential, not the web UI password.
 
 ### Option C: device-only JSON fallback
 
@@ -284,6 +287,9 @@ Primitives: `fill`, `rect`, `rrect`, `circle`, `line`, `text`, `icon`, `bitmap`,
 `image`, `usage`. Text tokens: `{HH}`, `{hh}`, `{MM}`, `{SS}`, `{DD}`, `{MON}`,
 `{MONTH}`, `{WD}`, `{WEEKDAY}`, `{YYYY}`. A usage `metric` of `-1` (or omitted)
 stacks all metrics; `0`-`4` selects one. `priority` is the overlay priority (0-3).
+Components may use `id`, `name`, `z`, `hidden`, `locked` and `gid`; groups live
+in the top-level `groups` array. Usage components accept the `style` object
+documented in the README.
 
 ## 7. Usage: Claude, Codex, DeepSeek
 

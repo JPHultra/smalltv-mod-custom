@@ -78,7 +78,7 @@ input[type=color]{width:100%;height:38px;background:#0b0e13;border:1px solid var
    <input id="priority" type="number" min="0" max="3" value="0" oninput="view.priority=Number(this.value)||0">
   </div>
   <div class="card" style="margin-top:14px">
-   <h2>Layers</h2>
+   <h2>Components</h2>
    <div id="layers"></div>
    <div class="row" style="margin-top:8px">
     <button class="sec small" onclick="moveLayer(-1)">Up</button>
@@ -98,8 +98,8 @@ input[type=color]{width:100%;height:38px;background:#0b0e13;border:1px solid var
 
  <div>
   <div class="card">
-   <h2>Selected layer</h2>
-   <div id="props" class="hint">Pick a component or a layer.</div>
+   <h2>Selected component</h2>
+   <div id="props" class="hint">Pick a component.</div>
   </div>
   <div class="card" style="margin-top:14px">
    <h2>Device</h2>
@@ -194,7 +194,7 @@ function layerLabel(l){if(l.t==='text')return 'Text: '+String(l.v||'').slice(0,2
 function renderLayers(){
  const box=$('layers');if(!box)return;box.innerHTML='';
  view.draw.forEach((l,i)=>{const d=document.createElement('div');d.className='layer'+(i===selected?' sel':'');d.onclick=()=>selectLayer(i);d.innerHTML='<span>'+i+'. '+esc(layerLabel(l))+'</span>';box.appendChild(d)});
- if(!view.draw.length)box.innerHTML='<div class="hint">No layers yet.</div>';
+ if(!view.draw.length)box.innerHTML='<div class="hint">No components yet.</div>';
 }
 function esc(s){return String(s==null?'':s).replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]))}
 
@@ -209,7 +209,7 @@ function setProp(k,v,type){if(selected<0)return;const l=view.draw[selected];push
  draw();renderLayers();syncJson();if(l.t==='bitmap')renderBitmapGrid(l)}
 function renderProps(){
  const box=$('props');if(!box)return;
- if(selected<0||!view.draw[selected]){box.innerHTML='Pick a component or a layer.';return}
+ if(selected<0||!view.draw[selected]){box.innerHTML='Pick a component.';return}
  const l=view.draw[selected];
  let h='<label>X</label><input type="number" value="'+l.x+'" oninput="setProp(\'x\',this.value,\'number\')">';
  h+='<label>Y</label><input type="number" value="'+l.y+'" oninput="setProp(\'y\',this.value,\'number\')">';
