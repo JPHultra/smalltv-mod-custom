@@ -70,3 +70,5 @@ The token is a write credential for `/api/dashboard`, `/api/view` and
 ```
 
 `ttl` applies to the transient overlay; the stored dashboard ignores it.
+
+Image and GIF assets are supported only by the native desktop app; this web editor remains a legacy JSON editor.

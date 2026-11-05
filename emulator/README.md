@@ -20,10 +20,12 @@ HTML/WebView assets.
 - Native settings for WiFi, display, clock, button, view/overlay and security
 - Live status and usage
 - Native visual dashboard editor:
-  - text, rectangle, rounded rectangle, circle, line, icon, bitmap, usage and
-    fill layers
+  - text, rectangle, rounded rectangle, circle, line, icon, bitmap, image, usage
+    and fill layers
   - drag, resize, layer ordering, duplicate/delete
   - properties, icon picker, bitmap pixel grid
+  - PNG/JPEG/BMP and animated GIF import with RGB565 stills and indexed GIF frames
+  - full-screen image/GIF backgrounds with cover cropping
   - undo/redo, alignment, JSON apply/copy
   - load/save from a file or the device
   - overlay test and clear
@@ -35,6 +37,10 @@ HTML/WebView assets.
 - Phase and progress display for firmware updates
 - App self-update checks against GitHub at launch, with selectable firmware releases
 - Flat graphite/amber desktop styling with vendored Inter fonts
+
+Image/GIF assets are imported only in the desktop app. They are converted to a
+compact device asset, uploaded to `/img`, and referenced by name from the
+dashboard JSON. The web editor does not support image assets.
 
 The app does not emulate Wi-Fi/OTA in firmware. Fonts live in
 `emulator/assets/` and are included in the release packages. It talks to real devices over

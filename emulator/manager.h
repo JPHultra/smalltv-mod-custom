@@ -46,6 +46,8 @@ class DeviceManager {
                const std::string& body, const std::string& contentType,
                DeviceResponse& response, ProgressCallback progress = nullptr);
   bool uploadFirmware(const std::string& path, std::string& error);
+  bool uploadImage(const std::string& path, const std::string& name, std::string& error);
+  bool downloadImage(const std::string& name, const std::string& path, std::string& error);
   size_t uploadDone() const { return uploadDone_.load(); }
   size_t uploadTotal() const { return uploadTotal_.load(); }
   bool scanning() const { return scanning_.load(); }

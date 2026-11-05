@@ -31,6 +31,7 @@ COMMON_FILES = [
     ("emulator/third_party/httplib-LICENSE.txt", "HTTPLIB-LICENSE.txt"),
     ("emulator/third_party/imgui/LICENSE.txt", "IMGUI-LICENSE.txt"),
     ("emulator/third_party/SDL2-LICENSE.txt", "SDL2-LICENSE.txt"),
+    ("emulator/third_party/STB-LICENSE.txt", "STB-LICENSE.txt"),
     ("examples/view.json", "examples/view.json"),
     ("daemon/usage.example.json", "usage.example.json"),
 ]

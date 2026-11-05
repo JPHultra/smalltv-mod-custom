@@ -92,6 +92,9 @@
 #define VIEW_MAX_JSON        4096
 #define VIEW_MAX_TEXT          96
 #define VIEW_MAX_ICON_LEN      24
+#define VIEW_MAX_IMAGES         4
+#define VIEW_IMAGE_NAME_LEN    32
+#define VIEW_IMAGE_POOL       128
 #define VIEW_MAX_PROVIDER_LEN  16
 #define VIEW_TTL_MAX_SEC   604800UL   // payload clamp; the overlay uses less
 #define VIEW_OVERLAY_TTL_MIN_SEC   2
@@ -111,6 +114,12 @@
   #define VIEW_TEXT_POOL     768
   #define VIEW_BITMAP_POOL   512
   #define VIEW_BITMAP_MAX_DIM 32
+#endif
+
+#if defined(SMALLTV_ESP32_PRO)
+  #define VIEW_IMAGE_MAX_BYTES 3000000UL
+#else
+  #define VIEW_IMAGE_MAX_BYTES  700000UL
 #endif
 
 // Normalized usage store. The daemon pushes at most three providers; a provider

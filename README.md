@@ -64,6 +64,10 @@ c++ -std=c++11 -Wall -Wextra -Werror -g -Isrc tests/test_webguard.cpp -o /tmp/we
 c++ -std=c++11 -Wall -Wextra -Werror -g -DSMALLTV_ESP8266 \
   -Itests/shim -Isrc -Isrc/features/view -I.pio/libdeps/smalltv/ArduinoJson/src \
   tests/test_view.cpp src/features/view/ViewModel.cpp -o /tmp/view && /tmp/view
+g++ -std=c++17 -O2 -Wall -Wextra -Iemulator -Iemulator/image -Isrc \
+  tests/test_image_asset.cpp emulator/image/HostImageSource.cpp \
+  emulator/image/ImageCodec.cpp emulator/image/GifDecoder.cpp \
+  -o /tmp/image-asset && /tmp/image-asset
 c++ -std=c++11 -Wall -Wextra -Werror -g -DSMALLTV_ESP8266 \
   -DARDUINOJSON_ENABLE_ARDUINO_STRING=1 -DARDUINOJSON_USE_DOUBLE=0 \
   -Itests/shim -Isrc -Isrc/features/usage -I.pio/libdeps/smalltv/ArduinoJson/src \
@@ -140,11 +144,34 @@ editor.
 ```
 
 Primitives: `fill`, `rect`, `rrect`, `circle`, `line`, `text`, `icon`,
-`bitmap`, `usage`. A usage component with `metric` omitted or set to `-1`
+`bitmap`, `image`, `usage`. A usage component with `metric` omitted or set to `-1`
 stacks every metric the provider sends; `0`-`4` picks one. Text supports `{HH}`, `{hh}`, `{MM}`, `{SS}`, `{DD}`,
 `{MON}`, `{MONTH}`, `{WD}`, `{WEEKDAY}`, `{YYYY}`. `ttl` is used by the overlay;
 the stored dashboard ignores it. A sample lives in
 [`examples/view.json`](examples/view.json).
+
+Image and GIF backgrounds are imported by the native desktop app, not the web
+editor. The app converts PNG/JPEG/BMP to RGB565 and animated GIF to indexed
+256-color frames, uploads the asset to the device, and stores only a reference
+in the dashboard:
+
+```json
+{
+  "bg": "#0b1420",
+  "bgImage": "aurora-1a2b3c4d",
+  "draw": [
+    {"t":"image","src":"aurora-1a2b3c4d","x":0,"y":0,"s":1,"a":"l"}
+  ]
+}
+```
+
+`bgImage` is drawn first with a 240x240 cover crop; `t:"image"` is a draggable
+asset layer. The legacy hex `bitmap` primitive remains supported. Assets live
+under `/img` and are managed through `/api/images` and `/api/image`; they are
+never embedded in the view JSON or the small RAM bitmap pool. The ESP8266 and
+4 MB ESP32 boards cap an asset at about 700 KB, while the 8 MB Pro board allows
+up to 3 MB. Animated backgrounds run at a capped frame rate.
+
 
 Publish the editor to GitHub Pages from this PC with
 `tools/deploy_pages.sh`; it force-pushes `editor/` to the `gh-pages` branch and
@@ -246,6 +273,7 @@ normalized contract; provider credentials stay on the daemon host.
 | `POST /api/view`, `POST /api/view/clear` | transient overlay |
 | `GET/POST /api/usage` | usage status / daemon push |
 | `GET /api/logs`, `GET /api/logs/previous` | current / previous boot diagnostic log |
+| `GET/POST /api/images`, `GET/DELETE /api/image?name=...` | image/GIF asset list, upload, download and delete |
 | `POST /update` | firmware upload |
 
 The optional web-UI password is digest auth. The editor token is an alternative
@@ -259,7 +287,7 @@ Progress is live for uploads started by the desktop app or the manual web upload
 
 ## Notes
 
-- The ESP8266 image is about 812 KB flash / 49 KB static RAM in this build,
+- The ESP8266 image is about 821 KB flash / 54 KB static RAM in this build,
   down from the upstream full image, so the old `smalltv_lean` variant is gone.
 - `src/config.h` points the desktop updater at `JPHultra/smalltv-mod-custom`; change it
   if the repository moves.

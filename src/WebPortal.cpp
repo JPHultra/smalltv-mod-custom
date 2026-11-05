@@ -12,6 +12,7 @@
 #include "SettingsTransaction.h"
 #include "features/view/ViewMode.h"
 #include "features/view/ViewOverlay.h"
+#include "features/view/ImageAsset.h"
 #include "features/view/ViewPoll.h"
 #include "features/usage/UsageClient.h"
 
@@ -132,6 +133,7 @@ static void handleGetConfig() {
   JsonObject feat = root["features"].to<JsonObject>();
   feat["view"]   = (bool)WITH_VIEW;
   feat["usage"]  = (bool)WITH_USAGE;
+  feat["images"] = true;
 #ifdef BTN_PIN
   feat["button"] = true;
 #else
@@ -167,6 +169,14 @@ static void handleStatus() {
   o["heap"] = ESP.getFreeHeap();
   o["maxblk"] = platformMaxFreeBlock();
   o["contstk"] = platformFreeContStack();
+#if defined(SMALLTV_FAMILY_ESP32)
+  o["fsTotal"] = LittleFS.totalBytes();
+  o["fsFree"] = LittleFS.totalBytes() - LittleFS.usedBytes();
+#else
+  o["fsTotal"] = 0;
+  o["fsFree"] = 0;
+#endif
+  o["images"] = true;
   o["uptime"] = millis() / 1000;
   o["reset"] = appResetReason();
   o["synced"] = clockSynced();
@@ -418,6 +428,150 @@ static void handleViewClear() {
   server.send(200, "application/json", "{\"ok\":true}");
 }
 
+// ---- dashboard image assets ------------------------------------------------
+static const char* IMAGE_DIR = "/img";
+static const char* IMAGE_TMP = "/img/.upload.tmp";
+static String imageUploadName;
+static String imageUploadError;
+static File imageUploadFile;
+static uint32_t imageUploadBytes = 0;
+static bool imageUploading = false;
+
+static String imageBasename(String name) {
+  int slash = name.lastIndexOf('/');
+  if (slash >= 0) name = name.substring(slash + 1);
+  int dot = name.lastIndexOf('.');
+  if (dot > 0) name = name.substring(0, dot);
+  return name;
+}
+
+static void imageUploadFail(const char* error) {
+  imageUploadError = error;
+  if (imageUploadFile) imageUploadFile.close();
+  LittleFS.remove(IMAGE_TMP);
+  imageUploading = false;
+}
+
+static void handleImageUpload() {
+  HTTPUpload& up = server.upload();
+  if (up.status == UPLOAD_FILE_START) {
+    imageUploadName = imageBasename(up.filename);
+    imageUploadError = "";
+    imageUploadBytes = 0;
+    imageUploading = true;
+    const bool authorized = !S->auth.enabled || !S->auth.pass.length() ||
+                            server.authenticate(S->auth.user.c_str(), S->auth.pass.c_str());
+    if (!authorized) { imageUploadFail("unauthorized"); return; }
+    if (!imageAssetNameValid(imageUploadName.c_str())) {
+      imageUploadFail("invalid image name"); return;
+    }
+    if (!LittleFS.exists(IMAGE_DIR)) LittleFS.mkdir(IMAGE_DIR);
+#if defined(SMALLTV_FAMILY_ESP32)
+    const uint32_t freeBytes = LittleFS.totalBytes() - LittleFS.usedBytes();
+    if (freeBytes < 65536) { imageUploadFail("not enough flash space"); return; }
+#endif
+    LittleFS.remove(IMAGE_TMP);
+    imageUploadFile = LittleFS.open(IMAGE_TMP, "w");
+    if (!imageUploadFile) { imageUploadFail("cannot create image file"); return; }
+  } else if (up.status == UPLOAD_FILE_WRITE) {
+    if (!imageUploading || !imageUploadFile) return;
+    if (imageUploadBytes + up.currentSize > VIEW_IMAGE_MAX_BYTES) {
+      imageUploadFail("image is too large"); return;
+    }
+    if (imageUploadFile.write(up.buf, up.currentSize) != up.currentSize) {
+      imageUploadFail("could not write image"); return;
+    }
+    imageUploadBytes += up.currentSize;
+  } else if (up.status == UPLOAD_FILE_END) {
+    if (!imageUploading || !imageUploadFile) return;
+    imageUploadFile.close();
+    ViewImageInfo info;
+    if (!imageAssetValidateFile(IMAGE_TMP, &info)) {
+      imageUploadFail("invalid image asset"); return;
+    }
+    String target = String(IMAGE_DIR) + "/" + imageUploadName + ".simg";
+    LittleFS.remove(target);
+    if (!LittleFS.rename(IMAGE_TMP, target)) {
+      imageUploadFail("could not publish image"); return;
+    }
+    imageUploading = false;
+    imageUploadError = "";
+  } else if (up.status == UPLOAD_FILE_ABORTED) {
+    imageUploadFail("upload aborted");
+  }
+  yield();
+}
+
+static void handleImageDone() {
+  if (imageUploadError == "unauthorized") {
+    requireAuth();
+    return;
+  }
+  if (!requireAuth()) return;
+  if (imageUploadName.length() == 0) {
+    sendError(400, "no image uploaded");
+    return;
+  }
+  if (imageUploadError.length() || imageUploading) {
+    sendError(400, imageUploadError.length() ? imageUploadError.c_str() : "image upload failed");
+    return;
+  }
+  JsonDocument doc;
+  doc["ok"] = true;
+  doc["name"] = imageUploadName;
+  sendJson(doc);
+}
+
+static void handleImageList() {
+  if (!requireAuth()) return;
+  JsonDocument doc;
+  JsonArray out = doc.to<JsonArray>();
+  File dir = LittleFS.open(IMAGE_DIR, "r");
+  if (dir && dir.isDirectory()) {
+    for (File f = dir.openNextFile(); f; f = dir.openNextFile()) {
+      if (!f.isDirectory()) {
+        String name = imageBasename(f.name());
+        String path = String(IMAGE_DIR) + "/" + name + ".simg";
+        ViewImageInfo info;
+        if (imageAssetNameValid(name.c_str()) && imageAssetValidateFile(path.c_str(), &info)) {
+          JsonObject item = out.add<JsonObject>();
+          item["name"] = name;
+          item["width"] = info.width;
+          item["height"] = info.height;
+          item["frames"] = info.frameCount;
+          item["delay"] = info.frameDelayMs;
+          item["animated"] = (info.flags & IMAGE_FLAG_ANIMATED) != 0;
+          item["size"] = f.size();
+        }
+      }
+      f.close();
+    }
+  }
+  if (dir) dir.close();
+  sendJson(doc);
+}
+
+static void handleImageGet() {
+  if (!requireAuth()) return;
+  String name = server.arg("name");
+  if (!imageAssetNameValid(name.c_str())) { sendError(400, "invalid image name"); return; }
+  String path = String(IMAGE_DIR) + "/" + name + ".simg";
+  File f = LittleFS.open(path, "r");
+  if (!f) { sendError(404, "image not found"); return; }
+  server.sendHeader("Cache-Control", "no-store");
+  server.streamFile(f, "application/octet-stream");
+  f.close();
+}
+
+static void handleImageDelete() {
+  if (!requireAuth()) return;
+  String name = server.arg("name");
+  if (!imageAssetNameValid(name.c_str())) { sendError(400, "invalid image name"); return; }
+  String path = String(IMAGE_DIR) + "/" + name + ".simg";
+  if (!LittleFS.remove(path)) { sendError(404, "image not found"); return; }
+  server.send(200, "application/json", "{\"ok\":true}");
+}
+
 // ---- OTA ------------------------------------------------------------------
 static void handleUpdateDone() {
   if (!requireAuth()) return;
@@ -514,6 +668,13 @@ void webPortalBegin(Settings& settings) {
   server.on("/api/view/clear", HTTP_POST, handleViewClear);
   server.on("/api/view", HTTP_OPTIONS, handleOptions);
   server.on("/api/view/clear", HTTP_OPTIONS, handleOptions);
+
+  server.on("/api/images", HTTP_GET, handleImageList);
+  server.on("/api/images", HTTP_POST, handleImageDone, handleImageUpload);
+  server.on("/api/images", HTTP_OPTIONS, handleOptions);
+  server.on("/api/image", HTTP_GET, handleImageGet);
+  server.on("/api/image", HTTP_DELETE, handleImageDelete);
+  server.on("/api/image", HTTP_OPTIONS, handleOptions);
 
   server.on("/update", HTTP_POST, handleUpdateDone, handleUpdateUpload);
 

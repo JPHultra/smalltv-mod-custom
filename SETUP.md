@@ -281,7 +281,7 @@ token is in the query string; it is a write credential, not the web UI password.
 ```
 
 Primitives: `fill`, `rect`, `rrect`, `circle`, `line`, `text`, `icon`, `bitmap`,
-`usage`. Text tokens: `{HH}`, `{hh}`, `{MM}`, `{SS}`, `{DD}`, `{MON}`,
+`image`, `usage`. Text tokens: `{HH}`, `{hh}`, `{MM}`, `{SS}`, `{DD}`, `{MON}`,
 `{MONTH}`, `{WD}`, `{WEEKDAY}`, `{YYYY}`. A usage `metric` of `-1` (or omitted)
 stacks all metrics; `0`-`4` selects one. `priority` is the overlay priority (0-3).
 
@@ -783,6 +783,7 @@ builds.
 | DeepSeek token usage is missing/0 | The client is not using `http://127.0.0.1:8789`; start the proxy and set the provider's `usageUrl`; use `usagePath: "today.total_tokens"` for a daily number |
 | Usage card shows 0% and no value | The daemon is not sending a `value`/`pct`; check `/api/status` and `--dry-run` |
 | `smalltv.local` does not resolve | Use the IP or the actual `smalltv-xxxx.local` shown on screen |
+| Image/GIF preview missing | Import it again in the desktop app; assets are not embedded in the view JSON |
 | Web UI password lost | Reflash over USB/UART; there is no recovery |
 | ESP8266 HTTPS view poll fails | TLS is tight. Use an HTTP poll URL or do not poll |
 

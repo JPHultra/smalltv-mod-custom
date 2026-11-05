@@ -16,6 +16,7 @@ enum ViewPrimType : uint8_t {
   VIEW_P_TEXT,    // x y s c a v
   VIEW_P_ICON,    // x y s c a v
   VIEW_P_BITMAP,  // x y w h s c a d
+  VIEW_P_IMAGE,   // x y s a src (asset-backed)
   VIEW_P_USAGE,   // x y w h c provider metric
 };
 
@@ -40,6 +41,8 @@ struct ViewScreen {
   uint16_t ttl;         // overlay hold, seconds (dashboard ignores it)
   uint16_t textUsed;
   uint16_t bitmapUsed;
+  uint16_t imageUsed;
+  uint16_t bgImage;     // image pool offset, 0xFFFF when unset
   uint8_t  primCount;
   bool     needsClock;  // some text has a {token}
   bool     needsSeconds; // some text has {SS}, so the clock key is per-second
@@ -48,6 +51,7 @@ struct ViewScreen {
   ViewPrim prims[VIEW_MAX_PRIMS];
   char     text[VIEW_TEXT_POOL];
   uint8_t  bitmap[VIEW_BITMAP_POOL];
+  char     images[VIEW_IMAGE_POOL];
 };
 
 // Parses a JSON view into `screen`. Returns false only for invalid JSON or a
@@ -61,6 +65,10 @@ ViewScreen& viewStaging();
 
 // NUL-terminated text or provider id referenced by `prim`.
 const char* viewPrimText(const ViewScreen& screen, const ViewPrim& prim);
+
+// Asset name referenced by an image primitive/background, or nullptr.
+const char* viewPrimImage(const ViewScreen& screen, const ViewPrim& prim);
+const char* viewBackgroundImage(const ViewScreen& screen);
 
 // Clock key for repaint decisions; per-minute unless includeSeconds is true.
 // Returns 0 until NTP has set the clock.

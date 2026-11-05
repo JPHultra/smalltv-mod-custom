@@ -4,6 +4,7 @@
 // Never persisted; a reboot clears it.
 #pragma once
 #include "ViewModel.h"
+#include "ImageAsset.h"
 
 class ViewOverlay {
  public:
@@ -23,6 +24,7 @@ class ViewOverlay {
   void advance();
 
   ViewScreen screen_{};
+  FsImageSource imageSource_;
   ViewScreen* pending_ = nullptr;
   bool       active_ = false;
   uint16_t   pendingTtl_ = 0;

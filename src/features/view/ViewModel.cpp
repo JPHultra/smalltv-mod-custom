@@ -1,5 +1,6 @@
 #include "ViewModel.h"
 #include "Clock.h"
+#include "ImageAssetFormat.h"
 #include <ArduinoJson.h>
 #include <pgmspace.h>
 #include <string.h>
@@ -48,12 +49,30 @@ static int hexVal(char c) {
   return -1;
 }
 
+static bool addImageName(ViewScreen& sc, const char* name, uint16_t& offset) {
+  if (!imageAssetNameValid(name)) return false;
+  const size_t length = strlen(name);
+  uint8_t count = 0;
+  for (uint16_t at = 0; at < sc.imageUsed;) {
+    const char* existing = sc.images + at;
+    if (!strcmp(existing, name)) { offset = at; return true; }
+    at += (uint16_t)strlen(existing) + 1;
+    count++;
+  }
+  if (count >= VIEW_MAX_IMAGES || sc.imageUsed + length + 1 > sizeof(sc.images)) return false;
+  offset = sc.imageUsed;
+  memcpy(sc.images + sc.imageUsed, name, length);
+  sc.imageUsed += (uint16_t)length;
+  sc.images[sc.imageUsed++] = 0;
+  return true;
+}
+
 static bool parsePrim(JsonObjectConst p, ViewScreen& sc, ViewPrim& out) {
   const char* t = p["t"] | "";
   if (!t[0]) return false;
 
   memset(&out, 0, sizeof(out));
-  if (!parseColor(p["c"] | "", out.color)) return false;
+  if (strcmp(t, "image") && !parseColor(p["c"] | "", out.color)) return false;
   out.x  = p["x"] | 0;
   out.y  = p["y"] | 0;
   out.x2 = p["x2"] | 0;
@@ -152,6 +171,18 @@ static bool parsePrim(JsonObjectConst p, ViewScreen& sc, ViewPrim& out) {
     for (size_t i = 0; i < need; i++)
       sc.bitmap[sc.bitmapUsed + i] = (uint8_t)((hexVal(d[2 * i]) << 4) | hexVal(d[2 * i + 1]));
     sc.bitmapUsed += need;
+  } else if (!strcmp(t, "image")) {
+    const char* src = p["src"];
+    uint16_t offset = 0;
+    if (!src || !addImageName(sc, src, offset)) return false;
+    int s = constrain(p["s"] | 1, 1, 8);
+    out.type  = VIEW_P_IMAGE;
+    out.aux   = (uint8_t)s;
+    const char* a = p["a"] | "l";
+    out.align = (a[0] == 'c') ? VIEW_A_CENTER : (a[0] == 'r') ? VIEW_A_RIGHT : VIEW_A_LEFT;
+    out.voff  = offset;
+    out.x2    = (int16_t)constrain((int)(p["w"] | 0), 0, TFT_WIDTH);
+    out.y2    = (int16_t)constrain((int)(p["h"] | 0), 0, TFT_HEIGHT);
   } else if (!strcmp(t, "usage")) {
     const char* provider = p["provider"];
     if (!provider || !provider[0]) return false;
@@ -195,7 +226,12 @@ bool viewScreenParse(const char* json, size_t length, ViewScreen& screen, String
   JsonObjectConst o = doc.as<JsonObjectConst>();
 
   screen.bg = 0;
+  screen.bgImage = 0xFFFF;
   if (o["bg"].is<const char*>()) parseColor(o["bg"].as<const char*>(), screen.bg);
+  if (o["bgImage"].is<const char*>()) {
+    uint16_t offset = 0;
+    if (addImageName(screen, o["bgImage"].as<const char*>(), offset)) screen.bgImage = offset;
+  }
   uint32_t ttl = o["ttl"] | 0;
   if (ttl > VIEW_TTL_MAX_SEC) ttl = VIEW_TTL_MAX_SEC;
   screen.ttl = (uint16_t)ttl;
@@ -219,6 +255,16 @@ ViewScreen& viewStaging() {
 
 const char* viewPrimText(const ViewScreen& screen, const ViewPrim& prim) {
   return screen.text + (prim.voff < sizeof(screen.text) ? prim.voff : 0);
+}
+
+const char* viewPrimImage(const ViewScreen& screen, const ViewPrim& prim) {
+  if (prim.type != VIEW_P_IMAGE || prim.voff >= sizeof(screen.images)) return nullptr;
+  return screen.images + prim.voff;
+}
+
+const char* viewBackgroundImage(const ViewScreen& screen) {
+  if (screen.bgImage == 0xFFFF || screen.bgImage >= sizeof(screen.images)) return nullptr;
+  return screen.images + screen.bgImage;
 }
 
 uint32_t viewClockKey(bool includeSeconds) {

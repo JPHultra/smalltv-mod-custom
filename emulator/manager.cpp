@@ -333,7 +333,8 @@ bool DeviceManager::request(const std::string& method, const std::string& path,
   auto send = [&](const httplib::Headers& h) -> httplib::Result {
     httplib::Client cli(base.c_str());
     cli.set_connection_timeout(0, 700000);
-    const int timeoutSec = path == "/update" ? 60 : 5;
+    const int timeoutSec = (path == "/update" || path == "/api/images" ||
+                            path.rfind("/api/image", 0) == 0) ? 60 : 5;
     cli.set_read_timeout(timeoutSec, 0);
     cli.set_write_timeout(timeoutSec, 0);
     if (method == "GET") return cli.Get(path, h);
@@ -357,6 +358,52 @@ bool DeviceManager::request(const std::string& method, const std::string& path,
   response.status = result->status;
   response.body = result->body;
   response.contentType = result->get_header_value("Content-Type");
+  return true;
+}
+
+bool DeviceManager::uploadImage(const std::string& path, const std::string& name,
+                                std::string& error) {
+  std::ifstream file(path, std::ios::binary);
+  if (!file) { error = "cannot open image asset"; return false; }
+  std::string data((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+  if (data.empty()) { error = "image asset is empty"; return false; }
+  const std::string boundary = "----SmallTVImageBoundary";
+  std::string body;
+  body.reserve(data.size() + 256);
+  body += "--" + boundary + "\r\n";
+  body += "Content-Disposition: form-data; name=\"image\"; filename=\"" + name + ".simg\"\r\n";
+  body += "Content-Type: application/octet-stream\r\n\r\n";
+  body += data;
+  body += "\r\n--" + boundary + "--\r\n";
+  DeviceResponse response;
+  if (!request("POST", "/api/images", body, "multipart/form-data; boundary=" + boundary,
+               response)) {
+    error = "device request failed";
+    return false;
+  }
+  if (response.status != 200) {
+    error = "device returned HTTP " + std::to_string(response.status) +
+            (response.body.empty() ? "" : ": " + response.body.substr(0, 160));
+    return false;
+  }
+  return true;
+}
+
+bool DeviceManager::downloadImage(const std::string& name, const std::string& path,
+                                  std::string& error) {
+  DeviceResponse response;
+  if (!request("GET", "/api/image?name=" + name, "", "", response)) {
+    error = "device request failed";
+    return false;
+  }
+  if (response.status != 200) {
+    error = "device returned HTTP " + std::to_string(response.status);
+    return false;
+  }
+  std::ofstream file(path, std::ios::binary | std::ios::trunc);
+  if (!file) { error = "cannot write image cache"; return false; }
+  file.write(response.body.data(), (std::streamsize)response.body.size());
+  if (!file) { error = "cannot write image cache"; return false; }
   return true;
 }
 

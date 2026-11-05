@@ -31,15 +31,24 @@ bool ViewMode::reload() {
     error_ = error;
     return false;
   }
+  imageSource_.clear();
+  if (!prepareImages(staging, error)) {
+    loaded_ = false;
+    error_ = error;
+    return false;
+  }
   screen_ = staging;
   loaded_ = true;
   error_ = "";
+  resetAnimation();
   return true;
 }
 
 bool ViewMode::replace(const String& json, String& error) {
   ViewScreen& staging = viewStaging();
   if (!viewScreenParse(json.c_str(), json.length(), staging, error)) return false;
+  imageSource_.clear();
+  if (!prepareImages(staging, error)) return false;
 
   File f = LittleFS.open(VIEW_TMP, "w");
   if (!f) { error = F("Cannot create the view file"); return false; }
@@ -65,6 +74,7 @@ bool ViewMode::replace(const String& json, String& error) {
   loaded_ = true;
   error_ = "";
   messageDrawn_ = false;
+  resetAnimation();
   repaint();
   return true;
 }
@@ -77,7 +87,7 @@ void ViewMode::begin() {
 
 void ViewMode::repaint() {
   if (loaded_) {
-    viewRender(screen_);
+    viewRenderFrame(screen_, millis() - animStartMs_, &imageSource_);
     painted_ = true;
     lastUsageRev_ = usageRevision();
     lastClockKey_ = screen_.needsClock ? viewClockKey(screen_.needsSeconds) : 0;
@@ -86,6 +96,36 @@ void ViewMode::repaint() {
   gfxMessage("SmallTV View", "Push a view from the editor", C_YELLOW);
   painted_ = true;
   messageDrawn_ = true;
+}
+
+bool ViewMode::prepareImages(const ViewScreen& screen, String& error) {
+  animated_ = false;
+  animDelayMs_ = 0;
+  auto check = [&](const char* name) -> bool {
+    if (!name) return true;
+    ViewImageInfo info;
+    if (!imageSource_.info(name, info)) {
+      error = F("Missing image asset");
+      return false;
+    }
+    if (info.flags & IMAGE_FLAG_ANIMATED) {
+      animated_ = true;
+      const uint16_t delay = info.frameDelayMs < 100 ? 100 : info.frameDelayMs;
+      if (!animDelayMs_ || delay < animDelayMs_) animDelayMs_ = delay;
+    }
+    return true;
+  };
+  if (!check(viewBackgroundImage(screen))) return false;
+  for (uint8_t i = 0; i < screen.primCount; i++) {
+    if (screen.prims[i].type == VIEW_P_IMAGE &&
+        !check(viewPrimImage(screen, screen.prims[i]))) return false;
+  }
+  return true;
+}
+
+void ViewMode::resetAnimation() {
+  animStartMs_ = millis();
+  lastAnimMs_ = animStartMs_;
 }
 
 void ViewMode::invalidate() {
@@ -104,16 +144,24 @@ void ViewMode::service() {
     repaint();
     return;
   }
+  if (animated_ && animDelayMs_ &&
+      (uint32_t)(millis() - lastAnimMs_) >= animDelayMs_) {
+    viewRenderFrame(screen_, millis() - animStartMs_, &imageSource_);
+    lastAnimMs_ = millis();
+    lastUsageRev_ = usageRevision();
+    lastClockKey_ = screen_.needsClock ? viewClockKey(screen_.needsSeconds) : 0;
+    return;
+  }
   const uint32_t rev = usageRevision();
   const uint32_t clock = screen_.needsClock ? viewClockKey(screen_.needsSeconds) : 0;
   const bool usageChanged = screen_.hasUsage && rev != lastUsageRev_;
   const bool clockChanged = screen_.needsClock && clock != lastClockKey_;
   if (usageChanged) {
-    if (!viewRenderUsage(screen_)) { repaint(); return; }
+    if (!viewRenderUsage(screen_, millis() - animStartMs_, &imageSource_)) { repaint(); return; }
     lastUsageRev_ = rev;
   }
   if (clockChanged) {
-    if (!viewRenderText(screen_)) { repaint(); return; }
+    if (!viewRenderText(screen_, millis() - animStartMs_, &imageSource_)) { repaint(); return; }
     lastClockKey_ = clock;
   }
 }

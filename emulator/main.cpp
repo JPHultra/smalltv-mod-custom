@@ -42,6 +42,8 @@
 #include "usage/DeepSeekProxy.h"
 #include "usage/Worker.h"
 #include "update/GitHubRelease.h"
+#include "image/ImageCodec.h"
+#include "image/HostImageSource.h"
 
 namespace fs = std::filesystem;
 
@@ -248,7 +250,19 @@ struct FileDialog {
       std::error_code e2;
       if (it->is_directory(e2)) ds.push_back(name);
       else if (it->is_regular_file(e2)) {
-        if (filter.empty() || it->path().extension() == filter) ffs.push_back(name);
+        if (filter.empty()) { ffs.push_back(name); continue; }
+        std::string ext = it->path().extension().string();
+        for (char& c : ext) c = (char)tolower((unsigned char)c);
+        size_t start = 0;
+        while (start <= filter.size()) {
+          const size_t comma = filter.find(',', start);
+          std::string wanted = filter.substr(start, comma == std::string::npos
+                                                        ? std::string::npos : comma - start);
+          for (char& c : wanted) c = (char)tolower((unsigned char)c);
+          if (wanted == ext) { ffs.push_back(name); break; }
+          if (comma == std::string::npos) break;
+          start = comma + 1;
+        }
       }
     }
     std::sort(ds.begin(), ds.end());
@@ -466,6 +480,8 @@ struct App {
   bool viewDirty = false;
   std::string viewError;
   bool previewDirty = true;
+  uint32_t previewAnimStart = 0;
+  uint32_t lastPreviewTick = 0;
   int selected = -1;
   char viewJsonBuf[65536] = {};
   std::vector<std::string> undoStack;
@@ -1675,6 +1691,7 @@ struct App {
     undoStack.clear();
     redoStack.clear();
     viewDirty = false;
+    previewAnimStart = SDL_GetTicks();
     syncJson();
     previewDirty = true;
     return true;
@@ -1696,10 +1713,12 @@ struct App {
     std::string err;
     if (!loadViewText(r.body, err)) { notify("Device view: " + err); return; }
     viewLoaded = true;
+    downloadViewAssets();
     notify("Loaded dashboard from device");
   }
 
   void saveViewToDevice() {
+    if (!uploadViewAssets()) return;
     std::string body = serializeView();
     DeviceResponse r;
     if (!api("POST", "/api/dashboard", body, "application/json", r)) return;
@@ -1711,7 +1730,143 @@ struct App {
     if (clear) {
       if (api("POST", "/api/view/clear", "", "application/json", r)) notify("Overlay cleared");
     } else {
+      if (!uploadViewAssets()) return;
       if (api("POST", "/api/view", serializeView(), "application/json", r)) notify("Overlay sent");
+    }
+  }
+
+  std::string imageCacheDir() const {
+#if defined(_WIN32)
+    const char* base = std::getenv("APPDATA");
+    return std::string(base ? base : ".") + "/smalltv/images";
+#else
+    const char* home = std::getenv("HOME");
+    return std::string(home ? home : ".") + "/.config/smalltv/images";
+#endif
+  }
+
+  uint32_t imageBudget() const {
+    uint32_t budget = 700000;
+    JsonDocument d;
+    if (!status.empty() && !deserializeJson(d, status) && d.is<JsonObject>()) {
+      const uint64_t freeBytes = d["fsFree"] | 0;
+      if (freeBytes > 65536)
+        budget = (uint32_t)std::min<uint64_t>(3000000, freeBytes - 65536);
+    }
+    return budget;
+  }
+
+  void collectImageNames(std::vector<std::string>& names) {
+    auto add = [&](const char* name) {
+      if (!name || !imageAssetNameValid(name)) return;
+      if (std::find(names.begin(), names.end(), name) == names.end()) names.emplace_back(name);
+    };
+    add(view["bgImage"] | "");
+    JsonArray draw = view["draw"].as<JsonArray>();
+    for (JsonObject layer : draw) {
+      if (!strcmp(layer["t"] | "", "image")) add(layer["src"] | "");
+    }
+  }
+
+  bool importAsset(const std::string& source, imagecodec::ImportedAsset& asset) {
+    std::string error;
+    std::error_code ec;
+    std::filesystem::create_directories(imageCacheDir(), ec);
+    if (!imagecodec::importImage(source, imageCacheDir(), imageBudget(), asset, error)) {
+      notify("Image import failed: " + error);
+      return false;
+    }
+    return true;
+  }
+
+  void addImportedLayer(const std::string& source) {
+    imagecodec::ImportedAsset asset;
+    if (!importAsset(source, asset)) return;
+    std::vector<std::string> names;
+    collectImageNames(names);
+    if (std::find(names.begin(), names.end(), asset.name) == names.end() &&
+        names.size() >= VIEW_MAX_IMAGES) {
+      notify("A dashboard can reference at most four image assets");
+      return;
+    }
+    pushUndo();
+    JsonArray draw = view["draw"].as<JsonArray>();
+    if (draw.isNull()) draw = view["draw"].to<JsonArray>();
+    JsonObject layer = draw.add<JsonObject>();
+    layer["t"] = "image";
+    layer["src"] = asset.name;
+    layer["x"] = 0;
+    layer["y"] = 0;
+    layer["w"] = asset.info.width;
+    layer["h"] = asset.info.height;
+    layer["s"] = 1;
+    layer["a"] = "l";
+    selected = (int)draw.size() - 1;
+    viewDirty = true;
+    previewDirty = true;
+    previewAnimStart = SDL_GetTicks();
+    syncJson();
+    notify("Imported " + asset.name);
+  }
+
+  void importBackground(const std::string& source) {
+    imagecodec::ImportedAsset asset;
+    if (!importAsset(source, asset)) return;
+    std::vector<std::string> names;
+    collectImageNames(names);
+    if (std::find(names.begin(), names.end(), asset.name) == names.end() &&
+        names.size() >= VIEW_MAX_IMAGES) {
+      notify("A dashboard can reference at most four image assets");
+      return;
+    }
+    pushUndo();
+    view["bgImage"] = asset.name;
+    viewDirty = true;
+    previewDirty = true;
+    previewAnimStart = SDL_GetTicks();
+    syncJson();
+    notify("Background image set to " + asset.name);
+  }
+
+  bool hasImageRefs() {
+    std::vector<std::string> names;
+    collectImageNames(names);
+    return !names.empty();
+  }
+
+  bool uploadViewAssets() {
+    std::vector<std::string> names;
+    collectImageNames(names);
+    std::error_code ec;
+    std::filesystem::create_directories(imageCacheDir(), ec);
+    for (const auto& name : names) {
+      const std::string path = (std::filesystem::path(imageCacheDir()) /
+                                (name + ".simg")).string();
+      if (!std::filesystem::exists(path)) {
+        notify("Missing local image asset: " + name);
+        return false;
+      }
+      std::string error;
+      if (!manager.uploadImage(path, name, error)) {
+        notify("Image upload failed: " + error);
+        return false;
+      }
+    }
+    return true;
+  }
+
+  void downloadViewAssets() {
+    std::vector<std::string> names;
+    collectImageNames(names);
+    std::error_code ec;
+    std::filesystem::create_directories(imageCacheDir(), ec);
+    for (const auto& name : names) {
+      const std::string path = (std::filesystem::path(imageCacheDir()) /
+                                (name + ".simg")).string();
+      if (std::filesystem::exists(path)) continue;
+      std::string error;
+      if (!manager.downloadImage(name, path, error))
+        notify("Could not cache image " + name + ": " + error);
     }
   }
 
@@ -1723,8 +1878,10 @@ struct App {
       viewError = err.c_str();
       return;
     }
+    if (!previewAnimStart) previewAnimStart = SDL_GetTicks();
+    imagecodec::HostImageSource images(imageCacheDir());
     viewError.clear();
-    viewRender(screen);
+    viewRenderFrame(screen, SDL_GetTicks() - previewAnimStart, &images);
     upload_preview_texture();
     previewDirty = false;
   }
@@ -2135,10 +2292,10 @@ struct App {
       if (a[0] == 'c') x -= w / 2;
       else if (a[0] == 'r') x -= w;
     } else if (!strcmp(t, "rect") || !strcmp(t, "rrect") || !strcmp(t, "usage") ||
-               !strcmp(t, "bitmap")) {
-      w = (float)(l["w"] | 0) * (!strcmp(t, "bitmap") ? s : 1);
-      h = (float)(l["h"] | 0) * (!strcmp(t, "bitmap") ? s : 1);
-      if (!strcmp(t, "bitmap")) {
+               !strcmp(t, "bitmap") || !strcmp(t, "image")) {
+      w = (float)(l["w"] | 0) * (!strcmp(t, "bitmap") || !strcmp(t, "image") ? s : 1);
+      h = (float)(l["h"] | 0) * (!strcmp(t, "bitmap") || !strcmp(t, "image") ? s : 1);
+      if (!strcmp(t, "bitmap") || !strcmp(t, "image")) {
         if (a[0] == 'c') x -= w / 2;
         else if (a[0] == 'r') x -= w;
       }
@@ -2193,6 +2350,48 @@ struct App {
     selected = (int)draw.size() - 1;
     viewDirty = true;
     previewDirty = true;
+    syncJson();
+  }
+
+  void addImageLayer() {
+    dialog.openOpen("Import image or GIF", ".png,.jpg,.jpeg,.gif,.bmp",
+                    [this](const std::string& p) { addImportedLayer(p); });
+  }
+
+  void convertSelectedBitmapToImage(const std::string& source) {
+    JsonArray draw = view["draw"].as<JsonArray>();
+    if (selected < 0 || selected >= (int)draw.size()) return;
+    JsonObject layer = draw[selected];
+    if (strcmp(layer["t"] | "", "bitmap")) return;
+    imagecodec::ImportedAsset asset;
+    if (!importAsset(source, asset)) return;
+    pushUndo();
+    layer["t"] = "image";
+    layer["src"] = asset.name;
+    layer["w"] = asset.info.width;
+    layer["h"] = asset.info.height;
+    layer["s"] = 1;
+    layer.remove("d");
+    viewDirty = true;
+    previewDirty = true;
+    previewAnimStart = SDL_GetTicks();
+    syncJson();
+  }
+
+  void replaceSelectedImage(const std::string& source) {
+    JsonArray draw = view["draw"].as<JsonArray>();
+    if (selected < 0 || selected >= (int)draw.size()) return;
+    JsonObject layer = draw[selected];
+    if (strcmp(layer["t"] | "", "image")) return;
+    imagecodec::ImportedAsset asset;
+    if (!importAsset(source, asset)) return;
+    pushUndo();
+    layer["src"] = asset.name;
+    layer["w"] = asset.info.width;
+    layer["h"] = asset.info.height;
+    viewDirty = true;
+    previewDirty = true;
+    previewAnimStart = SDL_GetTicks();
     syncJson();
   }
 
@@ -2371,11 +2570,27 @@ struct App {
       const char* a = l["a"] | "l";
       int ai = !strcmp(a, "c") ? 1 : !strcmp(a, "r") ? 2 : 0;
       if (ImGui::Combo("Align", &ai, aligns, 3)) { l["a"] = aligns[ai]; changed = true; }
+    } else if (!strcmp(t, "image")) {
+      ImGui::TextDisabled("Asset: %s", (const char*)(l["src"] | "-"));
+      changed |= input_int_json(l, "s", "Scale", 1, 8, 1);
+      if (theme::secondaryButton("Replace image...", ImVec2(-1, 0)))
+        dialog.openOpen("Replace image or GIF", ".png,.jpg,.jpeg,.gif,.bmp",
+                        [this](const std::string& p) { replaceSelectedImage(p); });
+      if (theme::secondaryButton("Use as background", ImVec2(-1, 0))) {
+        pushUndo();
+        view["bgImage"] = l["src"];
+        changed = true;
+      }
+      const char* bg = view["bgImage"] | "";
+      if (!strcmp(bg, l["src"] | "")) ImGui::TextDisabled("This asset is the background.");
     } else if (!strcmp(t, "bitmap")) {
       changed |= input_int_json(l, "w", "Width", 1, 48, 8);
       changed |= input_int_json(l, "h", "Height", 1, 48, 8);
       changed |= input_int_json(l, "s", "Scale", 1, 4, 1);
       changed |= input_text_json(l, "d", "Hex data");
+      if (theme::secondaryButton("Import image/GIF...", ImVec2(-1, 0)))
+        dialog.openOpen("Import image or GIF", ".png,.jpg,.jpeg,.gif,.bmp",
+                        [this](const std::string& p) { convertSelectedBitmapToImage(p); });
       bitmapGrid(l);
     } else if (!strcmp(t, "fill")) {
       ImGui::TextDisabled("Background fill");
@@ -2413,9 +2628,31 @@ struct App {
     ImGui::Spacing();
     ImGui::SetNextItemWidth(-1);
     if (ImGui::BeginCombo("##addlayer", "Add layer...")) {
-      const char* types[] = {"text", "rect", "rrect", "circle", "line", "icon", "bitmap", "usage", "fill"};
-      for (const char* t : types) if (ImGui::Selectable(t)) addLayer(t);
+      const char* types[] = {"text", "rect", "rrect", "circle", "line", "icon",
+                             "bitmap", "image", "usage", "fill"};
+      for (const char* t : types) {
+        if (ImGui::Selectable(t)) {
+          if (!strcmp(t, "image")) addImageLayer();
+          else addLayer(t);
+        }
+      }
       ImGui::EndCombo();
+    }
+    if (theme::secondaryButton("Background image...", ImVec2(-1, 0)))
+      dialog.openOpen("Background image or GIF", ".png,.jpg,.jpeg,.gif,.bmp",
+                      [this](const std::string& p) { importBackground(p); });
+    {
+      const char* bg = view["bgImage"] | "";
+      if (bg[0]) {
+        ImGui::TextDisabled("Background: %s", bg);
+        if (theme::secondaryButton("Clear background", ImVec2(-1, 0))) {
+          pushUndo();
+          view.remove("bgImage");
+          viewDirty = true;
+          previewDirty = true;
+          syncJson();
+        }
+      }
     }
     ImGui::Spacing();
     JsonArray draw = view["draw"].as<JsonArray>();
@@ -2427,6 +2664,7 @@ struct App {
       if (!strcmp(t, "text")) snprintf(label, sizeof(label), "%02d   TEXT   %s", i, (const char*)(l["v"] | ""));
       else if (!strcmp(t, "usage")) snprintf(label, sizeof(label), "%02d   USAGE  %s", i, (const char*)(l["provider"] | ""));
       else if (!strcmp(t, "icon")) snprintf(label, sizeof(label), "%02d   ICON   %s", i, (const char*)(l["v"] | ""));
+      else if (!strcmp(t, "image")) snprintf(label, sizeof(label), "%02d   IMAGE  %s", i, (const char*)(l["src"] | ""));
       else snprintf(label, sizeof(label), "%02d   %s", i, t);
       if (ImGui::Selectable(label, selected == i, 0, ImVec2(0, 26))) selected = i;
     }
@@ -2939,6 +3177,10 @@ struct App {
       }
     }
     if (forceTab >= 0) { tab = forceTab; forceTab = -1; }
+    if (hasImageRefs() && SDL_GetTicks() - lastPreviewTick >= 100) {
+      lastPreviewTick = SDL_GetTicks();
+      previewDirty = true;
+    }
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::GetBackgroundDrawList()->AddRectFilled(vp->WorkPos,
         ImVec2(vp->WorkPos.x + vp->WorkSize.x, vp->WorkPos.y + vp->WorkSize.y),

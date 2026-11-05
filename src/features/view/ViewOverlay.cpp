@@ -19,7 +19,8 @@ void ViewOverlay::start(const ViewScreen& screen, uint16_t ttlSec) {
   active_ = true;
   untilMs_ = millis() + (uint32_t)ttlSec * 1000UL;
   error_ = "";
-  viewRender(screen_);
+  imageSource_.clear();
+  viewRenderFrame(screen_, 0, &imageSource_);
   lastUsageRev_ = usageRevision();
   lastClockKey_ = screen_.needsClock ? viewClockKey(screen_.needsSeconds) : 0;
 }
@@ -72,11 +73,11 @@ void ViewOverlay::service() {
   const bool usageChanged = screen_.hasUsage && rev != lastUsageRev_;
   const bool clockChanged = screen_.needsClock && clock != lastClockKey_;
   if (usageChanged) {
-    if (!viewRenderUsage(screen_)) { viewRender(screen_); return; }
+    if (!viewRenderUsage(screen_, 0, &imageSource_)) { viewRenderFrame(screen_, 0, &imageSource_); return; }
     lastUsageRev_ = rev;
   }
   if (clockChanged) {
-    if (!viewRenderText(screen_)) { viewRender(screen_); return; }
+    if (!viewRenderText(screen_, 0, &imageSource_)) { viewRenderFrame(screen_, 0, &imageSource_); return; }
     lastClockKey_ = clock;
   }
 }

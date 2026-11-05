@@ -41,6 +41,20 @@ int main() {
   assert(s.bitmap[s.prims[3].voff] == 0x80);
   assert(s.prims[4].type == VIEW_P_LINE);
 
+  // Asset-backed images are references; the pixels live in LittleFS, never in
+  // the JSON or the legacy bitmap pool.
+  const char* image = R"({"bgImage":"aurora","draw":[{"t":"image","src":"aurora","x":0,"y":0,"w":240,"h":240,"s":1,"a":"l"}]})";
+  assert(viewScreenParse(image, strlen(image), s, error));
+  assert(s.primCount == 1);
+  assert(s.prims[0].type == VIEW_P_IMAGE);
+  assert(!strcmp(viewBackgroundImage(s), "aurora"));
+  assert(!strcmp(viewPrimImage(s, s.prims[0]), "aurora"));
+  assert(s.imageUsed > 0);
+
+  const char* bad_image = R"({"draw":[{"t":"image","src":"../secret","x":0,"y":0}]})";
+  assert(viewScreenParse(bad_image, strlen(bad_image), s, error));
+  assert(s.primCount == 0);
+
   // An omitted metric means "all metrics" (the renderer stacks them).
   const char* all_metrics = R"({"draw":[{"t":"usage","x":0,"y":0,"w":100,"h":50,"c":"#ffffff","provider":"claude"}]})";
   assert(viewScreenParse(all_metrics, strlen(all_metrics), s, error));

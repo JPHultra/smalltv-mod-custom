@@ -2,6 +2,7 @@
 // LittleFS at /view.json and painted as the device's main screen.
 #pragma once
 #include "ViewModel.h"
+#include "ImageAsset.h"
 
 class ViewMode {
  public:
@@ -25,10 +26,18 @@ class ViewMode {
   void repaint();
 
  private:
+  bool prepareImages(const ViewScreen& screen, String& error);
+  void resetAnimation();
+
   ViewScreen screen_{};
+  FsImageSource imageSource_;
   bool       loaded_ = false;
   bool       painted_ = false;
   bool       messageDrawn_ = false;
+  bool       animated_ = false;
+  uint16_t   animDelayMs_ = 0;
+  uint32_t   animStartMs_ = 0;
+  uint32_t   lastAnimMs_ = 0;
   uint32_t   lastUsageRev_ = 0;
   uint32_t   lastClockKey_ = 0;
   String     error_;

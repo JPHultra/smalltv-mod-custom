@@ -321,7 +321,61 @@ static void drawGlyphString(Arduino_GFX* gfx, const char* text, int x, int y,
   }
 }
 
-static void drawPrims(const ViewScreen& screen, Arduino_GFX* gfx, int yOffset) {
+static void drawImageAsset(Arduino_GFX* gfx, ViewImageSource* images, const char* name,
+                            uint32_t elapsedMs, int x, int y, int w, int h,
+                            bool cover, int yOffset) {
+  if (!images || !name || w <= 0 || h <= 0) return;
+  ViewImageInfo info;
+  if (!images->info(name, info) || !info.width || !info.height) return;
+  const uint16_t frame = viewImageFrameAt(info, elapsedMs);
+  uint16_t rowColors[IMAGE_ASSET_MAX_DIM];
+  uint8_t rowAlpha[IMAGE_ASSET_MAX_DIM];
+  int lastSourceY = -1;
+
+  float scaleX = 1.0f, scaleY = 1.0f, left = 0.0f, top = 0.0f;
+  if (cover) {
+    const float scale = fmaxf((float)w / info.width, (float)h / info.height);
+    const float drawW = info.width * scale;
+    const float drawH = info.height * scale;
+    left = (w - drawW) * 0.5f;
+    top = (h - drawH) * 0.5f;
+    scaleX = scaleY = scale;
+  }
+  for (int dy = 0; dy < h; dy++) {
+    const int screenY = y + dy;
+    if (screenY < yOffset || screenY >= yOffset + VIEW_STRIP_H) continue;
+    int sourceY;
+    if (cover) {
+      const float fy = (dy - top) / scaleY;
+      if (fy < 0 || fy >= info.height) continue;
+      sourceY = (int)fy;
+    } else {
+      sourceY = (int)((int64_t)dy * info.height / h);
+    }
+    if (sourceY < 0 || sourceY >= info.height) continue;
+    if (sourceY != lastSourceY) {
+      if (!images->readRow(name, frame, (uint16_t)sourceY, rowColors, rowAlpha, info.width))
+        return;
+      lastSourceY = sourceY;
+    }
+    for (int dx = 0; dx < w; dx++) {
+      int sourceX;
+      if (cover) {
+        const float fx = (dx - left) / scaleX;
+        if (fx < 0 || fx >= info.width) continue;
+        sourceX = (int)fx;
+      } else {
+        sourceX = (int)((int64_t)dx * info.width / w);
+      }
+      if (sourceX < 0 || sourceX >= info.width) continue;
+      if (!rowAlpha[sourceX]) continue;
+      gfx->drawPixel(x + dx, screenY - yOffset, gfxTint(rowColors[sourceX]));
+    }
+  }
+}
+
+static void drawPrims(const ViewScreen& screen, Arduino_GFX* gfx, int yOffset,
+                      uint32_t elapsedMs, ViewImageSource* images) {
   for (uint8_t i = 0; i < screen.primCount; i++) {
     ViewPrim p = screen.prims[i];
     p.y -= yOffset;
@@ -370,6 +424,20 @@ static void drawPrims(const ViewScreen& screen, Arduino_GFX* gfx, int yOffset) {
           }
         break;
       }
+      case VIEW_P_IMAGE: {
+        const int s = p.aux ? p.aux : 1;
+        ViewImageInfo info;
+        const char* name = viewPrimImage(screen, p);
+        if (name && images && images->info(name, info)) {
+          const int w = info.width * s;
+          const int h = info.height * s;
+          const int x = (p.align == VIEW_A_CENTER) ? p.x - w / 2
+                      : (p.align == VIEW_A_RIGHT)  ? p.x - w : p.x;
+          drawImageAsset(gfx, images, name, elapsedMs, x, p.y + yOffset, w, h,
+                         false, yOffset);
+        }
+        break;
+      }
       case VIEW_P_USAGE:
         drawUsage(gfx, screen, p, c);
         break;
@@ -377,7 +445,8 @@ static void drawPrims(const ViewScreen& screen, Arduino_GFX* gfx, int yOffset) {
   }
 }
 
-static bool renderRegion(const ViewScreen& screen, int y0, int y1) {
+static bool renderRegion(const ViewScreen& screen, int y0, int y1,
+                         uint32_t elapsedMs, ViewImageSource* images) {
   Arduino_GFX* output = gfxDev();
   if (!output) return false;
   if (y0 < 0) y0 = 0;
@@ -393,15 +462,19 @@ static bool renderRegion(const ViewScreen& screen, int y0, int y1) {
   for (int y = start; y < end; y += VIEW_STRIP_H) {
     canvas.setOutputY(y);
     canvas.fillScreen(gfxTint(screen.bg));
+    if (const char* bg = viewBackgroundImage(screen))
+      drawImageAsset(&canvas, images, bg, elapsedMs, 0, 0, TFT_WIDTH, TFT_HEIGHT,
+                     true, y);
     g_textCanvas = &canvas;
-    drawPrims(screen, &canvas, y);
+    drawPrims(screen, &canvas, y, elapsedMs, images);
     g_textCanvas = nullptr;
     canvas.flush();
   }
   return true;
 }
 
-bool viewRenderText(const ViewScreen& screen) {
+bool viewRenderText(const ViewScreen& screen, uint32_t elapsedMs,
+                    ViewImageSource* images) {
   int y0 = TFT_HEIGHT, y1 = 0;
   for (uint8_t i = 0; i < screen.primCount; i++) {
     const ViewPrim& p = screen.prims[i];
@@ -410,26 +483,35 @@ bool viewRenderText(const ViewScreen& screen) {
     if (p.y - 1 < y0) y0 = p.y - 1;
     if (p.y + 8 * size + 1 > y1) y1 = p.y + 8 * size + 1;
   }
-  return y1 > y0 && renderRegion(screen, y0, y1);
+  return y1 > y0 && renderRegion(screen, y0, y1, elapsedMs, images);
 }
 
-bool viewRenderUsage(const ViewScreen& screen) {
+bool viewRenderUsage(const ViewScreen& screen, uint32_t elapsedMs,
+                     ViewImageSource* images) {
   bool rendered = false;
   for (uint8_t i = 0; i < screen.primCount; i++) {
     const ViewPrim& p = screen.prims[i];
     if (p.type != VIEW_P_USAGE || p.x2 <= 0 || p.y2 <= 0) continue;
-    if (!renderRegion(screen, p.y, p.y + p.y2)) return false;
+    if (!renderRegion(screen, p.y, p.y + p.y2, elapsedMs, images)) return false;
     rendered = true;
   }
   return rendered;
 }
 
-void viewRender(const ViewScreen& screen) {
-  if (renderRegion(screen, 0, TFT_HEIGHT)) return;
+void viewRenderFrame(const ViewScreen& screen, uint32_t elapsedMs,
+                     ViewImageSource* images) {
+  if (renderRegion(screen, 0, TFT_HEIGHT, elapsedMs, images)) return;
 
   // Last-resort path if the strip canvas cannot be allocated.
   Arduino_GFX* gfx = gfxDev();
   if (!gfx) return;
   gfx->fillScreen(gfxTint(screen.bg));
-  drawPrims(screen, gfx, 0);
+  if (const char* bg = viewBackgroundImage(screen))
+    drawImageAsset(gfx, images, bg, elapsedMs, 0, 0, TFT_WIDTH, TFT_HEIGHT,
+                   true, 0);
+  drawPrims(screen, gfx, 0, elapsedMs, images);
+}
+
+void viewRender(const ViewScreen& screen) {
+  viewRenderFrame(screen, 0, nullptr);
 }
