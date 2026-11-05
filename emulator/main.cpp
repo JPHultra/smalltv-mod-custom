@@ -1057,32 +1057,92 @@ struct App {
     });
   }
 
+  static std::string psQuote(const std::string& value) {
+    std::string out = "'";
+    for (char c : value) {
+      if (c == '\'') out += "''";
+      else out += c;
+    }
+    out += "'";
+    return out;
+  }
+
   void launchAppUpdater(bool workerActive) {
     const std::string root = appUpdateRoot;
 #if defined(_WIN32)
-    const std::string script = (std::filesystem::temp_directory_path() /
-                                "smalltv-update-app.ps1").string();
+    const std::filesystem::path scriptPath = std::filesystem::temp_directory_path() /
+                                             "smalltv-update-app.ps1";
     const std::string archiveRoot = "smalltv-emulator-windows-x86_64";
-    const std::string exe = executablePath;
-    std::ofstream file(script, std::ios::trunc);
+    std::string expected = appRelease.tag;
+    if (!expected.empty() && expected[0] == 'v') expected.erase(0, 1);
+    std::ofstream file(scriptPath, std::ios::trunc);
     if (!file) { notify("Cannot create the app updater"); return; }
-    file << "param()\n"
-            "$ErrorActionPreference='Stop'\n"
-            "Wait-Process -Id " << _getpid() << " -ErrorAction SilentlyContinue\n"
-            "$tmp=Join-Path $env:TEMP 'smalltv-emulator-update'\n"
-            "Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue\n"
-            "Expand-Archive -LiteralPath '" << appUpdateArchive << "' -DestinationPath $tmp -Force\n"
-            "$new=Join-Path $tmp '" << archiveRoot << "'\n"
-            "if (-not (Test-Path (Join-Path $new 'VERSION.txt'))) { exit 1 }\n"
-            "$back='" << root << ".smalltv-old'\n"
-            "Remove-Item $back -Recurse -Force -ErrorAction SilentlyContinue\n"
-            "Move-Item '" << root << "' $back\n"
-            "try { Move-Item $new '" << root << "' } catch { Move-Item $back '" << root << "'; exit 1 }\n"
-            "Remove-Item $back -Recurse -Force -ErrorAction SilentlyContinue\n"
-            "if (" << (workerActive ? "$true" : "$false") << ") { schtasks /Run /TN SmallTVUsageWorker | Out-Null }\n"
-            "Start-Process '" << exe << "'\n";
+    file << "\xEF\xBB\xBF";
+    file << "$ErrorActionPreference='Stop'\n"
+            "$log=Join-Path $env:TEMP 'smalltv-update.log'\n"
+            "function Log([string]$m){ Add-Content -LiteralPath $log -Value ((Get-Date).ToString('o')+' '+$m) }\n"
+            "Set-Location -LiteralPath $env:TEMP\n"
+            "$archive=" << psQuote(appUpdateArchive) << "\n"
+            "$root=" << psQuote(root) << "\n"
+            "$back=" << psQuote(root + ".smalltv-old") << "\n"
+            "$expected=" << psQuote(expected) << "\n"
+            "$oldMoved=$false\n"
+            "$newMoved=$false\n"
+            "try {\n"
+            "  Log 'starting app update'\n"
+            "  Wait-Process -Id " << _getpid() << " -ErrorAction SilentlyContinue\n"
+            "  $tmp=Join-Path $env:TEMP 'smalltv-emulator-update'\n"
+            "  Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue\n"
+            "  Expand-Archive -LiteralPath $archive -DestinationPath $tmp -Force\n"
+            "  $new=Join-Path $tmp " << psQuote(archiveRoot) << "\n"
+            "  if (-not (Test-Path -LiteralPath (Join-Path $new 'VERSION.txt'))) { throw 'VERSION.txt missing' }\n"
+            "  $version=(Get-Content -LiteralPath (Join-Path $new 'VERSION.txt') -Raw).Trim()\n"
+            "  if ($version -ne $expected) { throw ('unexpected version '+$version) }\n"
+            "  Remove-Item -LiteralPath $back -Recurse -Force -ErrorAction SilentlyContinue\n"
+            "  Move-Item -LiteralPath $root -Destination $back\n"
+            "  $oldMoved=$true\n"
+            "  try { Move-Item -LiteralPath $new -Destination $root; $newMoved=$true }\n"
+            "  catch { Move-Item -LiteralPath $back -Destination $root; $oldMoved=$false; throw }\n"
+            "  $exe=Join-Path $root 'smalltv-emulator.exe'\n"
+            "  if (-not (Test-Path -LiteralPath $exe)) { throw 'updated executable missing' }\n"
+            "  if (" << (workerActive ? "$true" : "$false") << ") { schtasks /Run /TN SmallTVUsageWorker | Out-Null }\n"
+            "  Start-Process -FilePath $exe -WorkingDirectory $root\n"
+            "  Log 'update complete'\n"
+            "  Remove-Item -LiteralPath $back -Recurse -Force -ErrorAction SilentlyContinue\n"
+            "} catch {\n"
+            "  Log ('update failed: '+($_ | Out-String))\n"
+            "  if ($newMoved -and (Test-Path -LiteralPath $root)) {\n"
+            "    $failed=$root+'.smalltv-newfailed'\n"
+            "    Remove-Item -LiteralPath $failed -Recurse -Force -ErrorAction SilentlyContinue\n"
+            "    Move-Item -LiteralPath $root -Destination $failed -ErrorAction SilentlyContinue\n"
+            "  }\n"
+            "  if ($oldMoved -and (Test-Path -LiteralPath $back) -and -not (Test-Path -LiteralPath $root)) {\n"
+            "    Move-Item -LiteralPath $back -Destination $root\n"
+            "  }\n"
+            "  $oldExe=Join-Path $root 'smalltv-emulator.exe'\n"
+            "  if (Test-Path -LiteralPath $oldExe) { Start-Process -FilePath $oldExe -WorkingDirectory $root }\n"
+            "  exit 1\n"
+            "}\n";
     file.close();
-    std::system(("start \"\" powershell -NoProfile -ExecutionPolicy Bypass -File \"" + script + "\"").c_str());
+    if (!file) { notify("Cannot write the app updater"); return; }
+
+    const std::wstring script = scriptPath.wstring();
+    std::wstring command = L"powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"" + script + L"\"";
+    std::wstring cwd = std::filesystem::temp_directory_path().wstring();
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESHOWWINDOW;
+    startup.wShowWindow = SW_HIDE;
+    PROCESS_INFORMATION process{};
+    std::vector<wchar_t> commandLine(command.begin(), command.end());
+    commandLine.push_back(L'\0');
+    if (!CreateProcessW(nullptr, commandLine.data(), nullptr, nullptr, FALSE,
+                        CREATE_NO_WINDOW, nullptr, cwd.c_str(), &startup, &process)) {
+      notify("Cannot start the Windows updater");
+      return;
+    }
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
 #else
     const std::string script = (std::filesystem::temp_directory_path() /
                                 "smalltv-update-app.sh").string();
@@ -1137,7 +1197,7 @@ struct App {
       }
       if (appUpdateWorkerWasActive) {
         controlWorkerService(false);
-        for (int i = 0; i < 20 && workerServiceRunning(); i++)
+        for (int i = 0; i < 100 && workerServiceRunning(); i++)
           std::this_thread::sleep_for(std::chrono::milliseconds(100));
         if (workerServiceRunning()) {
           notify("Could not stop the usage worker for the app update");
@@ -1450,8 +1510,11 @@ struct App {
                                 "smalltv-worker-check.ps1").string();
     std::ofstream file(script, std::ios::trunc);
     if (!file) return false;
-    file << "$p=Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*--usage-worker*' }\n"
-            "if ($p) { exit 1 }\n";
+    file << "try {\n"
+            "  $p=Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'smalltv-emulator.exe' -and $_.CommandLine -like '*--usage-worker*' }\n"
+            "  if ($p) { exit 1 }\n"
+            "  exit 0\n"
+            "} catch { exit 2 }\n";
     file.close();
     const int result = std::system(
         ("powershell -NoProfile -ExecutionPolicy Bypass -File \"" + script +

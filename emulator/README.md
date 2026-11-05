@@ -42,6 +42,10 @@ Image/GIF assets are imported only in the desktop app. They are converted to a
 compact device asset, uploaded to `/img`, and referenced by name from the
 dashboard JSON. The web editor does not support image assets.
 
+Windows app self-update writes its progress and failure details to
+`%TEMP%\smalltv-update.log`. If an update cannot be applied, the updater restores
+the previous folder and restarts the old app.
+
 The app does not emulate Wi-Fi/OTA in firmware. Fonts live in
 `emulator/assets/` and are included in the release packages. It talks to real devices over
 the network. The local preview uses a JSON fixture until you edit the dashboard.
