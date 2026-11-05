@@ -13,6 +13,10 @@ HTML/WebView assets.
 - Local live preview using the firmware renderer
 - Subnet discovery of SmallTV devices
 - Device web-UI password (HTTP Digest)
+- Native usage collection for Claude, Codex/ChatGPT and DeepSeek
+- In-app Usage setup page with OS secure credential storage
+- Native DeepSeek token-usage proxy
+- Headless usage worker mode for background/autostart use
 - Native settings for WiFi, display, clock, button, view/overlay and security
 - Live status and usage
 - Native visual dashboard editor:
@@ -43,8 +47,8 @@ and a firmware build once so `.pio/libdeps/.../ArduinoJson` exists.
 Linux:
 
 ```sh
-# Debian/Ubuntu: sudo apt install build-essential pkg-config libsdl2-dev
-# Arch:          sudo pacman -S base-devel pkgconf sdl2
+# Debian/Ubuntu: sudo apt install build-essential pkg-config libsdl2-dev libcurl4-openssl-dev libsecret-1-dev
+# Arch:          sudo pacman -S base-devel pkgconf sdl2 curl libsecret
 make -C emulator
 ```
 
@@ -68,9 +72,31 @@ emulator/build/smalltv-emulator --view examples/view.json \
 
 Select or enter a device in the Device workspace and connect. Device shows
 discovery, a scaled live preview, status/usage telemetry and maintenance
-actions; Design is the three-pane dashboard editor; Settings uses section
+actions; Design is the three-pane dashboard editor; Usage holds provider
+credentials, fetch controls and the DeepSeek proxy; Settings uses section
 navigation with two-column forms. Settings > System can fetch the device's
 current and previous diagnostic logs.
+
+The native Usage tab stores Claude/Codex/DeepSeek credentials in the OS secure
+store (DPAPI on Windows, Secret Service on Linux) and can push the normalized
+usage document directly to the connected device. DeepSeek token usage still
+requires pointing the DeepSeek client at `http://127.0.0.1:8789`.
+
+The same executable has a headless worker mode:
+
+```sh
+emulator/build/smalltv-emulator --usage-worker --usage-device http://smalltv.local
+```
+
+Install it as a Linux user service or Windows logon task with:
+
+```sh
+tools/install_usage_worker.sh /path/to/smalltv-emulator http://smalltv.local
+```
+
+```bat
+tools\install_usage_worker.bat C:\path	o\smalltv-emulator.exe http://smalltv.local
+```
 
 Options:
 
@@ -95,8 +121,8 @@ directly.
 
 ## Release packages
 
-- Linux: `smalltv-emulator-linux-x86_64.tar.gz` (needs the system SDL2 runtime)
-- Windows: `smalltv-emulator-windows-x86_64.zip` (includes `SDL2.dll`)
+- Linux: `smalltv-emulator-linux-x86_64.tar.gz` (needs the system SDL2, libcurl and libsecret runtimes)
+- Windows: `smalltv-emulator-windows-x86_64.zip` (includes `SDL2.dll`; uses built-in WinHTTP/DPAPI)
 
 ## Screenshot
 

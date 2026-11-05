@@ -19,7 +19,11 @@
 #include <string>
 #include <vector>
 #if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <winsock2.h>
+#include <windows.h>
 #endif
 
 #include "Gfx.h"
@@ -29,10 +33,21 @@
 #include "ViewModel.h"
 #include "ViewRender.h"
 #include "theme.h"
+#include "usage/SecureStore.h"
+#include "usage/UsageCore.h"
+#include "usage/DeepSeekProxy.h"
+#include "usage/Worker.h"
 
 namespace fs = std::filesystem;
 
 void gfxSetPreviewDisplay(int order, bool invert, int rGain, int gGain, int bGain);
+
+static void fatal_error(const std::string& message) {
+  std::cerr << message << "\n";
+#if defined(_WIN32)
+  MessageBoxA(nullptr, message.c_str(), "SmallTV", MB_OK | MB_ICONERROR);
+#endif
+}
 
 static bool local_time(std::time_t now, struct tm& out) {
   struct tm* local = std::localtime(&now);
@@ -83,14 +98,16 @@ static bool write_ppm(const char* path, const uint16_t* frame, int w, int h) {
   return true;
 }
 
-static void usage() {
+static void print_usage() {
   std::cerr
       << "usage: smalltv-emulator [options]\n"
       << "  --view PATH       draw-list JSON (default examples/view.json)\n"
       << "  --usage PATH      normalized usage JSON (default daemon/usage.example.json)\n"
       << "  --time HH:MM      fixed clock time instead of the local clock\n"
-      << "  --tab NAME        start on device, design or settings\n"
+      << "  --tab NAME        start on device, design, usage or settings\n"
       << "  --settings-tab NAME start settings on wifi, display, view, system or json\n"
+      << "  --usage-worker    run the headless usage collector\n"
+      << "  --usage-device URL device to push usage to\n"
       << "  --url URL         connect to a device at startup\n"
       << "  --user USER       device web UI user\n"
       << "  --pass PASS       device web UI password\n"
@@ -414,6 +431,16 @@ struct App {
   std::string usage;
   std::string scanJson;
   JsonDocument scanDoc;
+  JsonDocument usageCreds;
+  bool usageCredsLoaded = false;
+  std::string usageCredsError;
+  std::vector<usage::Result> usageResults;
+  bool usageFetchRunning = false;
+  std::future<usage::FetchResult> usageFuture;
+  std::string usageError;
+  char usageProxyUrl[192] = "http://127.0.0.1:8789/usage";
+  usage::DeepSeekProxy deepSeekProxy;
+  bool deepSeekProxyRunning = false;
   std::string updateJson;
   std::string latestVersion;
   bool updateAvailable = false;
@@ -448,6 +475,9 @@ struct App {
   std::string diagTitle;
   bool diagOpen = false;
   std::string initialViewPath = "examples/view.json";
+  std::string executablePath;
+  bool workerServiceActive = false;
+  bool workerServiceChecked = false;
   FileDialog dialog;
 
   bool beginPane(const char* id, ImVec2 size, bool scroll = true) {
@@ -503,12 +533,12 @@ struct App {
   }
 
   void topbar() {
-    const char* names[] = {"Device", "Design", "Settings"};
+    const char* names[] = {"Device", "Design", "Usage", "Settings"};
     ImGui::PushFont(theme::fonts().heading);
     ImGui::TextUnformatted("SmallTV");
     ImGui::PopFont();
     ImGui::SameLine(112);
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 4; i++) {
       ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(14, 9));
       ImGui::PushStyleColor(ImGuiCol_Button, i == tab ? theme::surfaceAlt() : theme::surface());
       ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::surfaceAlt());
@@ -913,6 +943,314 @@ struct App {
         if (usageApply(String(raw.c_str(), raw.size()))) previewDirty = true;
       }
     }
+  }
+
+  JsonObject usageProvider(const char* id) {
+    JsonObject root = usageCreds.as<JsonObject>();
+    if (root.isNull()) root = usageCreds.to<JsonObject>();
+    JsonObject provider = root[id].as<JsonObject>();
+    if (provider.isNull()) provider = root[id].to<JsonObject>();
+    return provider;
+  }
+
+  bool loadUsageCredentials() {
+    if (usageCredsLoaded) return true;
+    std::string json;
+    std::string error;
+    if (!usage::secureLoad(json, error)) {
+      usageCredsError = error;
+      usageCredsLoaded = true;
+      usageCreds.clear();
+      deserializeJson(usageCreds, usage::credentialsTemplate());
+      return false;
+    }
+    if (json.empty()) json = usage::credentialsTemplate();
+    usageCreds.clear();
+    if (deserializeJson(usageCreds, json) || !usageCreds.is<JsonObject>()) {
+      usageCredsError = "Stored usage credentials are invalid";
+      deserializeJson(usageCreds, usage::credentialsTemplate());
+      usageCredsLoaded = true;
+      return false;
+    }
+    usageCredsError.clear();
+    usageCredsLoaded = true;
+    return true;
+  }
+
+  bool saveUsageCredentials() {
+    std::string json;
+    serializeJson(usageCreds, json);
+    std::string error;
+    if (!usage::secureSave(json, error)) {
+      usageCredsError = error;
+      notify("Usage credentials: " + error);
+      return false;
+    }
+    usageCredsError.clear();
+    notify("Usage credentials saved to the OS store");
+    return true;
+  }
+
+  void clearUsageCredentials() {
+    std::string error;
+    if (!usage::secureClear(error)) {
+      usageCredsError = error;
+      notify("Usage credentials: " + error);
+      return;
+    }
+    usageCreds.clear();
+    deserializeJson(usageCreds, usage::credentialsTemplate());
+    usageResults.clear();
+    usageError.clear();
+    notify("Usage credentials cleared");
+  }
+
+  void startUsageFetch() {
+    if (usageFetchRunning) return;
+    std::string body;
+    serializeJson(usageCreds, body);
+    usageFetchRunning = true;
+    usageError.clear();
+    usageResults.clear();
+    const std::string proxy = usageProxyUrl;
+    notify("Fetching usage providers...");
+    usageFuture = std::async(std::launch::async, [body, proxy] {
+      return usage::fetchAll(body, proxy, 15000);
+    });
+  }
+
+  void pushUsage() {
+    if (usageResults.empty()) {
+      notify("Fetch usage before pushing");
+      return;
+    }
+    if (!deviceUrl[0]) {
+      notify("Connect to a device first");
+      return;
+    }
+    const std::string normalized = usage::normalizedJson(usageResults);
+    DeviceResponse response;
+    if (api("POST", "/api/usage", normalized, "application/json", response)) {
+      usage = normalized;
+      usageApply(String(normalized.c_str(), normalized.size()));
+      previewDirty = true;
+      notify("Usage pushed to device");
+    }
+  }
+
+  std::string proxyStatePath() const {
+#if defined(_WIN32)
+    const char* base = std::getenv("APPDATA");
+    return std::string(base ? base : ".") + "/smalltv/deepseek-usage.json";
+#else
+    const char* home = std::getenv("HOME");
+    return std::string(home ? home : ".") + "/.config/smalltv/deepseek-usage.json";
+#endif
+  }
+
+#if defined(_WIN32)
+  std::string workerTaskCommand(const char* action) const {
+    return "schtasks /" + std::string(action) +
+           " /TN SmallTVUsageWorker" + (strcmp(action, "Query") == 0 ? "" : " /F");
+  }
+#else
+  std::string workerUnitPath() const {
+    const char* base = std::getenv("XDG_CONFIG_HOME");
+    return std::string(base ? base : "") +
+           (base ? "/systemd/user/smalltv-usage-worker.service"
+                 : "/.config/systemd/user/smalltv-usage-worker.service");
+  }
+#endif
+
+  void installWorkerService() {
+    if (executablePath.empty()) {
+      notify("Cannot locate the application executable");
+      return;
+    }
+    const std::string device = deviceUrl[0] ? deviceUrl : "http://smalltv.local";
+#if defined(_WIN32)
+    const std::string command =
+        "schtasks /Create /SC ONLOGON /TN SmallTVUsageWorker /TR \"" +
+        executablePath + " --usage-worker --usage-device " + device +
+        "\" /F >NUL 2>&1";
+    const int result = std::system(command.c_str());
+#else
+    const std::string unit = workerUnitPath();
+    std::error_code error;
+    std::filesystem::create_directories(std::filesystem::path(unit).parent_path(), error);
+    std::ofstream file(unit, std::ios::trunc);
+    if (!file) {
+      notify("Cannot write the usage worker service file");
+      return;
+    }
+    file << "[Unit]\nDescription=SmallTV native usage collector\n"
+            "After=graphical-session.target\n\n"
+            "[Service]\nType=simple\nExecStart=\"" << executablePath
+         << "\" --usage-worker --usage-device \"" << device << "\"\n"
+            "Restart=on-failure\nRestartSec=10\n\n"
+            "[Install]\nWantedBy=default.target\n";
+    file.close();
+    const int result = std::system(
+        "systemctl --user daemon-reload && systemctl --user enable --now smalltv-usage-worker.service");
+#endif
+    workerServiceChecked = false;
+    notify(result == 0 ? "Usage worker autostart installed" : "Could not install usage worker autostart");
+  }
+
+  void uninstallWorkerService() {
+#if defined(_WIN32)
+    const int result = std::system("schtasks /Delete /TN SmallTVUsageWorker /F >NUL 2>&1");
+#else
+    std::system("systemctl --user disable --now smalltv-usage-worker.service >/dev/null 2>&1 || true");
+    std::error_code error;
+    std::filesystem::remove(workerUnitPath(), error);
+    const int result = std::system("systemctl --user daemon-reload");
+#endif
+    workerServiceChecked = false;
+    notify(result == 0 ? "Usage worker autostart removed" : "Could not remove usage worker autostart");
+  }
+
+  void controlWorkerService(bool start) {
+#if defined(_WIN32)
+    const int result = std::system(start
+        ? "schtasks /Run /TN SmallTVUsageWorker >NUL 2>&1"
+        : "schtasks /End /TN SmallTVUsageWorker >NUL 2>&1");
+#else
+    const int result = std::system(start
+        ? "systemctl --user start smalltv-usage-worker.service"
+        : "systemctl --user stop smalltv-usage-worker.service");
+#endif
+    workerServiceChecked = false;
+    notify(result == 0 ? (start ? "Usage worker started" : "Usage worker stopped")
+                       : "Usage worker command failed");
+  }
+
+  bool workerServiceRunning() {
+#if defined(_WIN32)
+    return std::system("schtasks /Query /TN SmallTVUsageWorker >NUL 2>&1") == 0;
+#else
+    return std::system("systemctl --user is-active --quiet smalltv-usage-worker.service") == 0;
+#endif
+  }
+
+  void startDeepSeekProxy() {
+    if (deepSeekProxyRunning) return;
+    std::string error;
+    if (!deepSeekProxy.start("127.0.0.1", 8789, "https://api.deepseek.com",
+                             proxyStatePath(), error)) {
+      notify("DeepSeek proxy: " + error);
+      return;
+    }
+    deepSeekProxyRunning = true;
+    notify("DeepSeek proxy started on 127.0.0.1:8789");
+  }
+
+  void stopDeepSeekProxy() {
+    deepSeekProxy.stop();
+    deepSeekProxyRunning = false;
+    notify("DeepSeek proxy stopped");
+  }
+
+  void usageScreen() {
+    loadUsageCredentials();
+    beginPane("##usagepage", ImVec2(0, 0), true);
+    paneTitle("USAGE", "credentials stay in the OS secure store");
+    ImGui::Spacing();
+    if (!usageCredsError.empty()) ImGui::TextWrapped("Storage: %s", usageCredsError.c_str());
+    if (ImGui::Button("Save credentials")) saveUsageCredentials();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(usageFetchRunning);
+    if (ImGui::Button("Fetch now")) startUsageFetch();
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(usageResults.empty());
+    if (ImGui::Button("Push to device")) pushUsage();
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (ImGui::Button("Clear credentials")) clearUsageCredentials();
+    if (usageFetchRunning) {
+      ImGui::Spacing();
+      ImGui::TextDisabled("Fetching Claude, Codex and DeepSeek...");
+      ImGui::ProgressBar(-1.0f * (float)ImGui::GetTime(), ImVec2(240, 0), "working");
+    } else if (!usageError.empty()) {
+      ImGui::TextWrapped("Fetch error: %s", usageError.c_str());
+    }
+
+    ImGui::SeparatorText("Claude");
+    JsonObject claude = usageProvider("claude");
+    formStart("##usage-claude");
+    input_text_json(claude, "accessToken", "Access token", true);
+    input_text_json(claude, "refreshToken", "Refresh token", true);
+    input_text_json(claude, "expiresAt", "Expires at (epoch ms)");
+    input_text_json(claude, "clientId", "OAuth client ID");
+    input_text_json(claude, "tokenUrl", "Token URL");
+    input_text_json(claude, "userAgent", "User agent");
+    formEnd();
+
+    ImGui::SeparatorText("Codex / ChatGPT");
+    JsonObject codex = usageProvider("codex");
+    formStart("##usage-codex");
+    input_text_json(codex, "accessToken", "Access token", true);
+    input_text_json(codex, "refreshToken", "Refresh token", true);
+    input_text_json(codex, "accountId", "Account ID", true);
+    input_text_json(codex, "clientId", "OAuth client ID");
+    input_text_json(codex, "tokenUrl", "Token URL");
+    input_text_json(codex, "userAgent", "User agent");
+    formEnd();
+
+    ImGui::SeparatorText("DeepSeek");
+    JsonObject deepseek = usageProvider("deepseek");
+    formStart("##usage-deepseek");
+    input_text_json(deepseek, "apiKey", "API key", true);
+    formEnd();
+    ImGui::SetNextItemWidth(-1);
+    ImGui::InputTextWithHint("##usage-proxy", "http://127.0.0.1:8789/usage",
+                             usageProxyUrl, sizeof(usageProxyUrl));
+    ImGui::TextDisabled("Token usage requires the DeepSeek client to use the local proxy.");
+    ImGui::SameLine();
+    if (deepSeekProxyRunning) {
+      if (ImGui::Button("Stop proxy")) stopDeepSeekProxy();
+    } else {
+      if (ImGui::Button("Start proxy")) startDeepSeekProxy();
+    }
+    ImGui::TextDisabled("Proxy: %s", deepSeekProxyRunning ? "running on 127.0.0.1:8789" : "stopped");
+    ImGui::SeparatorText("Background worker");
+    if (!workerServiceChecked) {
+      workerServiceActive = workerServiceRunning();
+      workerServiceChecked = true;
+    }
+    ImGui::TextDisabled("Autostart: %s", workerServiceActive ? "running" : "not running");
+    if (ImGui::Button("Install autostart")) installWorkerService();
+    ImGui::SameLine();
+    if (ImGui::Button("Uninstall autostart")) uninstallWorkerService();
+    ImGui::SameLine();
+    if (ImGui::Button("Start worker")) controlWorkerService(true);
+    ImGui::SameLine();
+    if (ImGui::Button("Stop worker")) controlWorkerService(false);
+    ImGui::SameLine();
+    if (ImGui::Button("Refresh status")) workerServiceChecked = false;
+
+    ImGui::SeparatorText("Last fetch");
+    if (usageResults.empty()) {
+      ImGui::TextDisabled("No provider results yet.");
+    } else {
+      for (const usage::Result& result : usageResults) {
+        ImGui::Text("%s", result.name.c_str());
+        ImGui::SameLine();
+        if (result.ok) ImGui::TextDisabled("%s", result.status.c_str());
+        else ImGui::TextDisabled("error");
+        if (!result.error.empty()) ImGui::TextWrapped("%s", result.error.c_str());
+        for (const usage::Metric& metric : result.metrics) {
+          ImGui::TextDisabled("%s", metric.label.c_str());
+          ImGui::SameLine(ImGui::GetContentRegionAvail().x - 64);
+          if (!metric.value.empty()) ImGui::Text("%s", metric.value.c_str());
+          else ImGui::Text("%.0f%%", metric.pct);
+          if (metric.pct > 0) ImGui::ProgressBar((float)metric.pct / 100.0f, ImVec2(-1, 5), "");
+        }
+        ImGui::Spacing();
+      }
+    }
+    endPane();
   }
 
   void loadConfig() {
@@ -2206,6 +2544,24 @@ struct App {
   }
 
   void draw() {
+    if (usageFetchRunning && usageFuture.valid() &&
+        usageFuture.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
+      usage::FetchResult batch = usageFuture.get();
+      usageFetchRunning = false;
+      usageError = batch.error;
+      if (!batch.error.empty()) {
+        notify("Usage fetch failed: " + batch.error);
+      } else {
+        usageResults = batch.providers;
+        usageCreds.clear();
+        if (!deserializeJson(usageCreds, batch.credentialsJson) && usageCreds.is<JsonObject>()) {
+          std::string error;
+          if (!usage::secureSave(batch.credentialsJson, error)) usageCredsError = error;
+          else usageCredsError.clear();
+        }
+        notify("Usage fetch complete");
+      }
+    }
     if (uploadRunning && uploadFuture.valid() &&
         uploadFuture.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
       bool ok = uploadFuture.get();
@@ -2247,6 +2603,7 @@ struct App {
     ImGui::BeginChild("##page", ImVec2(pageAvail.x - margin, pageH), false);
     if (tab == 0) deviceScreen();
     else if (tab == 1) editor();
+    else if (tab == 2) usageScreen();
     else settings();
     ImGui::EndChild();
     ImGui::End();
@@ -2266,6 +2623,11 @@ int main(int argc, char** argv) {
   const char* connectUrl = nullptr;
   const char* connectUser = nullptr;
   const char* connectPass = nullptr;
+  bool usageWorker = false;
+  bool usageOnce = false;
+  bool usageProxy = true;
+  int usageInterval = 60;
+  const char* usageDevice = "http://smalltv.local";
 
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "--view") && i + 1 < argc) viewPath = argv[++i];
@@ -2277,28 +2639,44 @@ int main(int argc, char** argv) {
     else if (!strcmp(argv[i], "--url") && i + 1 < argc) connectUrl = argv[++i];
     else if (!strcmp(argv[i], "--user") && i + 1 < argc) connectUser = argv[++i];
     else if (!strcmp(argv[i], "--pass") && i + 1 < argc) connectPass = argv[++i];
-    else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) { usage(); return 0; }
-    else { usage(); return 2; }
+    else if (!strcmp(argv[i], "--usage-worker")) usageWorker = true;
+    else if (!strcmp(argv[i], "--usage-once")) usageOnce = true;
+    else if (!strcmp(argv[i], "--no-usage-proxy")) usageProxy = false;
+    else if (!strcmp(argv[i], "--usage-interval") && i + 1 < argc) usageInterval = atoi(argv[++i]);
+    else if (!strcmp(argv[i], "--usage-device") && i + 1 < argc) usageDevice = argv[++i];
+    else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) { print_usage(); return 0; }
+    else { print_usage(); return 2; }
+  }
+
+  if (usageWorker) {
+    return usage::runWorker(usageDevice, usageInterval, usageProxy, usageOnce);
   }
 
   if (timeText) {
     int hh = 0, mm = 0;
     if (sscanf(timeText, "%d:%d", &hh, &mm) != 2 || hh < 0 || hh > 23 ||
         mm < 0 || mm > 59) {
-      std::cerr << "invalid --time, expected HH:MM\n";
+      fatal_error("Invalid --time, expected HH:MM");
       return 2;
     }
-    if (!local_time(std::time(nullptr), g_fixedTm)) { std::cerr << "cannot read local clock\n"; return 1; }
+    if (!local_time(std::time(nullptr), g_fixedTm)) {
+      fatal_error("Cannot read the local clock");
+      return 1;
+    }
     g_fixedTm.tm_hour = hh; g_fixedTm.tm_min = mm; g_fixedTm.tm_sec = 0;
     g_fixedTime = true;
   }
 
   std::string viewJson;
-  if (!read_file(viewPath, viewJson)) { std::cerr << "cannot read view: " << viewPath << "\n"; return 1; }
+  if (!read_file(viewPath, viewJson)) {
+    fatal_error(std::string("Cannot read view: ") + viewPath);
+    return 1;
+  }
   ViewScreen screen;
   String viewError;
   if (!viewScreenParse(viewJson.c_str(), viewJson.size(), screen, viewError)) {
-    std::cerr << "invalid view: " << viewError.c_str() << "\n"; return 1;
+    fatal_error(std::string("Invalid view: ") + viewError.c_str());
+    return 1;
   }
   usageInit();
   std::string usageJson;
@@ -2306,7 +2684,8 @@ int main(int argc, char** argv) {
   viewRender(screen);
   if (screenshot) {
     if (!write_ppm(screenshot, gfxDev()->getFramebuffer(), gfxDev()->width(), gfxDev()->height())) {
-      std::cerr << "cannot write screenshot\n"; return 1;
+      fatal_error("Cannot write screenshot");
+      return 1;
     }
     std::cout << "wrote " << screenshot << "\n";
     return 0;
@@ -2317,15 +2696,24 @@ int main(int argc, char** argv) {
   WSADATA wsa{};
   WSAStartup(MAKEWORD(2, 2), &wsa);
 #endif
-  if (SDL_Init(SDL_INIT_VIDEO) != 0) { std::cerr << "SDL init failed: " << SDL_GetError() << "\n"; return 1; }
+  if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+    fatal_error(std::string("SDL init failed: ") + SDL_GetError());
+    return 1;
+  }
   SDL_Window* window = SDL_CreateWindow("SmallTV", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                         1280, 820, SDL_WINDOW_RESIZABLE | SDL_WINDOW_SHOWN);
   SDL_Renderer* renderer = window ? SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC) : nullptr;
   if (!renderer) renderer = window ? SDL_CreateRenderer(window, -1, 0) : nullptr;
-  if (!window || !renderer) { std::cerr << "SDL window failed: " << SDL_GetError() << "\n"; return 1; }
+  if (!window || !renderer) {
+    fatal_error(std::string("SDL window failed: ") + SDL_GetError());
+    return 1;
+  }
   SDL_Texture* texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGB565,
                                             SDL_TEXTUREACCESS_STREAMING, gfxDev()->width(), gfxDev()->height());
-  if (!texture) { std::cerr << "texture failed: " << SDL_GetError() << "\n"; return 1; }
+  if (!texture) {
+    fatal_error(std::string("SDL texture failed: ") + SDL_GetError());
+    return 1;
+  }
   g_texture = texture;
   g_renderer = renderer;
   upload_preview_texture();
@@ -2343,9 +2731,11 @@ int main(int argc, char** argv) {
 
   App app;
   app.initialViewPath = viewPath;
+  app.executablePath = fs::absolute(argv[0]).string();
   if (tabText) {
     if (!strcmp(tabText, "design") || !strcmp(tabText, "editor")) app.forceTab = 1;
-    else if (!strcmp(tabText, "settings")) app.forceTab = 2;
+    else if (!strcmp(tabText, "usage")) app.forceTab = 2;
+    else if (!strcmp(tabText, "settings")) app.forceTab = 3;
     else app.forceTab = 0;
   }
   if (settingsTabText) {

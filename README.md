@@ -172,9 +172,14 @@ The **View** tab can also poll a URL on a schedule (`view.pollUrl`,
 `204` or an empty body clears the overlay and its queue; invalid JSON leaves
 them alone. The overlay is never persisted.
 
-## Usage daemon
+## Usage collection
 
-One local process normalizes the three providers and POSTs the document to
+The native desktop app can collect Claude, Codex/ChatGPT and DeepSeek usage
+itself, store credentials in the OS secure store, and push directly to
+`/api/usage`. It also includes a headless worker mode for background/autostart
+use. The Python daemon remains available as an alternative.
+
+The external daemon normalizes the three providers and POSTs the document to
 `/api/usage`:
 
 ```json

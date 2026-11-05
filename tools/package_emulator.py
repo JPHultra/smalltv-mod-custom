@@ -41,13 +41,8 @@ cd "$DIR"
 exec "$DIR/smalltv-emulator" --view "$DIR/examples/view.json" --usage "$DIR/usage.example.json" "$@"
 """
 
-WINDOWS_RUN = """@echo off
-cd /d "%~dp0"
-"%~dp0smalltv-emulator.exe" --view "%~dp0examples\\view.json" --usage "%~dp0usage.example.json" %*
-"""
-
 WINDOWS_README = """SmallTV native desktop app for Windows.
-Run run.bat or smalltv-emulator.exe. Keep SDL2.dll and the assets folder beside
+Launch smalltv-emulator.exe directly. Keep SDL2.dll and the assets folder beside
 the executable. No installation is required. Use Scan or enter the device URL
 and press Connect.
 """
@@ -97,7 +92,6 @@ def stage_linux(package: Path, binary: Path) -> None:
 def stage_windows(package: Path, binary: Path, sdl2_dll: Path) -> None:
     copy_file(binary, package / "smalltv-emulator.exe")
     copy_file(sdl2_dll, package / "SDL2.dll")
-    (package / "run.bat").write_text(WINDOWS_RUN, encoding="utf-8")
     (package / "README-WINDOWS.txt").write_text(WINDOWS_README, encoding="utf-8")
 
 

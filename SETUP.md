@@ -287,6 +287,12 @@ stacks all metrics; `0`-`4` selects one. `priority` is the overlay priority (0-3
 
 ## 7. Usage: Claude, Codex, DeepSeek
 
+The desktop app now has a native **Usage** tab and can run its own collector.
+Credentials are kept in the OS secure store: DPAPI on Windows and Secret
+Service/libsecret on Linux. The existing Python daemon remains supported as an
+alternative. Do not run both collectors against the same device at the same
+time.
+
 ### 7.1 Configure the aggregator and credentials
 
 ```sh
