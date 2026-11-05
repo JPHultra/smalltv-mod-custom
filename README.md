@@ -101,7 +101,7 @@ gh release edit vX.Y.Z-custom --prerelease=false --latest
 The eight firmware assets plus the two emulator packages are attached to the
 release by `gh`; keep the firmware names unchanged because the firmware's
 `UPDATE_ASSET` values point at them. Verify the prerelease before promoting it
-to latest so a broken asset list never becomes the self-update target.
+to latest so a broken asset list never becomes a release target.
 
 ## Dashboard emulator
 
@@ -116,8 +116,8 @@ emulator/build/smalltv-emulator --view examples/view.json --usage daemon/usage.e
 ```
 
 Use the **Device**, **Design** and **Settings** tabs. The device web UI
-password uses HTTP Digest, and firmware upload, GitHub self-update and
-settings export/import are handled directly by the app. See
+password uses HTTP Digest; app self-update, firmware release selection, manual
+firmware upload and settings export/import are handled directly by the app. See
 [`emulator/README.md`](emulator/README.md) for details and Windows/MSYS2
 instructions.
 
@@ -255,14 +255,13 @@ for the daemon, as before.
 
 `/api/status` also reports firmware update progress in an `update` object
 (`phase`, `progress`, `downloaded`, `total`, `target`, `message`, `error`).
-Progress is live where the transport can report it; boot-time ESP8266 updates
-and synchronous ESP32 updates report phases and final results instead.
+Progress is live for uploads started by the desktop app or the manual web upload.
 
 ## Notes
 
-- The ESP8266 image is about 608 KB flash / 47 KB static RAM in this build,
+- The ESP8266 image is about 812 KB flash / 49 KB static RAM in this build,
   down from the upstream full image, so the old `smalltv_lean` variant is gone.
-- `src/config.h` points the updater at `JPHultra/smalltv-mod-custom`; change it
+- `src/config.h` points the desktop updater at `JPHultra/smalltv-mod-custom`; change it
   if the repository moves.
 - Credits and license are unchanged from upstream: WTFPL, with the hardware and
   design credits in the upstream project.

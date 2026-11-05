@@ -44,6 +44,7 @@ SRCS := $(ROOT)/emulator/main.cpp \
         $(ROOT)/emulator/usage/UsageCore.cpp \
         $(ROOT)/emulator/usage/DeepSeekProxy.cpp \
         $(ROOT)/emulator/usage/Worker.cpp \
+        $(ROOT)/emulator/update/GitHubRelease.cpp \
         $(ROOT)/src/features/view/ViewModel.cpp \
         $(ROOT)/src/features/view/ViewRender.cpp \
         $(ROOT)/src/features/view/ViewIcons.cpp \

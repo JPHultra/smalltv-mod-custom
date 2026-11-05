@@ -11,7 +11,6 @@
 #include "Net.h"
 #include "Gfx.h"
 #include "WebPortal.h"
-#include "OtaUpdate.h"
 #include "Clock.h"
 #include "features/view/ViewMode.h"
 #include "features/view/ViewOverlay.h"
@@ -193,15 +192,6 @@ void setup() {
   netAllowRetry(!g_safeMode);
   netBegin(g_settings, bootProgress);
   if (!g_safeMode) clockReapply(g_settings);
-
-  if (otaBootRequested()) {
-    Serial.println("[boot] github update");
-    diag::info("ota", "boot update requested");
-    gfxBoot("SmallTV", "updating...");
-    otaBootUpdate(g_settings);
-    gfxBoot("SmallTV", "update failed");
-    delay(1200);
-  }
 
   Serial.println("[boot] usage");
   diag::info("boot", "usage");

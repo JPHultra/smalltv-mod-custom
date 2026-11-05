@@ -17,6 +17,7 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 #if defined(_WIN32)
 #ifndef NOMINMAX
@@ -24,6 +25,9 @@
 #endif
 #include <winsock2.h>
 #include <windows.h>
+#include <process.h>
+#else
+#include <unistd.h>
 #endif
 
 #include "Gfx.h"
@@ -37,6 +41,7 @@
 #include "usage/UsageCore.h"
 #include "usage/DeepSeekProxy.h"
 #include "usage/Worker.h"
+#include "update/GitHubRelease.h"
 
 namespace fs = std::filesystem;
 
@@ -478,6 +483,24 @@ struct App {
   std::string executablePath;
   bool workerServiceActive = false;
   bool workerServiceChecked = false;
+  appupdate::Release appRelease;
+  std::future<appupdate::Release> appUpdateFuture;
+  std::future<bool> appUpdateDownloadFuture;
+  bool appUpdateChecking = false;
+  bool appUpdatePrompt = false;
+  bool appUpdateModalOpen = false;
+  bool appUpdateDownloading = false;
+  bool appUpdateManualCheck = false;
+  bool appUpdateWorkerWasActive = false;
+  std::string appUpdateSkipped;
+  std::string appUpdateError;
+  std::string appUpdateArchive;
+  std::string appUpdateRoot;
+  std::vector<appupdate::Release> firmwareReleases;
+  std::future<std::vector<appupdate::Release>> firmwareReleasesFuture;
+  bool firmwareReleasesLoading = false;
+  std::string firmwareReleaseError;
+  int firmwareReleaseIndex = 0;
   FileDialog dialog;
 
   bool beginPane(const char* id, ImVec2 size, bool scroll = true) {
@@ -945,6 +968,214 @@ struct App {
     }
   }
 
+  std::string appUpdateStatePath() const {
+#if defined(_WIN32)
+    const char* base = std::getenv("APPDATA");
+    return std::string(base ? base : ".") + "/smalltv/emulator-app.json";
+#else
+    const char* home = std::getenv("HOME");
+    return std::string(home ? home : ".") + "/.config/smalltv/emulator-app.json";
+#endif
+  }
+
+  void loadAppUpdateState() {
+    std::ifstream file(appUpdateStatePath());
+    if (!file) return;
+    std::string line;
+    while (std::getline(file, line)) {
+      if (line.rfind("skipped=", 0) == 0) appUpdateSkipped = line.substr(8);
+    }
+  }
+
+  void saveSkippedAppVersion(const std::string& tag) {
+    appUpdateSkipped = tag;
+    const std::string path = appUpdateStatePath();
+    std::error_code error;
+    std::filesystem::create_directories(std::filesystem::path(path).parent_path(), error);
+    std::ofstream file(path, std::ios::trunc);
+    if (file) file << "skipped=" << tag << "\n";
+  }
+
+  void checkAppUpdate(bool manual) {
+    if (appUpdateChecking) return;
+    appUpdateChecking = true;
+    appUpdateManualCheck = manual;
+    appUpdateError.clear();
+    appUpdateFuture = std::async(std::launch::async, [] {
+      appupdate::Release release;
+      std::string error;
+      if (!appupdate::fetchLatest(release, error)) {
+        release.tag = "!" + error;
+        return release;
+      }
+      return release;
+    });
+  }
+
+  void startAppUpdateDownload() {
+    if (appUpdateDownloading) return;
+    const char* wanted = appupdate::platformAssetName();
+    const appupdate::Asset* asset = nullptr;
+    for (const auto& item : appRelease.assets)
+      if (item.name == wanted) asset = &item;
+    if (!asset) {
+      notify(std::string("This release has no ") + wanted);
+      return;
+    }
+    std::filesystem::path root = std::filesystem::absolute(executablePath).parent_path();
+    if (!std::filesystem::exists(root / "VERSION.txt")) {
+      notify("App self-update is only available from a packaged install");
+      return;
+    }
+    const std::string archive =
+        (std::filesystem::temp_directory_path() / asset->name).string();
+    appUpdateRoot = root.string();
+    appUpdateArchive = archive;
+    appUpdateDownloading = true;
+    appUpdateError.clear();
+    appUpdateWorkerWasActive = workerServiceRunning();
+    const appupdate::Asset copy = *asset;
+    appUpdateDownloadFuture = std::async(std::launch::async, [copy, archive] {
+      std::string error;
+      return appupdate::downloadAsset(copy, archive, error);
+    });
+  }
+
+  void launchAppUpdater(bool workerActive) {
+    const std::string root = appUpdateRoot;
+#if defined(_WIN32)
+    const std::string script = (std::filesystem::temp_directory_path() /
+                                "smalltv-update-app.ps1").string();
+    const std::string archiveRoot = "smalltv-emulator-windows-x86_64";
+    const std::string exe = executablePath;
+    std::ofstream file(script, std::ios::trunc);
+    if (!file) { notify("Cannot create the app updater"); return; }
+    file << "param()\n"
+            "$ErrorActionPreference='Stop'\n"
+            "Wait-Process -Id " << _getpid() << " -ErrorAction SilentlyContinue\n"
+            "$tmp=Join-Path $env:TEMP 'smalltv-emulator-update'\n"
+            "Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue\n"
+            "Expand-Archive -LiteralPath '" << appUpdateArchive << "' -DestinationPath $tmp -Force\n"
+            "$new=Join-Path $tmp '" << archiveRoot << "'\n"
+            "if (-not (Test-Path (Join-Path $new 'VERSION.txt'))) { exit 1 }\n"
+            "$back='" << root << ".smalltv-old'\n"
+            "Remove-Item $back -Recurse -Force -ErrorAction SilentlyContinue\n"
+            "Move-Item '" << root << "' $back\n"
+            "try { Move-Item $new '" << root << "' } catch { Move-Item $back '" << root << "'; exit 1 }\n"
+            "Remove-Item $back -Recurse -Force -ErrorAction SilentlyContinue\n"
+            "if (" << (workerActive ? "$true" : "$false") << ") { schtasks /Run /TN SmallTVUsageWorker | Out-Null }\n"
+            "Start-Process '" << exe << "'\n";
+    file.close();
+    std::system(("start \"\" powershell -NoProfile -ExecutionPolicy Bypass -File \"" + script + "\"").c_str());
+#else
+    const std::string script = (std::filesystem::temp_directory_path() /
+                                "smalltv-update-app.sh").string();
+    const std::string archiveRoot = "smalltv-emulator-linux-x86_64";
+    std::ofstream file(script, std::ios::trunc);
+    if (!file) { notify("Cannot create the app updater"); return; }
+    file << "#!/bin/sh\nset -eu\n"
+            "while kill -0 " << getpid() << " 2>/dev/null; do sleep 0.2; done\n"
+            "tmp=$(mktemp -d)\n"
+            "tar -xzf \"" << appUpdateArchive << "\" -C \"$tmp\"\n"
+            "new=\"$tmp/" << archiveRoot << "\"\n"
+            "test -f \"$new/VERSION.txt\"\n"
+            "back=\"" << root << ".smalltv-old\"\n"
+            "rm -rf \"$back\"\n"
+            "mv \"" << root << "\" \"$back\"\n"
+            "if ! mv \"$new\" \"" << root << "\"; then mv \"$back\" \"" << root << "\"; exit 1; fi\n"
+            "rm -rf \"$back\" \"$tmp\"\n"
+            "if [ \"" << (workerActive ? "1" : "0") << "\" = 1 ]; then systemctl --user start smalltv-usage-worker.service || true; fi\n"
+            "exec \"" << root << "/smalltv-emulator\"\n";
+    file.close();
+    std::system(("setsid sh \"" + script + "\" >/dev/null 2>&1 &").c_str());
+#endif
+    std::exit(0);
+  }
+
+  void pollAppUpdate() {
+    if (appUpdateChecking && appUpdateFuture.valid() &&
+        appUpdateFuture.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
+      appRelease = appUpdateFuture.get();
+      appUpdateChecking = false;
+      if (!appRelease.tag.empty() && appRelease.tag[0] == '!') {
+        appUpdateError = appRelease.tag.substr(1);
+        if (appUpdateManualCheck) notify("App update check failed: " + appUpdateError);
+      } else if (appupdate::newer(appRelease.tag, FW_VERSION)) {
+        if (appUpdateManualCheck || appRelease.tag != appUpdateSkipped) {
+          appUpdatePrompt = true;
+        } else if (appUpdateManualCheck) {
+          notify("App is up to date (" FW_VERSION ")");
+        }
+      } else if (appUpdateManualCheck) {
+        notify("App is up to date (" FW_VERSION ")");
+      }
+    }
+    if (appUpdateDownloading && appUpdateDownloadFuture.valid() &&
+        appUpdateDownloadFuture.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
+      const bool ok = appUpdateDownloadFuture.get();
+      appUpdateDownloading = false;
+      if (!ok) {
+        notify("App update download failed");
+        if (appUpdateWorkerWasActive) controlWorkerService(true);
+        return;
+      }
+      if (appUpdateWorkerWasActive) {
+        controlWorkerService(false);
+        for (int i = 0; i < 20 && workerServiceRunning(); i++)
+          std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        if (workerServiceRunning()) {
+          notify("Could not stop the usage worker for the app update");
+          controlWorkerService(true);
+          return;
+        }
+      }
+      if (manualWorkerRunning()) {
+        notify("A manually started usage worker is running; stop it before updating the app");
+        if (appUpdateWorkerWasActive) controlWorkerService(true);
+        return;
+      }
+      launchAppUpdater(appUpdateWorkerWasActive);
+    }
+  }
+
+  void appUpdateModal() {
+    if (appUpdatePrompt) {
+      ImGui::OpenPopup("App update");
+      appUpdatePrompt = false;
+      appUpdateModalOpen = true;
+    }
+    if (!appUpdateModalOpen) return;
+    ImGui::SetNextWindowSize(ImVec2(560, 0), ImGuiCond_Appearing);
+    if (ImGui::BeginPopupModal("App update", nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize)) {
+      ImGui::Text("SmallTV %s is available.", appRelease.tag.c_str());
+      ImGui::TextDisabled("Installed: " FW_VERSION);
+      ImGui::Separator();
+      ImGui::TextWrapped("%s", appRelease.body.c_str());
+      if (viewDirty) ImGui::TextWrapped("Unsaved dashboard changes will be lost.");
+      ImGui::TextWrapped("The background usage worker will be stopped and restarted if installed.");
+      if (ImGui::Button("Install update")) {
+        appUpdateModalOpen = false;
+        ImGui::CloseCurrentPopup();
+        startAppUpdateDownload();
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Later")) {
+        appUpdateModalOpen = false;
+        ImGui::CloseCurrentPopup();
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Skip this version")) {
+        saveSkippedAppVersion(appRelease.tag);
+        appUpdateModalOpen = false;
+        ImGui::CloseCurrentPopup();
+      }
+      ImGui::EndPopup();
+    } else {
+      appUpdateModalOpen = false;
+    }
+  }
+
   JsonObject usageProvider(const char* id) {
     JsonObject root = usageCreds.as<JsonObject>();
     if (root.isNull()) root = usageCreds.to<JsonObject>();
@@ -1038,6 +1269,78 @@ struct App {
     }
   }
 
+  std::string firmwareAssetName() {
+    JsonDocument document;
+    if (status.empty() || deserializeJson(document, status) || !document.is<JsonObject>())
+      return {};
+    const std::string variant = (const char*)(document["variant"] | "");
+    if (variant == "esp8266") return "smalltv-mod-firmware.bin";
+    if (variant == "c2") return "smalltv-mod-firmware-c2.bin";
+    if (variant == "esp32") return "smalltv-mod-firmware-esp32.bin";
+    if (variant == "esp32-pro") return "smalltv-mod-firmware-esp32-pro.bin";
+    return {};
+  }
+
+  const appupdate::Asset* selectedFirmwareAsset() {
+    if (firmwareReleaseIndex < 0 || firmwareReleaseIndex >= (int)firmwareReleases.size())
+      return nullptr;
+    const std::string wanted = firmwareAssetName();
+    if (wanted.empty()) return nullptr;
+    for (const auto& item : firmwareReleases[firmwareReleaseIndex].assets)
+      if (item.name == wanted) return &item;
+    return nullptr;
+  }
+
+  void refreshFirmwareReleases() {
+    if (firmwareReleasesLoading) return;
+    firmwareReleasesLoading = true;
+    firmwareReleaseError.clear();
+    firmwareReleasesFuture = std::async(std::launch::async, [] {
+      std::vector<appupdate::Release> releases;
+      std::string error;
+      if (!appupdate::fetchReleases(releases, error)) {
+        appupdate::Release marker;
+        marker.tag = "!" + error;
+        releases.push_back(marker);
+      }
+      return releases;
+    });
+  }
+
+  void installSelectedFirmware() {
+    const appupdate::Asset* asset = selectedFirmwareAsset();
+    if (!asset) {
+      notify("Select a release and connect a supported device first");
+      return;
+    }
+    if (uploadRunning) return;
+    const std::string path =
+        (std::filesystem::temp_directory_path() / asset->name).string();
+    uploadStartVersion = deviceVersion;
+    uploadRunning = true;
+    uploadError.clear();
+    updateTarget = firmwareReleases[firmwareReleaseIndex].tag;
+    updatePhase = "downloading";
+    updateMessage = "Downloading release firmware";
+    updateError.clear();
+    updateProgress = -1;
+    connState = ConnState::Updating;
+    connected = false;
+    notify("Downloading firmware " + firmwareReleases[firmwareReleaseIndex].tag);
+    const appupdate::Asset copy = *asset;
+    uploadFuture = std::async(std::launch::async, [this, copy, path] {
+      std::string error;
+      if (!appupdate::downloadAsset(copy, path, error)) {
+        uploadError = error;
+        return false;
+      }
+      const bool ok = manager.uploadFirmware(path, error);
+      std::filesystem::remove(path);
+      uploadError = error;
+      return ok;
+    });
+  }
+
   std::string proxyStatePath() const {
 #if defined(_WIN32)
     const char* base = std::getenv("APPDATA");
@@ -1125,9 +1428,28 @@ struct App {
                        : "Usage worker command failed");
   }
 
+  bool manualWorkerRunning() {
+#if defined(_WIN32)
+    const std::string script = (std::filesystem::temp_directory_path() /
+                                "smalltv-worker-check.ps1").string();
+    std::ofstream file(script, std::ios::trunc);
+    if (!file) return false;
+    file << "$p=Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*--usage-worker*' }\n"
+            "if ($p) { exit 1 }\n";
+    file.close();
+    const int result = std::system(
+        ("powershell -NoProfile -ExecutionPolicy Bypass -File \"" + script +
+         "\" >NUL 2>&1").c_str());
+    return result == 1;
+#else
+    return std::system("pgrep -f 'smalltv-emulator.*--usage-worker' >/dev/null 2>&1") == 0;
+#endif
+  }
+
   bool workerServiceRunning() {
 #if defined(_WIN32)
-    return std::system("schtasks /Query /TN SmallTVUsageWorker >NUL 2>&1") == 0;
+    return std::system(
+        "powershell -NoProfile -Command \"$t=Get-ScheduledTask -TaskName 'SmallTVUsageWorker' -ErrorAction SilentlyContinue; if ($t -and $t.State -eq 'Running') { exit 0 } else { exit 1 }\" >NUL 2>&1") == 0;
 #else
     return std::system("systemctl --user is-active --quiet smalltv-usage-worker.service") == 0;
 #endif
@@ -1615,6 +1937,16 @@ struct App {
   }
 
   void diagnosticsSection() {
+    ImGui::SeparatorText("App update");
+    ImGui::TextDisabled("Installed: " FW_VERSION);
+    if (appUpdateChecking) ImGui::TextDisabled("Checking GitHub...");
+    if (!appUpdateError.empty()) ImGui::TextWrapped("Check failed: %s", appUpdateError.c_str());
+    if (ImGui::Button("Check for app updates")) checkAppUpdate(true);
+    if (appUpdateDownloading) {
+      ImGui::TextDisabled("Downloading the app update...");
+      ImGui::ProgressBar(-1.0f * (float)ImGui::GetTime(), ImVec2(240, 0), "downloading");
+    }
+
     ImGui::SeparatorText("Diagnostics");
     if (ImGui::Button("View current boot log")) readDiagnostics(false);
     ImGui::SameLine();
@@ -1695,13 +2027,30 @@ struct App {
         ImGui::EndDisabled();
       }
     }
-    ImGui::BeginDisabled(updateWatch || uploadRunning);
-    if (ImGui::Button("Check GitHub updates")) checkGithubUpdates();
-    ImGui::SameLine();
-    ImGui::BeginDisabled(!updateAvailable);
-    if (ImGui::Button("Install latest update")) startGithubUpdate();
-    ImGui::EndDisabled();
-    ImGui::EndDisabled();
+    ImGui::Spacing();
+    if (ImGui::Button("Refresh firmware releases")) refreshFirmwareReleases();
+    if (firmwareReleasesLoading) ImGui::TextDisabled("Loading releases from GitHub...");
+    if (!firmwareReleaseError.empty()) ImGui::TextWrapped("Release list: %s", firmwareReleaseError.c_str());
+    if (!firmwareReleases.empty() && firmwareReleases[0].tag.empty()) {}
+    if (!firmwareReleases.empty() && firmwareReleases[0].tag[0] != '!') {
+      const char* currentTag = firmwareReleases[firmwareReleaseIndex].tag.c_str();
+      ImGui::SetNextItemWidth(-1);
+      if (ImGui::BeginCombo("##firmware-release", currentTag)) {
+        for (int i = 0; i < (int)firmwareReleases.size(); i++) {
+          const bool selected = i == firmwareReleaseIndex;
+          if (ImGui::Selectable(firmwareReleases[i].tag.c_str(), selected))
+            firmwareReleaseIndex = i;
+          if (selected) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+      }
+      const appupdate::Asset* asset = selectedFirmwareAsset();
+      if (asset) ImGui::TextDisabled("Asset: %s", asset->name.c_str());
+      else ImGui::TextDisabled("Connect a device to choose the matching firmware asset.");
+      ImGui::BeginDisabled(!asset || uploadRunning);
+      if (ImGui::Button("Download and install")) installSelectedFirmware();
+      ImGui::EndDisabled();
+    }
     if (updateWatch) {
       ImGui::Spacing();
       ImGui::TextDisabled("Update: %s", updatePhase.empty() ? "starting" : updatePhase.c_str());
@@ -2544,6 +2893,17 @@ struct App {
   }
 
   void draw() {
+    pollAppUpdate();
+    if (firmwareReleasesLoading && firmwareReleasesFuture.valid() &&
+        firmwareReleasesFuture.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
+      firmwareReleases = firmwareReleasesFuture.get();
+      firmwareReleasesLoading = false;
+      firmwareReleaseIndex = 0;
+      if (!firmwareReleases.empty() && !firmwareReleases[0].tag.empty() &&
+          firmwareReleases[0].tag[0] == '!') {
+        firmwareReleaseError = firmwareReleases[0].tag.substr(1);
+      }
+    }
     if (usageFetchRunning && usageFuture.valid() &&
         usageFuture.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
       usage::FetchResult batch = usageFuture.get();
@@ -2609,6 +2969,7 @@ struct App {
     ImGui::End();
     ImGui::PopStyleVar();
     toastWindow();
+    appUpdateModal();
     dialog.draw();
   }
 };
@@ -2732,6 +3093,8 @@ int main(int argc, char** argv) {
   App app;
   app.initialViewPath = viewPath;
   app.executablePath = fs::absolute(argv[0]).string();
+  app.loadAppUpdateState();
+  app.checkAppUpdate(false);
   if (tabText) {
     if (!strcmp(tabText, "design") || !strcmp(tabText, "editor")) app.forceTab = 1;
     else if (!strcmp(tabText, "usage")) app.forceTab = 2;

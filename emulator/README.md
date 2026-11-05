@@ -28,11 +28,12 @@ HTML/WebView assets.
   - load/save from a file or the device
   - overlay test and clear
 - Firmware upload (`.bin`) with the in-app file browser
-- GitHub self-update, settings export/import, reboot and factory reset
+- App self-update, firmware release install, settings export/import, reboot and factory reset
 - Native file browser; no zenity/kdialog dependency
 - Diagnostic log viewer for the current and previous boot
 - Connection heartbeat with online/offline/update status and last-seen details
 - Phase and progress display for firmware updates
+- App self-update checks against GitHub at launch, with selectable firmware releases
 - Flat graphite/amber desktop styling with vendored Inter fonts
 
 The app does not emulate Wi-Fi/OTA in firmware. Fonts live in
@@ -81,6 +82,12 @@ The native Usage tab stores Claude/Codex/DeepSeek credentials in the OS secure
 store (DPAPI on Windows, Secret Service on Linux) and can push the normalized
 usage document directly to the connected device. DeepSeek token usage still
 requires pointing the DeepSeek client at `http://127.0.0.1:8789`.
+
+The app checks GitHub for a newer desktop release when it opens. It does not
+install automatically; the update prompt can defer or skip the version. The
+Settings > System page also lists firmware releases and installs the selected
+release through the device's normal OTA endpoint, avoiding the ESP8266
+boot-time TLS/heap path.
 
 The same executable has a headless worker mode:
 

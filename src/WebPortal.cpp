@@ -8,7 +8,6 @@
 #include "webui.h"
 #include "Net.h"
 #include "Gfx.h"
-#include "OtaUpdate.h"
 #include "Clock.h"
 #include "SettingsTransaction.h"
 #include "features/view/ViewMode.h"
@@ -25,8 +24,6 @@ static WebServerClass server(80);
 static Settings*        S = nullptr;
 static bool             g_reboot = false;
 static uint32_t         g_rebootAt = 0;
-static bool             g_selfUpdate = false;
-static String           g_updateMsg;
 
 static const char* EDITOR_URL = "https://jphultra.github.io/smalltv-mod-custom/";
 
@@ -161,7 +158,6 @@ static void handleStatus() {
   o["version"] = FW_VERSION;
   o["variant"] = FW_VARIANT;
   o["repo"] = REPO_URL;
-  if (g_updateMsg.length()) o["updateMsg"] = g_updateMsg;
   o["mode"] = (netMode() == NET_AP) ? "ap" : "sta";
   o["connected"] = netConnected();
   o["ssid"] = netSSID();
@@ -320,37 +316,6 @@ static void handleImport() {
   diag::info("web", "settings imported");
   server.send(200, "application/json", "{\"ok\":true,\"reboot\":true}");
   scheduleReboot(800);
-}
-
-static void handleCheckUpdate() {
-  if (!requireAuth()) return;
-  update_status::setChecking();
-  OtaLatest r = otaCheckLatest(*S);
-  if (!r.ok) {
-    update_status::fail("check failed: " + r.error);
-  } else if (!r.newer) {
-    update_status::complete("up to date (" FW_VERSION ")");
-  } else {
-    update_status::setTarget(r.tag);
-    update_status::setPhase(update_status::IDLE, "Update available");
-  }
-  JsonDocument doc;
-  JsonObject o = doc.to<JsonObject>();
-  o["current"] = FW_VERSION;
-  o["ok"] = r.ok;
-  o["latest"] = r.tag;
-  o["newer"] = r.newer;
-  if (!r.ok) o["error"] = r.error;
-  sendJson(doc);
-}
-
-static void handleSelfUpdate() {
-  if (!requireAuth()) return;
-  diag::info("ota", "self-update requested");
-  update_status::setChecking();
-  g_selfUpdate = true;
-  g_updateMsg = "starting...";
-  server.send(200, "application/json", "{\"ok\":true}");
 }
 
 static void sendDiagnosticLog(bool previous) {
@@ -525,12 +490,6 @@ static void handleNotFound() {
 // ---------------------------------------------------------------------------
 void webPortalBegin(Settings& settings) {
   S = &settings;
-  g_updateMsg = otaTakeBootResult();
-  if (g_updateMsg.length()) {
-    diag::warn("ota", "boot result: %s", g_updateMsg.c_str());
-    update_status::bootResult(g_updateMsg);
-  }
-
   server.on("/", HTTP_GET, handleRoot);
   server.on("/api/config", HTTP_GET, handleGetConfig);
   server.on("/api/config", HTTP_POST, handlePostConfig);
@@ -540,8 +499,6 @@ void webPortalBegin(Settings& settings) {
   server.on("/api/factory", HTTP_POST, handleFactory);
   server.on("/api/export", HTTP_GET, handleExport);
   server.on("/api/import", HTTP_POST, handleImport);
-  server.on("/api/checkupdate", HTTP_GET, handleCheckUpdate);
-  server.on("/api/selfupdate", HTTP_POST, handleSelfUpdate);
   server.on("/api/logs", HTTP_GET, handleLogs);
   server.on("/api/logs/previous", HTTP_GET, handlePreviousLogs);
 
@@ -579,42 +536,7 @@ void webPortalBegin(Settings& settings) {
 void webPortalLoop() {
   server.handleClient();
 
-  if (g_selfUpdate) {
-    g_selfUpdate = false;
-#if defined(SMALLTV_FAMILY_ESP8266)
-    update_status::setChecking();
-    OtaLatest r = otaCheckLatest(*S);
-    if (!r.ok) {
-      g_updateMsg = "check failed: " + r.error;
-      update_status::fail("check failed: " + r.error);
-      diag::error("ota", "self update check: %s", r.error.c_str());
-    } else if (!r.newer) {
-      g_updateMsg = "already up to date (" FW_VERSION ")";
-      update_status::complete("already up to date (" FW_VERSION ")");
-      diag::info("ota", "already up to date");
-    } else if (otaRequestBootUpdate(r.tag.c_str())) {
-      update_status::setTarget(r.tag);
-      update_status::setPhase(update_status::REBOOTING,
-                              "Rebooting; update continues at boot");
-      g_updateMsg = "updating...";
-      scheduleReboot(400);
-    } else {
-      g_updateMsg = F("could not queue update (storage error)");
-      update_status::fail("Could not queue update (storage error)");
-      diag::error("ota", "could not queue update");
-    }
-#else
-    String err = otaUpdateFromGitHub(*S);
-    g_updateMsg = err.length() ? err : "updating...";
-    if (err.length()) {
-      update_status::fail(err);
-      diag::error("ota", "self update: %s", err.c_str());
-    } else {
-      update_status::setPhase(update_status::REBOOTING, "Restarting");
-      diag::info("ota", "self update started");
-    }
-#endif
-  }
+
 }
 
 bool webPortalRebootDue() {

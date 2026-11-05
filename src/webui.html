@@ -165,13 +165,9 @@ small.hint{display:block;color:var(--mut);margin-top:4px;font-size:12px}
  </section>
 
  <section id="system" class="tab">
-  <div class="card"><h2>Update from GitHub</h2>
+  <div class="card"><h2>Firmware update</h2>
    <div class="muted">Installed: <b id="fwVer">-</b></div>
-   <div class="muted" id="ghLatest" style="margin-top:4px">Latest: -</div>
-   <div style="margin-top:10px"><button class="btn sec" onclick="checkUpdate()" id="chkBtn">Check for latest</button><button class="btn" style="margin-left:8px" onclick="selfUpdate()" id="ghUpBtn" disabled>Update now</button></div>
-   <div class="bar" id="ghBarWrap" style="display:none"><div id="ghBar"></div></div>
-   <div id="ghMsg" class="muted" style="margin-top:8px"></div>
-   <small class="hint">Pulls the newest release from your GitHub repo. Each image fetches its own release asset.</small>
+   <small class="hint">GitHub firmware updates are installed from the SmallTV desktop app so the device does not need a TLS download during boot.</small>
   </div>
   <div class="card"><h2>Manual update (OTA)</h2>
    <input id="fw" type="file" accept=".bin">
@@ -325,27 +321,7 @@ function pushDashboard(){var t=$('viewJson').value;try{JSON.parse(t)}catch(e){to
 function testOverlay(){var t=$('viewJson').value;try{JSON.parse(t)}catch(e){toast('Not valid JSON');return}j('/api/view',{method:'POST',headers:{'Content-Type':'application/json'},body:t}).then(function(){toast('Overlay shown')}).catch(function(e){toast(e.message)})}
 function clearOverlay(){j('/api/view/clear',{method:'POST'}).then(function(){toast('Overlay cleared')}).catch(function(e){toast(e.message)})}
 
-var ghTimer=null, ghStarted=0, ghStartVersion='', ghBarMode='';
 function currentVersion(){return (($('fwVer').textContent||'').trim().split(' ').pop())||''}
-function setGhButtons(check,update){$('chkBtn').disabled=!check;$('ghUpBtn').disabled=!update}
-function setGhBar(mode,percent,color){var w=$('ghBarWrap'),b=$('ghBar');if(!w||!b)return;w.style.display=mode?'block':'none';b.className=(mode==='indet')?'indet':'';b.style.width=(mode==='percent')?Math.max(0,Math.min(100,percent))+'%':'';b.style.background=color||'var(--acc2)'}
-function stopGhWatch(){if(ghTimer){clearInterval(ghTimer);ghTimer=null}ghStarted=0}
-function updatePhaseText(u){var p=u&&u.phase?u.phase:'';var m=u&&u.message?u.message:'';if(m)return m;if(p==='checking')return 'Checking GitHub releases...';if(p==='downloading')return 'Downloading firmware...';if(p==='installing')return 'Installing firmware...';if(p==='rebooting')return 'Rebooting device...';if(p==='done')return 'Update complete.';if(p==='error')return 'Update failed.';return 'Waiting for device...'}
-function finishGh(ok,msg){stopGhWatch();$('ghMsg').textContent=msg;setGhButtons(true,false);setGhBar(ok?'percent':'percent',100,ok?'var(--acc)':'var(--red)')}
-function refreshAfterUpdate(){loadStatus();setTimeout(loadConfig,400);setTimeout(function(){$('ghLatest').textContent='Latest: -'},1200)}
-function startUpdateWatch(){stopGhWatch();ghStartVersion=currentVersion();ghStarted=Date.now();setGhBar('indet');setGhButtons(false,false);ghTimer=setInterval(function(){
-  if(Date.now()-ghStarted>180000){finishGh(false,'The device did not come back after 3 minutes. Check the diagnostics log.');return}
-  j('/api/status').then(function(s){
-    var u=s.update||{};
-    if(ghStartVersion&&s.version&&s.version!==ghStartVersion){finishGh(true,'Updated to '+s.version+'.');refreshAfterUpdate();return}
-    if(u.phase==='error'||u.error){finishGh(false,'Update failed: '+(u.error||u.message||'unknown error'));return}
-    $('ghMsg').textContent=updatePhaseText(u);
-    if(typeof u.progress==='number'&&u.progress>=0)setGhBar('percent',u.progress);
-    else setGhBar('indet');
-  }).catch(function(){$('ghMsg').textContent='Device is rebooting or installing; waiting for it to come back...';setGhBar('indet')});
-},1000)}
-function checkUpdate(){$('ghLatest').textContent='Latest: checking...';setGhButtons(false,false);$('ghMsg').textContent='Checking GitHub releases...';setGhBar('indet');j('/api/checkupdate').then(function(u){setGhBar('',0);setGhButtons(true,false);if(!u.ok){$('ghMsg').textContent='Check failed: '+(u.error||'unknown');return}$('ghLatest').textContent='Latest: '+(u.latest||'-');if(u.newer){$('ghMsg').innerHTML='Version <b>'+u.latest+'</b> is available (installed '+u.current+').';$('ghUpBtn').disabled=false}else{$('ghMsg').textContent='Up to date ('+u.current+').'}}).catch(function(){setGhBar('',0);setGhButtons(true,false);$('ghMsg').textContent='Check failed: device did not respond'})}
-function selfUpdate(){if(!confirm('Download and flash the latest release from GitHub? The device reboots if it succeeds.'))return;setGhButtons(false,false);$('ghMsg').textContent='Starting update...';setGhBar('indet');j('/api/selfupdate',{method:'POST'}).then(function(){startUpdateWatch()}).catch(function(){finishGh(false,'Could not start update')})}
 function importCfg(){var f=$('cfgFile').files[0];if(!f){toast('Pick a config .json first');return}var r=new FileReader();r.onload=function(){var txt=r.result;try{JSON.parse(txt)}catch(e){toast('Not valid JSON');return}if(!confirm('Apply this configuration and reboot?'))return;j('/api/import',{method:'POST',headers:{'Content-Type':'application/json'},body:txt}).then(function(){toast('Imported, rebooting...');setTimeout(function(){location.reload()},8000)}).catch(function(){toast('Import failed')})};r.readAsText(f)}
 function reboot(){if(confirm('Reboot device?'))j('/api/reboot',{method:'POST'}).then(function(){toast('Rebooting...')})}
 function factory(){if(confirm('Erase ALL settings and reboot?'))j('/api/factory',{method:'POST'}).then(function(){toast('Reset, rebooting...')})}
