@@ -652,7 +652,7 @@ The device no longer downloads GitHub releases itself. The desktop app checks
 firmware asset through `/update`. Releases are built and published from this PC;
 there are no GitHub Actions.
 
-1. Edit `FW_VERSION` in `src/config.h` (currently `4.5.3-custom`) to the new version.
+1. Edit `FW_VERSION` in `src/config.h` (currently `4.6.0-custom`) to the new version.
 2. Build all targets and stage the assets:
 
 ```sh
@@ -664,25 +664,25 @@ python3 tools/ci_checks.py assets
 python3 tools/verify_update.py --local-only --from-version <previous-version>
 ```
 
-3. Commit the version change and tag it, for example `v4.5.3-custom`:
+3. Commit the version change and tag it, for example `v4.6.0-custom`:
 
 ```sh
 git add src/config.h
-git commit -m "Bump FW_VERSION to 4.5.3-custom"
+git commit -m "Bump FW_VERSION to 4.6.0-custom"
 git push origin main
-git tag v4.5.3-custom
-git push origin v4.5.3-custom
+git tag v4.6.0-custom
+git push origin v4.6.0-custom
 ```
 
 4. Attach the eight firmware assets and two emulator packages as a prerelease,
    verify them, then promote the release to latest:
 
 ```sh
-gh release create v4.5.3-custom dist/* --title "v4.5.3-custom" \
+gh release create v4.6.0-custom dist/* --title "v4.6.0-custom" \
   --notes "Release notes" --prerelease
-python3 tools/verify_update.py --tag v4.5.3-custom \
+python3 tools/verify_update.py --tag v4.6.0-custom \
   --from-version <previous-version>
-gh release edit v4.5.3-custom --prerelease=false --latest
+gh release edit v4.6.0-custom --prerelease=false --latest
 ```
 
 5. If the editor changed, publish it separately:
