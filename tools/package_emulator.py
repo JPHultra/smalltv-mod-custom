@@ -2,7 +2,8 @@
 """Stage the SmallTV desktop packages in dist/ for a GitHub release.
 
 The script always builds the Linux package and optionally adds the Windows
-package when a cross-built executable and SDL2 DLL are supplied. The staging
+package when a cross-built executable and SDL2 DLL are supplied. It can also
+build the NSIS installer from the same Windows payload. The staging
 tree includes the bundled Inter fonts and every third-party license needed to
 run the app, so the package does not depend on files elsewhere in the repo.
 """
@@ -22,6 +23,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 LINUX_NAME = "smalltv-emulator-linux-x86_64"
 WINDOWS_NAME = "smalltv-emulator-windows-x86_64"
+WINDOWS_INSTALLER_NAME = WINDOWS_NAME + "-setup.exe"
 
 COMMON_FILES = [
     ("emulator/README.md", "README.md"),
@@ -47,6 +49,13 @@ Launch smalltv-emulator.exe directly. Keep SDL2.dll and the assets folder beside
 the executable. No installation is required. Use Scan or enter the device URL
 and press Connect.
 """
+
+
+def numeric_version(version: str) -> str:
+    match = re.search(r"(\d+)\.(\d+)\.(\d+)", version)
+    if not match:
+        raise SystemExit(f"cannot derive numeric installer version from {version}")
+    return ".".join(match.groups()) + ".0"
 
 
 def version_from_config() -> str:
@@ -96,6 +105,24 @@ def stage_windows(package: Path, binary: Path, sdl2_dll: Path) -> None:
     (package / "README-WINDOWS.txt").write_text(WINDOWS_README, encoding="utf-8")
 
 
+def build_windows_installer(payload: Path, version: str, destination: Path,
+                            makensis: str, nsis_dir: str | None) -> None:
+    command = [
+        makensis,
+        f"-DAPP_VERSION_DISPLAY={version}",
+        f"-DAPP_VERSION_NUMERIC={numeric_version(version)}",
+        f"-DPAYLOAD={payload}",
+        f"-DOUTFILE={destination}",
+        f"-DAPP_ICON={ROOT / 'emulator' / 'assets' / 'smalltv.ico'}",
+        f"-DAPP_LICENSE={ROOT / 'LICENSE'}",
+        str(ROOT / "installer" / "windows.nsi"),
+    ]
+    env = os.environ.copy()
+    if nsis_dir:
+        env["NSISDIR"] = nsis_dir
+    subprocess.run(command, cwd=ROOT, env=env, check=True)
+
+
 def archive_linux(package: Path, destination: Path) -> None:
     destination.unlink(missing_ok=True)
     with tarfile.open(destination, "w:gz") as archive:
@@ -118,10 +145,18 @@ def main() -> None:
                         help="Linux executable to package")
     parser.add_argument("--windows-bin", help="cross-built Windows executable")
     parser.add_argument("--sdl2-dll", help="SDL2.dll to include with Windows")
+    parser.add_argument("--windows-installer", action="store_true",
+                        help="build the NSIS installer from the Windows payload")
+    parser.add_argument("--makensis", default="makensis", help="NSIS compiler (default: makensis)")
+    parser.add_argument("--nsis-dir", help="optional NSIS data directory (sets NSISDIR)")
     args = parser.parse_args()
 
     if bool(args.windows_bin) != bool(args.sdl2_dll):
         parser.error("--windows-bin and --sdl2-dll must be supplied together")
+    if args.windows_installer and not args.windows_bin:
+        parser.error("--windows-installer requires --windows-bin and --sdl2-dll")
+    if args.windows_installer and not (os.path.isfile(args.makensis) or shutil.which(args.makensis)):
+        parser.error(f"NSIS compiler not found: {args.makensis}")
 
     version = args.version or version_from_config()
     dist = Path(args.dist)
@@ -142,9 +177,16 @@ def main() -> None:
             stage_common(windows, version)
             stage_windows(windows, Path(args.windows_bin), Path(args.sdl2_dll))
             archive_windows(windows, dist / f"{WINDOWS_NAME}.zip")
+            if args.windows_installer:
+                payload = temporary / "windows-installer-payload"
+                shutil.copytree(windows, payload,
+                                ignore=shutil.ignore_patterns("README-WINDOWS.txt"))
+                build_windows_installer(payload, version,
+                                        dist / WINDOWS_INSTALLER_NAME,
+                                        args.makensis, args.nsis_dir)
 
     print(f"packaged SmallTV emulator {version}")
-    for pattern in (f"{LINUX_NAME}.tar.gz", f"{WINDOWS_NAME}.zip"):
+    for pattern in (f"{LINUX_NAME}.tar.gz", f"{WINDOWS_NAME}.zip", WINDOWS_INSTALLER_NAME):
         path = dist / pattern
         if path.exists():
             print(f"  {path.name:48} {path.stat().st_size:>9} B")

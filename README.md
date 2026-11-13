@@ -82,12 +82,16 @@ two-step loader on the Ultra. Self-update pulls release assets from
 
 Release locally, without GitHub Actions:
 
+NSIS (`makensis`) is required for the Windows installer; the ZIP still supplies
+app self-updates.
+
 ```sh
 # edit FW_VERSION in src/config.h first
 python3 tools/build_release.py --pio /path/to/pio --jobs 8
 python3 tools/package_emulator.py \
   --windows-bin /path/to/smalltv-emulator.exe \
-  --sdl2-dll /path/to/SDL2.dll
+  --sdl2-dll /path/to/SDL2.dll \
+  --windows-installer --makensis makensis
 python3 tools/ci_checks.py assets
 python3 tools/verify_update.py --local-only --from-version <previous-version>
 git add src/config.h
@@ -102,12 +106,20 @@ python3 tools/verify_update.py --tag vX.Y.Z-custom \
 gh release edit vX.Y.Z-custom --prerelease=false --latest
 ```
 
-The eight firmware assets plus the two emulator packages are attached to the
-release by `gh`; keep the firmware names unchanged because the firmware's
-`UPDATE_ASSET` values point at them. Verify the prerelease before promoting it
-to latest so a broken asset list never becomes a release target.
+The eight firmware assets, Linux package, Windows ZIP and Windows installer are
+attached to the release by `gh`; keep the firmware names unchanged because the
+firmware's `UPDATE_ASSET` values point at them. The ZIP remains the app
+self-update payload; the installer is for first-time installation. Verify the
+prerelease before promoting it to latest so a broken asset list never becomes
+a release target.
 
 ## Dashboard emulator
+
+Windows users can install per-user from `smalltv-emulator-windows-x86_64-setup.exe`.
+The installer creates Start Menu and optional desktop shortcuts, can launch the
+app after installation, and removes both `SmallTVUsageWorker` and
+`SmallTVUsage` scheduled tasks plus `%APPDATA%\smalltv` on uninstall after
+confirmation. The ZIP remains the portable build and app self-update payload.
 
 A native SDL2 + Dear ImGui desktop app runs the real view renderer and
 anti-aliased font. It includes device discovery, native settings, firmware

@@ -665,10 +665,15 @@ there are no GitHub Actions.
 python3 tools/build_release.py --pio /path/to/pio --jobs 8
 python3 tools/package_emulator.py \
   --windows-bin /path/to/smalltv-emulator.exe \
-  --sdl2-dll /path/to/SDL2.dll
+  --sdl2-dll /path/to/SDL2.dll \
+  --windows-installer --makensis makensis
 python3 tools/ci_checks.py assets
 python3 tools/verify_update.py --local-only --from-version <previous-version>
 ```
+
+Building the Windows installer requires NSIS (`makensis`). The installer is
+built from the same Windows payload as the ZIP. The ZIP remains the app
+self-update asset; the installer is for first-time installation.
 
 3. Commit the version change and tag it, for example `v4.8.2-custom`:
 
@@ -680,8 +685,8 @@ git tag v4.8.2-custom
 git push origin v4.8.2-custom
 ```
 
-4. Attach the eight firmware assets and two emulator packages as a prerelease,
-   verify them, then promote the release to latest:
+4. Attach the eight firmware assets, Linux package, Windows ZIP and Windows
+   installer as a prerelease, verify them, then promote the release to latest:
 
 ```sh
 gh release create v4.8.2-custom dist/* --title "v4.8.2-custom" \

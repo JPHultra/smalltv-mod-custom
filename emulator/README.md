@@ -155,7 +155,11 @@ and any referenced image assets; autosave keeps a local recovery copy.
 ## Release packages
 
 - Linux: `smalltv-emulator-linux-x86_64.tar.gz` (needs the system SDL2, libcurl and libsecret runtimes)
-- Windows: `smalltv-emulator-windows-x86_64.zip` (includes `SDL2.dll`; uses built-in WinHTTP/DPAPI)
+- Windows: `smalltv-emulator-windows-x86_64.zip` (portable; includes `SDL2.dll`; uses built-in WinHTTP/DPAPI)
+- Windows installer: `smalltv-emulator-windows-x86_64-setup.exe` (per-user NSIS installer; the ZIP remains the self-update payload)
+
+Build the Windows installer with `makensis` by passing `--windows-installer` to
+`tools/package_emulator.py`.
 
 ## Screenshot
 

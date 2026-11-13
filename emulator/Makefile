@@ -4,6 +4,8 @@ ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
 BUILD := $(ROOT)/emulator/build
 TARGET := $(BUILD)/smalltv-emulator
 CXX ?= c++
+WINDRES ?= llvm-rc
+WINCVTRES ?= llvm-cvtres
 ARDUINOJSON := $(firstword $(wildcard $(ROOT)/.pio/libdeps/*/ArduinoJson/src))
 SDL_CFLAGS := $(shell pkg-config --cflags sdl2 2>/dev/null)
 SDL_LIBS := $(shell pkg-config --libs sdl2 2>/dev/null)
@@ -31,6 +33,8 @@ CPPFLAGS += -DSMALLTV_ESP8266 -DARDUINOJSON_ENABLE_ARDUINO_STRING=1 \
 LDLIBS += $(SDL_LIBS) -pthread
 ifeq ($(OS),Windows_NT)
 LDLIBS += -lws2_32 -liphlpapi -luser32 -mwindows -lwinhttp -lcrypt32
+WIN_RES := $(BUILD)/windows/smalltv.res
+WIN_RES_OBJ := $(BUILD)/windows/smalltv-res.obj
 else
 LDLIBS += $(CURL_LIBS) $(SECRET_LIBS)
 endif
@@ -59,14 +63,25 @@ SRCS := $(ROOT)/emulator/main.cpp \
         $(ROOT)/emulator/third_party/imgui/imgui_widgets.cpp \
         $(ROOT)/emulator/third_party/imgui/backends/imgui_impl_sdl2.cpp \
         $(ROOT)/emulator/third_party/imgui/backends/imgui_impl_sdlrenderer2.cpp
-OBJS := $(patsubst $(ROOT)/%.cpp,$(BUILD)/%.o,$(SRCS))
-DEPS := $(OBJS:.o=.d)
+CPP_OBJS := $(patsubst $(ROOT)/%.cpp,$(BUILD)/%.o,$(SRCS))
+OBJS := $(CPP_OBJS)
+ifeq ($(OS),Windows_NT)
+OBJS += $(WIN_RES_OBJ)
+endif
+DEPS := $(CPP_OBJS:.o=.d)
 
 all: $(TARGET)
 
 $(TARGET): $(OBJS)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $(OBJS) $(LDLIBS) -o $@
+
+ifeq ($(OS),Windows_NT)
+$(WIN_RES_OBJ): $(ROOT)/emulator/windows/smalltv.rc $(ROOT)/emulator/assets/smalltv.ico
+	@mkdir -p $(dir $@)
+	cd $(ROOT)/emulator/windows && $(WINDRES) /FO $(WIN_RES) smalltv.rc
+	$(WINCVTRES) /MACHINE:X64 /OUT:$(WIN_RES_OBJ) $(WIN_RES)
+endif
 
 $(BUILD)/%.o: $(ROOT)/%.cpp
 	@mkdir -p $(dir $@)
