@@ -53,6 +53,7 @@ HTML/WebView assets.
 - OS-secure saved device passwords and a "Continue offline" design/usage mode
 - Connection recovery banner that preserves the current workspace
 - Data-bound text and bar components for usage windows
+- Per-component stale hide/move rules with automatic layout recovery
 - Flat graphite/amber desktop styling with vendored Inter fonts
 
 Image/GIF assets are imported only in the desktop app. They are converted to a

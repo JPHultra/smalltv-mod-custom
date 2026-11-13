@@ -3964,6 +3964,27 @@ struct App {
     changed |= input_int_json(l, "x", "X (px)", -512, 512, 0);
     changed |= input_int_json(l, "y", "Y (px)", -512, 512, 0);
     changed |= color_edit_json(l, "c", "Colour", "#ffffff");
+    bool hideStale = l["hideWhenStale"] | false;
+    if (ImGui::Checkbox("Hide when usage is stale", &hideStale)) {
+      if (hideStale) l["hideWhenStale"] = true;
+      else l.remove("hideWhenStale");
+      changed = true;
+    }
+    bool stalePos = !l["staleX"].isNull() || !l["staleY"].isNull();
+    if (ImGui::Checkbox("Move when usage is stale", &stalePos)) {
+      if (stalePos) {
+        l["staleX"] = l["staleX"] | (int)(l["x"] | 0);
+        l["staleY"] = l["staleY"] | (int)(l["y"] | 0);
+      } else {
+        l.remove("staleX");
+        l.remove("staleY");
+      }
+      changed = true;
+    }
+    if (stalePos) {
+      changed |= input_int_json(l, "staleX", "Stale X (px)", -512, 512, 0);
+      changed |= input_int_json(l, "staleY", "Stale Y (px)", -512, 512, 0);
+    }
     if (ImGui::Button("Delete")) { deleteSelected(); return; }
     ImGui::SameLine();
     if (ImGui::Button("Duplicate")) { duplicateSelected(); return; }

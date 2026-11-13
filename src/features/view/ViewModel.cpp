@@ -496,9 +496,21 @@ bool viewScreenParse(const char* json, size_t length, ViewScreen& screen, String
         } else if (prim.type == VIEW_P_TEXT && !p["data"].isNull()) {
           if (!parseBinding(p, screen, false, true, binding)) continue;
         }
+        ViewStaleStyle stale;
+        if (p["hideWhenStale"] | false) stale.flags |= VIEW_STALE_HIDE;
+        if (!p["staleX"].isNull()) {
+          stale.x = (int16_t)constrain((int)(p["staleX"] | 0), -512, 512);
+          stale.flags |= VIEW_STALE_X;
+        }
+        if (!p["staleY"].isNull()) {
+          stale.y = (int16_t)constrain((int)(p["staleY"] | 0), -512, 512);
+          stale.flags |= VIEW_STALE_Y;
+        }
         const int index = screen.primCount;
         screen.prims[index] = prim;
         screen.bindForPrim[index] = binding;
+        screen.staleStyles[index] = stale;
+        if (stale.flags) screen.hasStaleBehavior = true;
         zOrder[index] = (int16_t)constrain((int)(p["z"] | index), -32768, 32767);
         screen.primCount++;
       }
@@ -510,16 +522,19 @@ bool viewScreenParse(const char* json, size_t length, ViewScreen& screen, String
     const ViewPrim key = screen.prims[i];
     const int16_t keyZ = zOrder[i];
     const uint8_t keyBinding = screen.bindForPrim[i];
+    const ViewStaleStyle keyStale = screen.staleStyles[i];
     int j = i - 1;
     while (j >= 0 && zOrder[j] > keyZ) {
       screen.prims[j + 1] = screen.prims[j];
       zOrder[j + 1] = zOrder[j];
       screen.bindForPrim[j + 1] = screen.bindForPrim[j];
+      screen.staleStyles[j + 1] = screen.staleStyles[j];
       j--;
     }
     screen.prims[j + 1] = key;
     zOrder[j + 1] = keyZ;
     screen.bindForPrim[j + 1] = keyBinding;
+    screen.staleStyles[j + 1] = keyStale;
   }
   error = "";
   return true;
@@ -584,6 +599,11 @@ const ViewBarStyle* viewPrimBarStyle(const ViewScreen& screen, const ViewPrim& p
   const uint8_t index = (uint8_t)(prim._pad - 1);
   if (index >= screen.barStyleCount) return nullptr;
   return &screen.barStyles[index];
+}
+
+const ViewStaleStyle* viewPrimStaleStyle(const ViewScreen& screen, uint8_t primIndex) {
+  if (primIndex >= screen.primCount) return nullptr;
+  return &screen.staleStyles[primIndex];
 }
 
 const char* viewBindingProvider(const ViewScreen& screen, const ViewBinding& binding) {

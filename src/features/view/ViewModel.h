@@ -120,6 +120,19 @@ struct ViewBarStyle {
   uint8_t reserved = 0;
 };
 
+enum ViewStaleFlags : uint8_t {
+  VIEW_STALE_HIDE = 0x01,
+  VIEW_STALE_X = 0x02,
+  VIEW_STALE_Y = 0x04,
+};
+
+struct ViewStaleStyle {
+  int16_t x = 0;
+  int16_t y = 0;
+  uint8_t flags = 0;
+  uint8_t reserved = 0;
+};
+
 struct UsageRowLayout {
   UsageBox label;
   UsageBox value;
@@ -172,6 +185,8 @@ struct ViewScreen {
   uint8_t  bindForPrim[VIEW_MAX_PRIMS];
   uint8_t  barStyleCount;
   ViewBarStyle barStyles[VIEW_MAX_BAR_STYLES];
+  ViewStaleStyle staleStyles[VIEW_MAX_PRIMS];
+  bool     hasStaleBehavior;
   ViewPrim prims[VIEW_MAX_PRIMS];
   char     text[VIEW_TEXT_POOL];
   uint8_t  bitmap[VIEW_BITMAP_POOL];
@@ -201,6 +216,7 @@ const TextStyle* viewPrimTextStyle(const ViewScreen& screen, const ViewPrim& pri
 const ViewBitmapStyle* viewPrimBitmapStyle(const ViewScreen& screen, const ViewPrim& prim);
 const ViewBinding* viewBindingAt(const ViewScreen& screen, uint8_t primIndex);
 const ViewBarStyle* viewPrimBarStyle(const ViewScreen& screen, const ViewPrim& prim);
+const ViewStaleStyle* viewPrimStaleStyle(const ViewScreen& screen, uint8_t primIndex);
 const char* viewBindingProvider(const ViewScreen& screen, const ViewBinding& binding);
 const char* viewBindingFormat(const ViewScreen& screen, const ViewBinding& binding);
 const char* viewUsageTitle(const ViewScreen& screen, const UsageStyle& style);

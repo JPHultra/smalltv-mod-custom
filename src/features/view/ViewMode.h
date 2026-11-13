@@ -40,6 +40,7 @@ class ViewMode {
   uint32_t   lastAnimMs_ = 0;
   uint32_t   lastUsageRev_ = 0;
   uint32_t   lastClockKey_ = 0;
+  bool       stale_ = false;
   String     error_;
 };
 

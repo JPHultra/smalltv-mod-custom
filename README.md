@@ -196,6 +196,13 @@ fill. Codex is exposed by the adapter as `chatgpt`; metric `0` is 5h and metric
 `1` is 7d. `pct` is the percentage remaining. The old literal text and usage
 cards remain compatible with older firmware.
 
+Components may also define stale behavior. `hideWhenStale` removes a component
+when all usage providers referenced by the view are stale or missing; `staleX`
+and `staleY` move a component to an alternate position in the same state. The
+device switches layouts automatically after the existing 120-second stale
+threshold and repaints when fresh usage returns. Older firmware ignores these
+fields and keeps the normal layout.
+
 Image and GIF backgrounds are imported by the native desktop app, not the web
 editor. The app converts PNG/JPEG/BMP to RGB565 and animated GIF to indexed
 256-color frames, uploads the asset to the device, and stores only a reference
@@ -361,7 +368,7 @@ Progress is live for uploads started by the desktop app or the manual web upload
 
 ## Notes
 
-- The ESP8266 image is about 819 KB flash / 61 KB static RAM in this build,
+- The ESP8266 image is about 820 KB flash / 62 KB static RAM in this build,
   down from the upstream full image, so the old `smalltv_lean` variant is gone.
 - `src/config.h` points the desktop updater at `JPHultra/smalltv-mod-custom`; change it
   if the repository moves.

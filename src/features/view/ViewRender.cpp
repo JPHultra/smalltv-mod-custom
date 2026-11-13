@@ -728,10 +728,39 @@ static void drawImageAsset(Arduino_GFX* gfx, ViewImageSource* images, const char
   }
 }
 
+bool viewUsageIsStale(const ViewScreen& screen) {
+  if (!screen.hasStaleBehavior) return false;
+  bool referenced = false;
+  bool fresh = false;
+  for (uint8_t i = 0; i < screen.primCount; i++) {
+    const ViewPrim& p = screen.prims[i];
+    const char* provider = nullptr;
+    if (p.type == VIEW_P_USAGE) {
+      provider = viewPrimText(screen, p);
+    } else if (p.type == VIEW_P_TEXT || p.type == VIEW_P_BAR) {
+      const ViewBinding* binding = viewBindingAt(screen, i);
+      if (binding) provider = viewBindingProvider(screen, *binding);
+    }
+    if (!provider || !provider[0]) continue;
+    referenced = true;
+    const ProviderUsage* usage = usageFind(provider);
+    if (usage && !usageStale(*usage)) fresh = true;
+  }
+  return referenced && !fresh;
+}
+
 static void drawPrims(const ViewScreen& screen, Arduino_GFX* gfx, int yOffset,
-                      uint32_t elapsedMs, ViewImageSource* images) {
+                      uint32_t elapsedMs, ViewImageSource* images, bool staleMode) {
   for (uint8_t i = 0; i < screen.primCount; i++) {
     ViewPrim p = screen.prims[i];
+    if (staleMode) {
+      const ViewStaleStyle* stale = viewPrimStaleStyle(screen, i);
+      if (stale) {
+        if (stale->flags & VIEW_STALE_HIDE) continue;
+        if (stale->flags & VIEW_STALE_X) p.x = stale->x;
+        if (stale->flags & VIEW_STALE_Y) p.y = stale->y;
+      }
+    }
     p.y -= yOffset;
     if (p.type == VIEW_P_LINE) p.y2 -= yOffset;
     const uint16_t c = gfxTint(p.color);
@@ -831,7 +860,7 @@ static void drawPrims(const ViewScreen& screen, Arduino_GFX* gfx, int yOffset,
 }
 
 static bool renderRegion(const ViewScreen& screen, int y0, int y1,
-                         uint32_t elapsedMs, ViewImageSource* images) {
+                         uint32_t elapsedMs, ViewImageSource* images, bool staleMode) {
   Arduino_GFX* output = gfxDev();
   if (!output) return false;
   if (y0 < 0) y0 = 0;
@@ -851,7 +880,7 @@ static bool renderRegion(const ViewScreen& screen, int y0, int y1,
       drawImageAsset(&canvas, images, bg, elapsedMs, 0, 0, TFT_WIDTH, TFT_HEIGHT,
                      true, y);
     g_textCanvas = &canvas;
-    drawPrims(screen, &canvas, y, elapsedMs, images);
+    drawPrims(screen, &canvas, y, elapsedMs, images, staleMode);
     g_textCanvas = nullptr;
     canvas.flush();
   }
@@ -859,21 +888,25 @@ static bool renderRegion(const ViewScreen& screen, int y0, int y1,
 }
 
 bool viewRenderText(const ViewScreen& screen, uint32_t elapsedMs,
-                    ViewImageSource* images) {
+                    ViewImageSource* images, bool staleMode) {
   int y0 = TFT_HEIGHT, y1 = 0;
   for (uint8_t i = 0; i < screen.primCount; i++) {
     const ViewPrim& p = screen.prims[i];
     if (p.type != VIEW_P_TEXT || !strchr(viewPrimText(screen, p), '{')) continue;
+    const ViewStaleStyle* stale = staleMode ? viewPrimStaleStyle(screen, i) : nullptr;
+    if (stale && (stale->flags & VIEW_STALE_HIDE)) continue;
+    const int y = stale && (stale->flags & VIEW_STALE_Y) ? stale->y : p.y;
     const int size = p.aux ? p.aux : 1;
     const int height = p.y2 > 0 ? p.y2 : 8 * size;
-    if (p.y - 1 < y0) y0 = p.y - 1;
-    if (p.y + height + 1 > y1) y1 = p.y + height + 1;
+    if (y - 1 < y0) y0 = y - 1;
+    if (y + height + 1 > y1) y1 = y + height + 1;
   }
-  return y1 > y0 && renderRegion(screen, y0, y1, elapsedMs, images);
+  return y1 > y0 && renderRegion(screen, y0, y1, elapsedMs, images, staleMode);
 }
 
 bool viewRenderUsage(const ViewScreen& screen, uint32_t elapsedMs,
-                     ViewImageSource* images) {
+                     ViewImageSource* images, bool staleMode) {
+  if (staleMode) return true;
   bool rendered = false;
   for (uint8_t i = 0; i < screen.primCount; i++) {
     const ViewPrim& p = screen.prims[i];
@@ -885,7 +918,7 @@ bool viewRenderUsage(const ViewScreen& screen, uint32_t elapsedMs,
       height = p.y2 > 0 ? p.y2 : 8 * size;
     }
     if (p.x2 < 0 || height <= 0) continue;
-    if (!renderRegion(screen, p.y - 1, p.y + height + 1, elapsedMs, images))
+    if (!renderRegion(screen, p.y - 1, p.y + height + 1, elapsedMs, images, staleMode))
       return false;
     rendered = true;
   }
@@ -893,8 +926,8 @@ bool viewRenderUsage(const ViewScreen& screen, uint32_t elapsedMs,
 }
 
 void viewRenderFrame(const ViewScreen& screen, uint32_t elapsedMs,
-                     ViewImageSource* images) {
-  if (renderRegion(screen, 0, TFT_HEIGHT, elapsedMs, images)) return;
+                     ViewImageSource* images, bool staleMode) {
+  if (renderRegion(screen, 0, TFT_HEIGHT, elapsedMs, images, staleMode)) return;
 
   // Last-resort path if the strip canvas cannot be allocated.
   Arduino_GFX* gfx = gfxDev();
@@ -903,9 +936,9 @@ void viewRenderFrame(const ViewScreen& screen, uint32_t elapsedMs,
   if (const char* bg = viewBackgroundImage(screen))
     drawImageAsset(gfx, images, bg, elapsedMs, 0, 0, TFT_WIDTH, TFT_HEIGHT,
                    true, 0);
-  drawPrims(screen, gfx, 0, elapsedMs, images);
+  drawPrims(screen, gfx, 0, elapsedMs, images, staleMode);
 }
 
-void viewRender(const ViewScreen& screen) {
-  viewRenderFrame(screen, 0, nullptr);
+void viewRender(const ViewScreen& screen, bool staleMode) {
+  viewRenderFrame(screen, 0, nullptr, staleMode);
 }

@@ -87,7 +87,8 @@ void ViewMode::begin() {
 
 void ViewMode::repaint() {
   if (loaded_) {
-    viewRenderFrame(screen_, millis() - animStartMs_, &imageSource_);
+    stale_ = viewUsageIsStale(screen_);
+    viewRenderFrame(screen_, millis() - animStartMs_, &imageSource_, stale_);
     painted_ = true;
     lastUsageRev_ = usageRevision();
     lastClockKey_ = screen_.needsClock ? viewClockKey(screen_.needsSeconds) : 0;
@@ -144,9 +145,14 @@ void ViewMode::service() {
     repaint();
     return;
   }
+  const bool staleNow = viewUsageIsStale(screen_);
+  if (staleNow != stale_) {
+    repaint();
+    return;
+  }
   if (animated_ && animDelayMs_ &&
       (uint32_t)(millis() - lastAnimMs_) >= animDelayMs_) {
-    viewRenderFrame(screen_, millis() - animStartMs_, &imageSource_);
+    viewRenderFrame(screen_, millis() - animStartMs_, &imageSource_, stale_);
     lastAnimMs_ = millis();
     lastUsageRev_ = usageRevision();
     lastClockKey_ = screen_.needsClock ? viewClockKey(screen_.needsSeconds) : 0;
@@ -156,12 +162,13 @@ void ViewMode::service() {
   const uint32_t clock = screen_.needsClock ? viewClockKey(screen_.needsSeconds) : 0;
   const bool usageChanged = screen_.hasUsage && rev != lastUsageRev_;
   const bool clockChanged = screen_.needsClock && clock != lastClockKey_;
-  if (usageChanged) {
+  if (usageChanged && !stale_) {
     if (!viewRenderUsage(screen_, millis() - animStartMs_, &imageSource_)) { repaint(); return; }
     lastUsageRev_ = rev;
   }
   if (clockChanged) {
-    if (!viewRenderText(screen_, millis() - animStartMs_, &imageSource_)) { repaint(); return; }
+    if (stale_) { repaint(); return; }
+    if (!viewRenderText(screen_, millis() - animStartMs_, &imageSource_, false)) { repaint(); return; }
     lastClockKey_ = clock;
   }
 }

@@ -140,6 +140,18 @@ int main() {
   const ViewBarStyle* bar_style = viewPrimBarStyle(s, s.prims[1]);
   assert(bar_style && bar_style->trackColor == 0x3186 && bar_style->radius == 4);
 
+  // Stale behavior is per primitive and ignored by older firmware.
+  const char* stale = R"({"draw":[
+    {"t":"text","x":120,"y":10,"s":2,"c":"#ffffff","v":"{HH}:{MM}","staleY":86},
+    {"t":"usage","x":0,"y":90,"w":100,"h":40,"c":"#ffffff","provider":"chatgpt","hideWhenStale":true}
+  ]})";
+  assert(viewScreenParse(stale, strlen(stale), s, error));
+  assert(s.hasStaleBehavior);
+  const ViewStaleStyle* clock_stale = viewPrimStaleStyle(s, 0);
+  assert(clock_stale && (clock_stale->flags & VIEW_STALE_Y) && clock_stale->y == 86);
+  const ViewStaleStyle* usage_stale = viewPrimStaleStyle(s, 1);
+  assert(usage_stale && (usage_stale->flags & VIEW_STALE_HIDE));
+
   const char* seconds = R"({"draw":[{"t":"text","x":0,"y":0,"s":1,"c":"#ffffff","v":"{SS}"}]})";
   assert(viewScreenParse(seconds, strlen(seconds), s, error));
   assert(s.needsClock && s.needsSeconds);
