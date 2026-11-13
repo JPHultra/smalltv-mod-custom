@@ -6,10 +6,10 @@ CRCCheck on
 !include "MUI2.nsh"
 
 !ifndef APP_VERSION_DISPLAY
-  !define APP_VERSION_DISPLAY "4.8.2-custom"
+  !define APP_VERSION_DISPLAY "4.9.0-custom"
 !endif
 !ifndef APP_VERSION_NUMERIC
-  !define APP_VERSION_NUMERIC "4.8.2.0"
+  !define APP_VERSION_NUMERIC "4.9.0.0"
 !endif
 
 !define APP_NAME "SmallTV"

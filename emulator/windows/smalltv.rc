@@ -1,8 +1,8 @@
 IDI_ICON1 ICON "../assets/smalltv.ico"
 
 1 VERSIONINFO
-FILEVERSION 4,8,2,0
-PRODUCTVERSION 4,8,2,0
+FILEVERSION 4,9,0,0
+PRODUCTVERSION 4,9,0,0
 FILEFLAGSMASK 0x3fL
 FILEFLAGS 0x0L
 FILEOS 0x40004L
@@ -15,11 +15,11 @@ BEGIN
     BEGIN
       VALUE "CompanyName", "JPHultra"
       VALUE "FileDescription", "SmallTV desktop app"
-      VALUE "FileVersion", "4.8.2-custom"
+      VALUE "FileVersion", "4.9.0-custom"
       VALUE "InternalName", "smalltv-emulator"
       VALUE "OriginalFilename", "smalltv-emulator.exe"
       VALUE "ProductName", "SmallTV"
-      VALUE "ProductVersion", "4.8.2-custom"
+      VALUE "ProductVersion", "4.9.0-custom"
     END
   END
   BLOCK "VarFileInfo"
