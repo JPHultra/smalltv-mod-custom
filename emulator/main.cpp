@@ -3023,7 +3023,8 @@ struct App {
         if (a[0] == 'c') x -= w / 2;
         else if (a[0] == 'r') x -= w;
       }
-    } else if (!strcmp(t, "rect") || !strcmp(t, "rrect") || !strcmp(t, "usage")) {
+    } else if (!strcmp(t, "rect") || !strcmp(t, "rrect") || !strcmp(t, "usage") ||
+               !strcmp(t, "bar")) {
       w = (float)(l["w"] | 0);
       h = (float)(l["h"] | 0);
     } else if (!strcmp(t, "bitmap") || !strcmp(t, "image")) {
@@ -3081,6 +3082,12 @@ struct App {
     } else if (!strcmp(type, "usage")) {
       l["w"] = 224; l["h"] = 54; l["c"] = "#d97757";
       l["provider"] = "claude"; l["metric"] = -1;
+    } else if (!strcmp(type, "bar")) {
+      l["x"] = 8; l["y"] = 120; l["w"] = 224; l["h"] = 8;
+      l["c"] = "#10a37f"; l["track"] = "#303030"; l["r"] = 4;
+      JsonObject data = l["data"].to<JsonObject>();
+      data["source"] = "usage"; data["provider"] = "chatgpt";
+      data["metric"] = 0; data["field"] = "pct";
     } else {
       l["c"] = "#ffffff";
     }
@@ -3704,6 +3711,78 @@ struct App {
     return changed;
   }
 
+  void usageBindingEditor(JsonObject l, bool& changed, bool bar) {
+    JsonObject data = l["data"].as<JsonObject>();
+    bool bound = !data.isNull() || bar;
+    if (!bar) {
+      if (ImGui::Checkbox("Bind to usage data", &bound)) {
+        if (bound) {
+          data = l["data"].to<JsonObject>();
+          data["source"] = "usage";
+          data["provider"] = "claude";
+          data["metric"] = 0;
+          data["field"] = "pct";
+          if (l["format"].isNull()) l["format"] = "{value}% remaining";
+          if (l["v"].isNull()) l["v"] = "--";
+        } else {
+          l.remove("data");
+        }
+        changed = true;
+      }
+    }
+    if (!bound) return;
+    if (data.isNull()) {
+      data = l["data"].to<JsonObject>();
+      data["source"] = "usage";
+      data["provider"] = "chatgpt";
+      data["metric"] = 0;
+      data["field"] = "pct";
+    }
+    if (data["source"].isNull()) data["source"] = "usage";
+    static const char* providerIds[] = {"claude", "chatgpt", "deepseek"};
+    static const char* providerNames[] = {"Claude", "Codex", "DeepSeek"};
+    const char* currentProvider = data["provider"] | "claude";
+    int providerIndex = 0;
+    for (int i = 0; i < 3; i++)
+      if (!strcmp(currentProvider, providerIds[i])) providerIndex = i;
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::Combo("Provider", &providerIndex, providerNames, 3)) {
+      data["provider"] = providerIds[providerIndex];
+      changed = true;
+    }
+    const bool codex = !strcmp(data["provider"] | "", "chatgpt");
+    const char* metricNames[] = {"5h", "7d", codex ? "plan" : "extra",
+                                 "Metric 4", "Metric 5"};
+    int metric = (int)(data["metric"] | 0);
+    if (metric < 0) metric = 0;
+    if (metric > 4) metric = 4;
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::Combo("Window / metric", &metric, metricNames, 5)) {
+      data["metric"] = metric;
+      changed = true;
+    }
+    static const char* fieldIds[] = {"pct", "usedPct", "value", "label", "reset", "provider"};
+    static const char* fieldNames[] = {"Remaining %", "Used %", "Value", "Label",
+                                       "Reset time", "Provider name"};
+    const char* currentField = data["field"] | "pct";
+    int fieldIndex = 0;
+    const int fieldCount = bar ? 2 : 6;
+    for (int i = 0; i < fieldCount; i++)
+      if (!strcmp(currentField, fieldIds[i])) fieldIndex = i;
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::Combo("Display field", &fieldIndex, fieldNames, fieldCount)) {
+      data["field"] = fieldIds[fieldIndex];
+      changed = true;
+    }
+    if (!bar) {
+      changed |= input_text_json(l, "format", "Format ({value})", false,
+                                 "Example: Codex 5h: {value}% remaining");
+      if (l["v"].isNull()) l["v"] = "--";
+      ImGui::TextDisabled("The literal Text is the fallback for older firmware.");
+    }
+    ImGui::TextDisabled("Codex: metric 1 = 5h, metric 2 = 7d.");
+  }
+
   void usageStyleEditor(JsonObject l, bool& changed) {
     std::string key = componentId(l);
     if (key.empty()) key = "selected";
@@ -3907,6 +3986,7 @@ struct App {
       const char* cv = l["va"] | "m";
       int vi = !strcmp(cv, "t") ? 0 : !strcmp(cv, "b") ? 2 : 1;
       if (ImGui::Combo("Vertical align", &vi, valigns, 3)) { l["va"] = valigns[vi]; changed = true; }
+      usageBindingEditor(l, changed, false);
     } else if (!strcmp(t, "rect") || !strcmp(t, "rrect") || !strcmp(t, "usage")) {
       changed |= input_int_json(l, "w", "Width (px)", 1, 480, 10);
       changed |= input_int_json(l, "h", "Height (px)", 1, 480, 10);
@@ -3921,6 +4001,12 @@ struct App {
         draw = view["draw"].as<JsonArray>();
         if (selected >= 0 && selected < (int)draw.size()) l = draw[selected];
       }
+    } else if (!strcmp(t, "bar")) {
+      changed |= input_int_json(l, "w", "Width (px)", 1, 480, 224);
+      changed |= input_int_json(l, "h", "Height (px)", 1, 80, 8);
+      changed |= color_edit_json(l, "track", "Track colour", "#303030");
+      changed |= input_int_json(l, "r", "Radius (px)", 0, 40, 4);
+      usageBindingEditor(l, changed, true);
     } else if (!strcmp(t, "circle")) {
       changed |= input_int_json(l, "r", "Radius (px)", 1, 255, 20);
     } else if (!strcmp(t, "line")) {
@@ -4052,7 +4138,7 @@ struct App {
     ImGui::SetNextItemWidth(-1);
     if (ImGui::BeginCombo("##addcomponent", "Add component...")) {
       const char* types[] = {"text", "rect", "rrect", "circle", "line", "icon",
-                             "bitmap", "image", "usage", "fill"};
+                             "bitmap", "image", "bar", "usage", "fill"};
       for (const char* t : types) {
         if (ImGui::Selectable(t)) {
           if (!strcmp(t, "image")) addImageLayer();

@@ -118,6 +118,28 @@ int main() {
   assert(s.priority == 0);
   assert(!s.needsClock);
 
+  // Usage-bound text and bars use a compact side table.
+  const char* bindings = R"({"draw":[
+    {"t":"text","x":120,"y":20,"s":3,"c":"#ffffff","a":"c","v":"Codex --% remaining",
+     "data":{"source":"usage","provider":"chatgpt","metric":0,"field":"pct"},
+     "format":"Codex {value}% remaining"},
+    {"t":"bar","x":8,"y":60,"w":224,"h":8,"c":"#10a37f","track":"#303030","r":4,
+     "data":{"source":"usage","provider":"chatgpt","metric":1,"field":"usedPct"}}
+  ]})";
+  assert(viewScreenParse(bindings, strlen(bindings), s, error));
+  assert(s.primCount == 2);
+  assert(s.hasUsage && s.bindingCount == 2);
+  const ViewBinding* text_binding = viewBindingAt(s, 0);
+  const ViewBinding* bar_binding = viewBindingAt(s, 1);
+  assert(text_binding && text_binding->source == VIEW_BIND_USAGE);
+  assert(text_binding->field == VIEW_BIND_PCT && text_binding->metric == 0);
+  assert(!strcmp(viewBindingProvider(s, *text_binding), "chatgpt"));
+  assert(!strcmp(viewBindingFormat(s, *text_binding), "Codex {value}% remaining"));
+  assert(bar_binding && bar_binding->field == VIEW_BIND_USED_PCT && bar_binding->metric == 1);
+  assert(s.prims[1].type == VIEW_P_BAR);
+  const ViewBarStyle* bar_style = viewPrimBarStyle(s, s.prims[1]);
+  assert(bar_style && bar_style->trackColor == 0x3186 && bar_style->radius == 4);
+
   const char* seconds = R"({"draw":[{"t":"text","x":0,"y":0,"s":1,"c":"#ffffff","v":"{SS}"}]})";
   assert(viewScreenParse(seconds, strlen(seconds), s, error));
   assert(s.needsClock && s.needsSeconds);

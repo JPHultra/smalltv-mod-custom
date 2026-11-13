@@ -18,6 +18,7 @@ enum ViewPrimType : uint8_t {
   VIEW_P_BITMAP,  // x y w h s c a d
   VIEW_P_IMAGE,   // x y s a src (asset-backed)
   VIEW_P_USAGE,   // x y w h c provider metric
+  VIEW_P_BAR,     // x y w h c binding
 };
 
 enum ViewAlign : uint8_t { VIEW_A_LEFT, VIEW_A_CENTER, VIEW_A_RIGHT };
@@ -90,6 +91,35 @@ struct ViewBitmapStyle {
   uint16_t displayH = 0;
 };
 
+enum ViewBindingSource : uint8_t {
+  VIEW_BIND_NONE = 0,
+  VIEW_BIND_USAGE = 1,
+};
+
+enum ViewBindingField : uint8_t {
+  VIEW_BIND_PCT = 0,
+  VIEW_BIND_USED_PCT = 1,
+  VIEW_BIND_VALUE = 2,
+  VIEW_BIND_LABEL = 3,
+  VIEW_BIND_RESET = 4,
+  VIEW_BIND_PROVIDER = 5,
+};
+
+struct ViewBinding {
+  uint16_t providerOffset = 0xFFFF;
+  uint16_t formatOffset = 0xFFFF;
+  uint8_t source = VIEW_BIND_NONE;
+  uint8_t field = VIEW_BIND_PCT;
+  uint8_t metric = 0;
+  uint8_t flags = 0;
+};
+
+struct ViewBarStyle {
+  uint16_t trackColor = 0x2945;
+  uint8_t radius = 0;
+  uint8_t reserved = 0;
+};
+
 struct UsageRowLayout {
   UsageBox label;
   UsageBox value;
@@ -137,6 +167,11 @@ struct ViewScreen {
   TextStyle textStyles[VIEW_MAX_TEXT_STYLES];
   uint8_t  bitmapStyleCount;
   ViewBitmapStyle bitmapStyles[VIEW_MAX_BITMAP_STYLES];
+  uint8_t  bindingCount;
+  ViewBinding bindings[VIEW_MAX_BINDINGS];
+  uint8_t  bindForPrim[VIEW_MAX_PRIMS];
+  uint8_t  barStyleCount;
+  ViewBarStyle barStyles[VIEW_MAX_BAR_STYLES];
   ViewPrim prims[VIEW_MAX_PRIMS];
   char     text[VIEW_TEXT_POOL];
   uint8_t  bitmap[VIEW_BITMAP_POOL];
@@ -164,6 +199,10 @@ const UsageStyle* viewPrimUsageStyle(const ViewScreen& screen, const ViewPrim& p
 const UsageLayout* viewPrimUsageLayout(const ViewScreen& screen, const ViewPrim& prim);
 const TextStyle* viewPrimTextStyle(const ViewScreen& screen, const ViewPrim& prim);
 const ViewBitmapStyle* viewPrimBitmapStyle(const ViewScreen& screen, const ViewPrim& prim);
+const ViewBinding* viewBindingAt(const ViewScreen& screen, uint8_t primIndex);
+const ViewBarStyle* viewPrimBarStyle(const ViewScreen& screen, const ViewPrim& prim);
+const char* viewBindingProvider(const ViewScreen& screen, const ViewBinding& binding);
+const char* viewBindingFormat(const ViewScreen& screen, const ViewBinding& binding);
 const char* viewUsageTitle(const ViewScreen& screen, const UsageStyle& style);
 const char* viewUsageMetricLabel(const ViewScreen& screen, const UsageStyle& style, int metric);
 

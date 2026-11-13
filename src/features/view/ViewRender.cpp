@@ -113,11 +113,18 @@ class ViewStripCanvas;
 static ViewStripCanvas* g_textCanvas = nullptr;
 static void drawGlyphString(Arduino_GFX* gfx, const char* text, int x, int y,
                             uint8_t size, uint16_t color);
+static void fmtReset(int mins, char* out, size_t n);
+static void formatBindingText(const ViewScreen& screen, const ViewBinding& binding,
+                              char* out, size_t cap);
 
 static void drawTextPrim(Arduino_GFX* gfx, const ViewScreen& screen,
-                         const ViewPrim& p, uint16_t color) {
+                         const ViewPrim& p, uint16_t color,
+                         const ViewBinding* binding) {
   char out[VIEW_MAX_TEXT * 2];
-  expandText(viewPrimText(screen, p), out, sizeof(out));
+  if (binding)
+    formatBindingText(screen, *binding, out, sizeof(out));
+  else
+    expandText(viewPrimText(screen, p), out, sizeof(out));
   const uint8_t size = p.aux ? p.aux : 1;
   const TextStyle* ts = viewPrimTextStyle(screen, p);
   const int marginX = ts ? ts->marginX : 0;
@@ -190,6 +197,70 @@ static void fmtReset(int mins, char* out, size_t n) {
   if (d > 0)      snprintf(out, n, "%dd %dh", d, h);
   else if (h > 0) snprintf(out, n, "%dh %02dm", h, m);
   else            snprintf(out, n, "%dm", m);
+}
+
+static void formatBindingText(const ViewScreen& screen, const ViewBinding& binding,
+                              char* out, size_t cap) {
+  if (!out || cap == 0) return;
+  out[0] = 0;
+  const char* provider = viewBindingProvider(screen, binding);
+  const ProviderUsage* usage = provider ? usageFind(provider) : nullptr;
+  const UsageMetric* metric = nullptr;
+  if (usage && binding.metric < usage->metricCount)
+    metric = &usage->metrics[binding.metric];
+
+  char value[40];
+  switch ((ViewBindingField)binding.field) {
+    case VIEW_BIND_PCT:
+      if (metric) snprintf(value, sizeof(value), "%d", (int)lroundf(constrain(metric->pct, 0.0f, 100.0f)));
+      else strlcpy(value, "--", sizeof(value));
+      break;
+    case VIEW_BIND_USED_PCT:
+      if (metric) snprintf(value, sizeof(value), "%d",
+                           (int)lroundf(constrain(100.0f - metric->pct, 0.0f, 100.0f)));
+      else strlcpy(value, "--", sizeof(value));
+      break;
+    case VIEW_BIND_VALUE:
+      strlcpy(value, metric && metric->value[0] ? metric->value : "--", sizeof(value));
+      break;
+    case VIEW_BIND_LABEL:
+      strlcpy(value, metric && metric->label[0] ? metric->label : "--", sizeof(value));
+      break;
+    case VIEW_BIND_RESET:
+      if (metric) fmtReset(metric->resetMin, value, sizeof(value));
+      else strlcpy(value, "--", sizeof(value));
+      break;
+    case VIEW_BIND_PROVIDER:
+      strlcpy(value, usage && usage->name[0] ? usage->name : (provider ? provider : "--"),
+              sizeof(value));
+      break;
+    default:
+      strlcpy(value, "--", sizeof(value));
+      break;
+  }
+
+  const char* format = viewBindingFormat(screen, binding);
+  if (!format || !format[0]) format = "{value}";
+  const char* placeholder = strstr(format, "{value}");
+  if (!placeholder) {
+    strlcpy(out, format, cap);
+    return;
+  }
+  size_t used = 0;
+  const size_t prefix = (size_t)(placeholder - format);
+  if (prefix >= cap) return;
+  memcpy(out + used, format, prefix);
+  used += prefix;
+  const size_t valueLength = strlen(value);
+  if (used + valueLength >= cap) return;
+  memcpy(out + used, value, valueLength);
+  used += valueLength;
+  const char* suffix = placeholder + 7;
+  const size_t suffixLength = strlen(suffix);
+  if (used + suffixLength >= cap) return;
+  memcpy(out + used, suffix, suffixLength);
+  used += suffixLength;
+  out[used] = 0;
 }
 
 static uint16_t barColor(float remaining) {
@@ -681,7 +752,7 @@ static void drawPrims(const ViewScreen& screen, Arduino_GFX* gfx, int yOffset,
         gfx->drawLine(p.x, p.y, p.x2, p.y2, c);
         break;
       case VIEW_P_TEXT:
-        drawTextPrim(gfx, screen, p, c);
+        drawTextPrim(gfx, screen, p, c, viewBindingAt(screen, i));
         break;
       case VIEW_P_ICON: {
         const uint8_t size = p.aux ? p.aux : 1;
@@ -734,6 +805,27 @@ static void drawPrims(const ViewScreen& screen, Arduino_GFX* gfx, int yOffset,
       case VIEW_P_USAGE:
         drawUsage(gfx, screen, p, c);
         break;
+      case VIEW_P_BAR: {
+        const ViewBinding* binding = viewBindingAt(screen, i);
+        if (!binding) break;
+        const char* provider = viewBindingProvider(screen, *binding);
+        const ProviderUsage* usage = provider ? usageFind(provider) : nullptr;
+        float pct = 0.0f;
+        if (usage && binding->metric < usage->metricCount) {
+          pct = usage->metrics[binding->metric].pct;
+          if (binding->field == VIEW_BIND_USED_PCT) pct = 100.0f - pct;
+        }
+        pct = constrain(pct, 0.0f, 100.0f);
+        const ViewBarStyle* style = viewPrimBarStyle(screen, p);
+        const uint16_t track = style ? gfxTint(style->trackColor) : gfxTint(0x2945);
+        const uint8_t radius = style ? style->radius : 0;
+        if (p.x2 > 0 && p.y2 > 0) {
+          gfx->fillRoundRect(p.x, p.y, p.x2, p.y2, radius, track);
+          const int fill = (int)lroundf(p.x2 * pct / 100.0f);
+          if (fill > 0) gfx->fillRoundRect(p.x, p.y, fill, p.y2, radius, c);
+        }
+        break;
+      }
     }
   }
 }
@@ -785,8 +877,16 @@ bool viewRenderUsage(const ViewScreen& screen, uint32_t elapsedMs,
   bool rendered = false;
   for (uint8_t i = 0; i < screen.primCount; i++) {
     const ViewPrim& p = screen.prims[i];
-    if (p.type != VIEW_P_USAGE || p.x2 <= 0 || p.y2 <= 0) continue;
-    if (!renderRegion(screen, p.y, p.y + p.y2, elapsedMs, images)) return false;
+    const bool boundText = p.type == VIEW_P_TEXT && viewBindingAt(screen, i);
+    if (p.type != VIEW_P_USAGE && p.type != VIEW_P_BAR && !boundText) continue;
+    int height = p.y2;
+    if (boundText) {
+      const int size = p.aux ? p.aux : 1;
+      height = p.y2 > 0 ? p.y2 : 8 * size;
+    }
+    if (p.x2 < 0 || height <= 0) continue;
+    if (!renderRegion(screen, p.y - 1, p.y + height + 1, elapsedMs, images))
+      return false;
     rendered = true;
   }
   return rendered;

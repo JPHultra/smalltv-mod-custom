@@ -186,6 +186,69 @@ static bool parseUsageLayout(JsonObjectConst lo, UsageLayout& layout) {
   return true;
 }
 
+static bool addTextString(ViewScreen& sc, const char* text, uint16_t& offset) {
+  if (!text) return false;
+  const size_t length = strlen(text);
+  if (sc.textUsed + length + 1 > sizeof(sc.text)) return false;
+  offset = sc.textUsed;
+  memcpy(sc.text + sc.textUsed, text, length);
+  sc.textUsed += length;
+  sc.text[sc.textUsed++] = 0;
+  return true;
+}
+
+static bool parseBindingField(const char* text, ViewBindingField& field) {
+  if (!strcmp(text, "pct")) { field = VIEW_BIND_PCT; return true; }
+  if (!strcmp(text, "usedPct") || !strcmp(text, "used")) { field = VIEW_BIND_USED_PCT; return true; }
+  if (!strcmp(text, "value")) { field = VIEW_BIND_VALUE; return true; }
+  if (!strcmp(text, "label")) { field = VIEW_BIND_LABEL; return true; }
+  if (!strcmp(text, "reset")) { field = VIEW_BIND_RESET; return true; }
+  if (!strcmp(text, "provider")) { field = VIEW_BIND_PROVIDER; return true; }
+  return false;
+}
+
+static const char* defaultBindingFormat(ViewBindingField field) {
+  switch (field) {
+    case VIEW_BIND_PCT:
+    case VIEW_BIND_USED_PCT: return "{value}%";
+    case VIEW_BIND_RESET:    return "Resets in {value}";
+    default:                 return "{value}";
+  }
+}
+
+static bool parseBinding(JsonObjectConst p, ViewScreen& sc, bool required,
+                         bool withFormat, uint8_t& bindingIndex) {
+  bindingIndex = 0;
+  JsonObjectConst data = p["data"].as<JsonObjectConst>();
+  if (data.isNull()) return !required;
+  const char* source = data["source"] | "usage";
+  if (strcmp(source, "usage")) return !required;
+  const char* provider = data["provider"];
+  if (!provider || !provider[0] || strlen(provider) >= VIEW_MAX_PROVIDER_LEN) return false;
+  const char* fieldText = data["field"] | "pct";
+  ViewBindingField field;
+  if (!parseBindingField(fieldText, field)) return false;
+  if (sc.bindingCount >= VIEW_MAX_BINDINGS) return false;
+
+  ViewBinding binding;
+  binding.source = VIEW_BIND_USAGE;
+  binding.field = (uint8_t)field;
+  binding.metric = (uint8_t)constrain((int)(data["metric"] | 0), 0, USAGE_MAX_METRICS - 1);
+  if (!addTextString(sc, provider, binding.providerOffset)) return false;
+
+  if (withFormat) {
+    const char* format = p["format"];
+    if (!format || !format[0]) format = defaultBindingFormat(field);
+    if (!addTextString(sc, format, binding.formatOffset)) return false;
+  }
+
+  sc.bindings[sc.bindingCount] = binding;
+  bindingIndex = (uint8_t)(sc.bindingCount + 1);
+  sc.bindingCount++;
+  sc.hasUsage = true;
+  return true;
+}
+
 static bool parsePrim(JsonObjectConst p, ViewScreen& sc, ViewPrim& out) {
   const char* t = p["t"] | "";
   if (!t[0]) return false;
@@ -215,7 +278,10 @@ static bool parsePrim(JsonObjectConst p, ViewScreen& sc, ViewPrim& out) {
     out.type = VIEW_P_LINE;
   } else if (!strcmp(t, "text")) {
     const char* v = p["v"];
-    if (!v) return false;
+    if (!v) {
+      if (p["data"].isNull()) return false;
+      v = "";
+    }
     int s = p["s"] | 1;
     if (!p["sizePx"].isNull()) {
       const int px = (int)p["sizePx"];
@@ -336,6 +402,20 @@ static bool parsePrim(JsonObjectConst p, ViewScreen& sc, ViewPrim& out) {
     out.voff  = offset;
     out.x2    = (int16_t)constrain((int)(p["displayW"] | 0), 0, TFT_WIDTH * 2);
     out.y2    = (int16_t)constrain((int)(p["displayH"] | 0), 0, TFT_HEIGHT * 2);
+  } else if (!strcmp(t, "bar")) {
+    int w = p["w"] | 0, h = p["h"] | 0;
+    if (w <= 0 || h <= 0 || w > TFT_WIDTH || h > TFT_HEIGHT) return false;
+    if (sc.barStyleCount >= VIEW_MAX_BAR_STYLES) return false;
+    ViewBarStyle style;
+    uint16_t track = 0x2945;
+    parseColor(p["track"] | "#2D3D4F", track);
+    style.trackColor = track;
+    style.radius = (uint8_t)constrain((int)(p["r"] | 0), 0, 32);
+    out.type = VIEW_P_BAR;
+    out.x2 = (int16_t)w;
+    out.y2 = (int16_t)h;
+    out._pad = (uint8_t)(sc.barStyleCount + 1);
+    sc.barStyles[sc.barStyleCount++] = style;
   } else if (!strcmp(t, "usage")) {
     const char* provider = p["provider"];
     if (!provider || !provider[0]) return false;
@@ -410,8 +490,15 @@ bool viewScreenParse(const char* json, size_t length, ViewScreen& screen, String
       if (p["hidden"] | false) continue;
       ViewPrim prim;
       if (parsePrim(p, screen, prim)) {
+        uint8_t binding = 0;
+        if (prim.type == VIEW_P_BAR) {
+          if (!parseBinding(p, screen, true, false, binding)) continue;
+        } else if (prim.type == VIEW_P_TEXT && !p["data"].isNull()) {
+          if (!parseBinding(p, screen, false, true, binding)) continue;
+        }
         const int index = screen.primCount;
         screen.prims[index] = prim;
+        screen.bindForPrim[index] = binding;
         zOrder[index] = (int16_t)constrain((int)(p["z"] | index), -32768, 32767);
         screen.primCount++;
       }
@@ -422,14 +509,17 @@ bool viewScreenParse(const char* json, size_t length, ViewScreen& screen, String
   for (int i = 1; i < screen.primCount; i++) {
     const ViewPrim key = screen.prims[i];
     const int16_t keyZ = zOrder[i];
+    const uint8_t keyBinding = screen.bindForPrim[i];
     int j = i - 1;
     while (j >= 0 && zOrder[j] > keyZ) {
       screen.prims[j + 1] = screen.prims[j];
       zOrder[j + 1] = zOrder[j];
+      screen.bindForPrim[j + 1] = screen.bindForPrim[j];
       j--;
     }
     screen.prims[j + 1] = key;
     zOrder[j + 1] = keyZ;
+    screen.bindForPrim[j + 1] = keyBinding;
   }
   error = "";
   return true;
@@ -480,6 +570,30 @@ const ViewBitmapStyle* viewPrimBitmapStyle(const ViewScreen& screen, const ViewP
   const uint8_t index = (uint8_t)(prim._pad - 1);
   if (index >= screen.bitmapStyleCount) return nullptr;
   return &screen.bitmapStyles[index];
+}
+
+const ViewBinding* viewBindingAt(const ViewScreen& screen, uint8_t primIndex) {
+  if (primIndex >= screen.primCount) return nullptr;
+  const uint8_t index = screen.bindForPrim[primIndex];
+  if (!index || index > screen.bindingCount) return nullptr;
+  return &screen.bindings[index - 1];
+}
+
+const ViewBarStyle* viewPrimBarStyle(const ViewScreen& screen, const ViewPrim& prim) {
+  if (prim.type != VIEW_P_BAR || !prim._pad) return nullptr;
+  const uint8_t index = (uint8_t)(prim._pad - 1);
+  if (index >= screen.barStyleCount) return nullptr;
+  return &screen.barStyles[index];
+}
+
+const char* viewBindingProvider(const ViewScreen& screen, const ViewBinding& binding) {
+  if (binding.providerOffset >= sizeof(screen.text)) return nullptr;
+  return screen.text + binding.providerOffset;
+}
+
+const char* viewBindingFormat(const ViewScreen& screen, const ViewBinding& binding) {
+  if (binding.formatOffset >= sizeof(screen.text)) return nullptr;
+  return screen.text + binding.formatOffset;
 }
 
 const char* viewUsageTitle(const ViewScreen& screen, const UsageStyle& style) {

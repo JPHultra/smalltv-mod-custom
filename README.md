@@ -165,7 +165,7 @@ editor.
 ```
 
 Primitives: `fill`, `rect`, `rrect`, `circle`, `line`, `text`, `icon`,
-`bitmap`, `image`, `usage`. A usage component with `metric` omitted or set to `-1`
+`bitmap`, `image`, `usage`, `bar`. A usage component with `metric` omitted or set to `-1`
 stacks every metric the provider sends; `0`-`4` picks one. Text supports `{HH}`, `{hh}`, `{MM}`, `{SS}`, `{DD}`,
 `{MON}`, `{MONTH}`, `{WD}`, `{WEEKDAY}`, `{YYYY}`. `ttl` is used by the overlay;
 the stored dashboard ignores it. A sample lives in
@@ -187,6 +187,14 @@ metric row's label, value and bar. Usage text sizes are exposed as `namePx`,
 `displayW`/`displayH` in pixels. The desktop inspector exposes numeric pixel
 fields and draggable sub-element boxes; legacy scale fields remain in saved
 views for older firmware compatibility.
+
+Text and bar components can bind directly to usage data instead of requiring a
+full usage card. A text binding has a provider, metric index and field
+(`pct`, `usedPct`, `value`, `label`, `reset` or `provider`) plus an optional
+format containing `{value}`. Bars use the same binding and render a track plus
+fill. Codex is exposed by the adapter as `chatgpt`; metric `0` is 5h and metric
+`1` is 7d. `pct` is the percentage remaining. The old literal text and usage
+cards remain compatible with older firmware.
 
 Image and GIF backgrounds are imported by the native desktop app, not the web
 editor. The app converts PNG/JPEG/BMP to RGB565 and animated GIF to indexed
@@ -353,7 +361,7 @@ Progress is live for uploads started by the desktop app or the manual web upload
 
 ## Notes
 
-- The ESP8266 image is about 816 KB flash / 60 KB static RAM in this build,
+- The ESP8266 image is about 819 KB flash / 61 KB static RAM in this build,
   down from the upstream full image, so the old `smalltv_lean` variant is gone.
 - `src/config.h` points the desktop updater at `JPHultra/smalltv-mod-custom`; change it
   if the repository moves.

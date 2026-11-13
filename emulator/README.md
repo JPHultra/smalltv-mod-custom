@@ -20,8 +20,8 @@ HTML/WebView assets.
 - Native settings for WiFi, display, clock, button, view/overlay and security
 - Live status and usage
 - Native visual dashboard editor:
-  - text, rectangle, rounded rectangle, circle, line, icon, bitmap, image, usage
-    and fill components
+  - text, rectangle, rounded rectangle, circle, line, icon, bitmap, image, usage,
+    bar and fill components
   - drag, resize, multi-select, explicit Z order, duplicate/delete and groups
   - copy/paste, keyboard nudging, snapping, rulers, guides and alignment
   - component names, visibility/lock state and starter templates
@@ -33,6 +33,7 @@ HTML/WebView assets.
   - properties, icon picker, bitmap pixel grid
   - configurable usage-card text, alignment, colours, bars, panels and labels
   - numeric and draggable text/usage geometry with padding and margins
+  - usage-bound text and bar components with provider, metric, field and format pickers
   - pixel-based size controls with automatic legacy-view migration
   - collapsible Components, Document and Inspector drawers; Inspector opens only with selection
   - empty-canvas/background deselection and live background colour preview
@@ -51,6 +52,7 @@ HTML/WebView assets.
 - Connection-first startup with saved-device auto-connect
 - OS-secure saved device passwords and a "Continue offline" design/usage mode
 - Connection recovery banner that preserves the current workspace
+- Data-bound text and bar components for usage windows
 - Flat graphite/amber desktop styling with vendored Inter fonts
 
 Image/GIF assets are imported only in the desktop app. They are converted to a

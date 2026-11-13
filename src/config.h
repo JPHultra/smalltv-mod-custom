@@ -10,7 +10,7 @@
 // Firmware identity
 // ---------------------------------------------------------------------------
 #define FW_NAME     "smalltv-mod"
-#define FW_VERSION  "4.9.0-custom"
+#define FW_VERSION  "4.10.0-custom"
 
 #define REPO_URL      "https://github.com/JPHultra/smalltv-mod-custom"
 #define REPO_OWNER    "JPHultra"
@@ -98,6 +98,8 @@
 #define VIEW_MAX_USAGE_STYLES   6
 #define VIEW_MAX_TEXT_STYLES    8
 #define VIEW_MAX_BITMAP_STYLES  8
+#define VIEW_MAX_BINDINGS      16
+#define VIEW_MAX_BAR_STYLES    8
 #define VIEW_USAGE_TEXT_MAX    32
 #define VIEW_MAX_PROVIDER_LEN  16
 #define VIEW_TTL_MAX_SEC   604800UL   // payload clamp; the overlay uses less
