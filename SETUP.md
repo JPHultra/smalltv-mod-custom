@@ -658,7 +658,7 @@ The device no longer downloads GitHub releases itself. The desktop app checks
 firmware asset through `/update`. Releases are built and published from this PC;
 there are no GitHub Actions.
 
-1. Edit `FW_VERSION` in `src/config.h` (currently `4.10.0-custom`) to the new version.
+1. Edit `FW_VERSION` in `src/config.h` (currently `4.11.0-custom`) to the new version.
 2. Build all targets and stage the assets:
 
 ```sh
@@ -675,25 +675,25 @@ Building the Windows installer requires NSIS (`makensis`). The installer is
 built from the same Windows payload as the ZIP. The ZIP remains the app
 self-update asset; the installer is for first-time installation.
 
-3. Commit the version change and tag it, for example `v4.10.0-custom`:
+3. Commit the version change and tag it, for example `v4.11.0-custom`:
 
 ```sh
 git add src/config.h
-git commit -m "Bump FW_VERSION to 4.10.0-custom"
+git commit -m "Bump FW_VERSION to 4.11.0-custom"
 git push origin main
-git tag v4.10.0-custom
-git push origin v4.10.0-custom
+git tag v4.11.0-custom
+git push origin v4.11.0-custom
 ```
 
 4. Attach the eight firmware assets, Linux package, Windows ZIP and Windows
    installer as a prerelease, verify them, then promote the release to latest:
 
 ```sh
-gh release create v4.10.0-custom dist/* --title "v4.10.0-custom" \
+gh release create v4.11.0-custom dist/* --title "v4.11.0-custom" \
   --notes "Release notes" --prerelease
-python3 tools/verify_update.py --tag v4.10.0-custom \
+python3 tools/verify_update.py --tag v4.11.0-custom \
   --from-version <previous-version>
-gh release edit v4.10.0-custom --prerelease=false --latest
+gh release edit v4.11.0-custom --prerelease=false --latest
 ```
 
 5. If the editor changed, publish it separately:
