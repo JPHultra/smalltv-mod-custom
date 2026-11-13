@@ -122,8 +122,11 @@ app after installation, and removes both `SmallTVUsageWorker` and
 confirmation. The ZIP remains the portable build and app self-update payload.
 
 A native SDL2 + Dear ImGui desktop app runs the real view renderer and
-anti-aliased font. It includes device discovery, native settings, firmware
-upload and a visual dashboard editor. There is no local web server and no
+anti-aliased font. It starts with a connection screen, auto-connects to the last
+saved device, and can continue offline for Design and Usage. Device and Settings
+require a connection; a lost connection keeps the workspace open with a
+reconnect banner. It includes device discovery, native settings, firmware upload
+and a visual dashboard editor. There is no local web server and no
 browser/WebView dependency:
 
 ```sh

@@ -39,6 +39,7 @@ class DeviceManager {
   void setTarget(const std::string& url);
   void setAuth(const std::string& user, const std::string& pass);
   std::vector<EmuDevice> discover();
+  void cancelDiscovery();
   std::vector<EmuDevice> knownDevices() const;
   ScanState scanState() const;
   using ProgressCallback = std::function<bool(size_t, size_t)>;
@@ -60,6 +61,7 @@ class DeviceManager {
   mutable std::mutex scanMutex_;
   std::vector<EmuDevice> found_;
   std::atomic<bool> scanning_{false};
+  std::atomic<bool> scanCancel_{false};
   std::atomic<int> scanDone_{0};
   std::atomic<int> scanTotal_{0};
   std::atomic<int> scanFound_{0};

@@ -48,6 +48,9 @@ HTML/WebView assets.
 - Connection heartbeat with online/offline/update status and last-seen details
 - Phase and progress display for firmware updates
 - App self-update checks against GitHub at launch, with selectable firmware releases
+- Connection-first startup with saved-device auto-connect
+- OS-secure saved device passwords and a "Continue offline" design/usage mode
+- Connection recovery banner that preserves the current workspace
 - Flat graphite/amber desktop styling with vendored Inter fonts
 
 Image/GIF assets are imported only in the desktop app. They are converted to a
@@ -93,12 +96,16 @@ emulator/build/smalltv-emulator --view examples/view.json \
   --usage daemon/usage.example.json
 ```
 
-Select or enter a device in the Device workspace and connect. Device shows
-discovery, a scaled live preview, status/usage telemetry and maintenance
-actions; Design is the three-pane dashboard editor; Usage holds provider
-credentials, fetch controls and the DeepSeek proxy; Settings uses section
-navigation with two-column forms. Settings > System can fetch the device's
-current and previous diagnostic logs.
+The app starts on a connection screen. It scans the local network, offers
+saved-device auto-connect, and stores optional device passwords in DPAPI on
+Windows or the OS keyring on Linux. If no device is available, **Continue
+offline** opens Design and Usage; Device and Settings stay connection-only.
+After a successful connection, Device shows discovery, a scaled live preview,
+status/usage telemetry and maintenance actions; Design is the three-pane
+dashboard editor; Usage holds provider credentials, fetch controls and the
+DeepSeek proxy; Settings uses section navigation with two-column forms.
+Settings > System can fetch the device's current and previous diagnostic logs.
+A lost connection keeps the current workspace and shows a reconnect banner.
 
 The native Usage tab stores Claude/Codex/DeepSeek credentials in the OS secure
 store (DPAPI on Windows, Secret Service on Linux) and can push the normalized
@@ -135,6 +142,7 @@ Options:
 - `--tab NAME` start on `device`, `design` or `settings`
 - `--settings-tab NAME` start Settings on `wifi`, `display`, `view`, `system` or `json`
 - `--url URL` connect to a device at startup
+- `--offline` start in Design/Usage without connecting to a device
 - `--user USER` / `--pass PASS` device web UI credentials
 - `--screenshot PATH` write a 240x240 P6 PPM and exit
 - `Esc` quits

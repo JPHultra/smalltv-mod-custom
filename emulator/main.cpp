@@ -39,6 +39,7 @@
 #include "ViewRender.h"
 #include "theme.h"
 #include "usage/SecureStore.h"
+#include "device/DeviceStore.h"
 #include "usage/UsageCore.h"
 #include "usage/DeepSeekProxy.h"
 #include "usage/Worker.h"
@@ -117,6 +118,7 @@ static void print_usage() {
       << "  --usage-worker    run the headless usage collector\n"
       << "  --usage-device URL device to push usage to\n"
       << "  --url URL         connect to a device at startup\n"
+      << "  --offline         start in Design and Usage without a device\n"
       << "  --user USER       device web UI user\n"
       << "  --pass PASS       device web UI password\n"
       << "  --screenshot PATH write a 240x240 P6 PPM and exit\n";
@@ -459,6 +461,17 @@ struct App {
   bool heartbeatRunning = false;
   uint32_t heartbeatSeq = 0;
   std::future<HeartbeatResult> heartbeatFuture;
+  enum class AppMode { Connection, Online, Offline };
+  AppMode appMode = AppMode::Connection;
+  bool connectionsLoaded = false;
+  bool connectionActive = false;
+  bool profileDirty = false;
+  std::string savedUrl;
+  std::string savedUser;
+  std::string deviceSecretError;
+  bool rememberPassword = true;
+  bool autoConnect = true;
+  bool disconnectPrompt = false;
   int tab = 0;
   int forceTab = -1;
   int settingsTab = 0;
@@ -639,7 +652,9 @@ struct App {
     dl->AddCircleFilled(ImVec2(p.x + 4, p.y + 9), 4.0f, col);
     ImGui::Dummy(ImVec2(10, 0));
     ImGui::SameLine();
-    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(col), "%s", connLabel(connState));
+    const char* label = appMode == AppMode::Offline ? "Offline" : connLabel(connState);
+    const ImU32 labelColor = appMode == AppMode::Offline ? theme::warning() : col;
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(labelColor), "%s", label);
     if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip("Target: %s\nLast seen: %s\nLatency: %u ms%s%s",
                         deviceUrl, lastSeenText().c_str(), lastLatencyMs,
@@ -650,20 +665,24 @@ struct App {
 
   void topbar() {
     const char* names[] = {"Device", "Design", "Usage", "Settings"};
+    const int ids[] = {0, 1, 2, 3};
+    const int tabCount = appMode == AppMode::Offline ? 2 : 4;
+    const int first = appMode == AppMode::Offline ? 1 : 0;
     ImGui::PushFont(theme::fonts().heading);
     ImGui::TextUnformatted("SmallTV");
     ImGui::PopFont();
     ImGui::SameLine(112);
-    for (int i = 0; i < 4; i++) {
+    for (int k = 0; k < tabCount; k++) {
+      const int id = ids[first + k];
       ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(14, 9));
-      ImGui::PushStyleColor(ImGuiCol_Button, i == tab ? theme::surfaceAlt() : theme::surface());
+      ImGui::PushStyleColor(ImGuiCol_Button, id == tab ? theme::surfaceAlt() : theme::surface());
       ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::surfaceAlt());
       ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme::surfaceAlt());
-      ImGui::PushStyleColor(ImGuiCol_Text, i == tab ? theme::accent() : theme::muted());
-      if (ImGui::Button(names[i], ImVec2(0, 30))) tab = i;
+      ImGui::PushStyleColor(ImGuiCol_Text, id == tab ? theme::accent() : theme::muted());
+      if (ImGui::Button(names[id], ImVec2(0, 30))) tab = id;
       ImGui::PopStyleColor(4);
       ImGui::PopStyleVar();
-      if (i == tab) {
+      if (id == tab) {
         const ImVec2 a = ImGui::GetItemRectMin();
         const ImVec2 b = ImGui::GetItemRectMax();
         ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(a.x + 10, b.y - 2),
@@ -675,7 +694,7 @@ struct App {
     ImGui::SameLine(0, 22);
     statusPill();
     ImGui::SameLine(0, 18);
-    ImGui::TextDisabled("%s", deviceUrl);
+    ImGui::TextDisabled("%s", deviceUrl[0] ? deviceUrl : "No device");
     ImGui::SameLine(ImGui::GetContentRegionMax().x - 28.0f);
     if (theme::secondaryButton("...")) ImGui::OpenPopup("##connection");
     if (ImGui::BeginPopup("##connection")) {
@@ -687,7 +706,10 @@ struct App {
       ImGui::SameLine();
       ImGui::SetNextItemWidth(160);
       ImGui::InputTextWithHint("##pass", "web password", authPass, sizeof(authPass), ImGuiInputTextFlags_Password);
-      if (theme::primaryButton("Connect")) { connect(); ImGui::CloseCurrentPopup(); }
+      if (theme::primaryButton("Connect")) {
+        connect();
+        ImGui::CloseCurrentPopup();
+      }
       ImGui::SameLine();
       scanButton("Scan");
       if (deviceUrl[0]) {
@@ -697,8 +719,13 @@ struct App {
         ImGui::TextDisabled("Last seen: %s", lastSeenText().c_str());
         if (lastLatencyMs) ImGui::TextDisabled("Latency: %u ms", lastLatencyMs);
         if (!connError.empty()) ImGui::TextWrapped("%s", connError.c_str());
+        if (theme::secondaryButton("Switch device")) {
+          requestConnectionScreen();
+          ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
         if (theme::secondaryButton("Disconnect")) {
-          disconnect();
+          requestConnectionScreen();
           ImGui::CloseCurrentPopup();
         }
       }
@@ -780,6 +807,7 @@ struct App {
         (SDL_GetTicks() - lastSuccessAt) < 15000;
     connected = ok || recentlyOnline;
     connState = connected ? ConnState::Online : ConnState::Offline;
+    if (connected) appMode = AppMode::Online;
     notify(message);
   }
 
@@ -835,12 +863,16 @@ struct App {
   }
 
   void markOnline(uint32_t latencyMs) {
+    const bool wasConnection = appMode == AppMode::Connection;
     lastSuccessAt = SDL_GetTicks();
     lastLatencyMs = latencyMs;
     consecutiveFailures = 0;
     connError.clear();
     connected = true;
     if (!updateWatch) connState = ConnState::Online;
+    appMode = AppMode::Online;
+    if (wasConnection) tab = 0;
+    if (profileDirty) saveConnectionProfile();
     if (pendingInitialLoad) {
       pendingInitialLoad = false;
       loadConfig();
@@ -873,7 +905,7 @@ struct App {
   }
 
   void startHeartbeat() {
-    if (heartbeatRunning || !deviceUrl[0]) return;
+    if (!connectionActive || heartbeatRunning || !deviceUrl[0]) return;
     heartbeatRunning = true;
     const uint32_t seq = ++heartbeatSeq;
     lastAttemptAt = SDL_GetTicks();
@@ -891,7 +923,7 @@ struct App {
   }
 
   void pollHeartbeat() {
-    if (uploadRunning) return;
+    if (uploadRunning || !connectionActive) return;
     const uint32_t now = SDL_GetTicks();
     if (!heartbeatRunning) {
       const uint32_t interval = updateWatch ? 1000 : (online() ? 5000 : 3000);
@@ -921,8 +953,10 @@ struct App {
 
   void disconnect() {
     manager.setTarget("");
-    deviceUrl[0] = 0;
     ++heartbeatSeq;
+    appMode = AppMode::Connection;
+    connectionActive = false;
+    disconnectPrompt = false;
     connState = ConnState::Disconnected;
     connected = false;
     connError.clear();
@@ -943,10 +977,11 @@ struct App {
     status.clear();
     deviceVersion.clear();
     cfgLoaded = false;
+    profileDirty = false;
     notify("Disconnected");
   }
 
-  void connect() {
+  void connect(bool keepShell = false) {
     std::string url = deviceUrl;
     if (url.rfind("http://", 0) != 0 && url.rfind("https://", 0) != 0)
       url = "http://" + url;
@@ -955,6 +990,9 @@ struct App {
     manager.setTarget(url);
     manager.setAuth(authUser, authPass);
     ++heartbeatSeq;
+    if (!keepShell) appMode = AppMode::Connection;
+    connectionActive = true;
+    profileDirty = true;
     connState = ConnState::Connecting;
     connected = false;
     connError.clear();
@@ -1080,6 +1118,107 @@ struct App {
     while (std::getline(file, line)) {
       if (line.rfind("skipped=", 0) == 0) appUpdateSkipped = line.substr(8);
     }
+  }
+
+  std::string connectionStatePath() const {
+#if defined(_WIN32)
+    const char* base = std::getenv("APPDATA");
+    return std::string(base ? base : ".") + "/smalltv/connections.json";
+#else
+    const char* home = std::getenv("HOME");
+    return std::string(home ? home : ".") + "/.config/smalltv/connections.json";
+#endif
+  }
+
+  void loadConnectionProfile() {
+    if (connectionsLoaded) return;
+    connectionsLoaded = true;
+    std::string text;
+    if (read_file(connectionStatePath().c_str(), text) && !text.empty()) {
+      JsonDocument doc;
+      if (!deserializeJson(doc, text) && doc.is<JsonObject>()) {
+        savedUrl = (const char*)(doc["url"] | "");
+        savedUser = (const char*)(doc["user"] | "");
+        rememberPassword = doc["rememberPassword"] | true;
+        autoConnect = doc["autoConnect"] | true;
+      }
+    }
+    if (!savedUrl.empty()) {
+      snprintf(deviceUrl, sizeof(deviceUrl), "%s", savedUrl.c_str());
+      snprintf(authUser, sizeof(authUser), "%s", savedUser.c_str());
+      if (rememberPassword) {
+        std::string secret;
+        if (device::secureLoad(secret, deviceSecretError) && !secret.empty()) {
+          JsonDocument secretDoc;
+          if (!deserializeJson(secretDoc, secret) && secretDoc.is<JsonObject>()) {
+            const char* url = secretDoc["url"] | "";
+            const char* password = secretDoc["password"] | "";
+            if (savedUrl == url && password[0])
+              snprintf(authPass, sizeof(authPass), "%s", password);
+          }
+        }
+      }
+    }
+  }
+
+  void saveConnectionProfile() {
+    if (!deviceUrl[0]) return;
+    savedUrl = deviceUrl;
+    savedUser = authUser;
+    std::error_code error;
+    std::filesystem::create_directories(
+        std::filesystem::path(connectionStatePath()).parent_path(), error);
+    JsonDocument doc;
+    doc["url"] = savedUrl;
+    doc["user"] = savedUser;
+    doc["rememberPassword"] = rememberPassword;
+    doc["autoConnect"] = autoConnect;
+    std::string text;
+    serializeJson(doc, text);
+    write_file(connectionStatePath(), text);
+    if (rememberPassword && authPass[0]) {
+      JsonDocument secret;
+      secret["url"] = savedUrl;
+      secret["password"] = authPass;
+      std::string secretText;
+      serializeJson(secret, secretText);
+      std::string secretError;
+      if (!device::secureSave(secretText, secretError))
+        deviceSecretError = secretError;
+      else
+        deviceSecretError.clear();
+    } else {
+      std::string ignored;
+      device::secureClear(ignored);
+      deviceSecretError.clear();
+    }
+    profileDirty = false;
+  }
+
+  void forgetConnectionProfile() {
+    savedUrl.clear();
+    savedUser.clear();
+    profileDirty = false;
+    std::error_code error;
+    std::filesystem::remove(connectionStatePath(), error);
+    std::string ignored;
+    device::secureClear(ignored);
+    deviceSecretError.clear();
+    snprintf(deviceUrl, sizeof(deviceUrl), "http://192.168.4.1");
+    authUser[0] = 0;
+    authPass[0] = 0;
+  }
+
+  bool shouldAutoConnect() const {
+    return autoConnect && !savedUrl.empty();
+  }
+
+  void requestConnectionScreen() {
+    if (viewDirty) {
+      disconnectPrompt = true;
+      return;
+    }
+    disconnect();
   }
 
   void saveSkippedAppVersion(const std::string& tag) {
@@ -1643,7 +1782,7 @@ struct App {
     if (ImGui::Button("Fetch now")) startUsageFetch();
     ImGui::EndDisabled();
     ImGui::SameLine();
-    ImGui::BeginDisabled(usageResults.empty());
+    ImGui::BeginDisabled(usageResults.empty() || !online());
     if (ImGui::Button("Push to device")) pushUsage();
     ImGui::EndDisabled();
     ImGui::SameLine();
@@ -4551,6 +4690,139 @@ struct App {
     ImGui::EndChild();
   }
 
+  // ---- connection shell --------------------------------------------------
+  void connectionScreen() {
+    const ImVec2 avail = ImGui::GetContentRegionAvail();
+    beginPane("##connhead", ImVec2(avail.x, 64), false);
+    ImGui::PushFont(theme::fonts().heading);
+    ImGui::TextUnformatted("SmallTV");
+    ImGui::PopFont();
+    ImGui::SameLine(112);
+    ImGui::TextDisabled("Connect to a device");
+    ImGui::SameLine(ImGui::GetContentRegionMax().x - 150.0f);
+    ImGui::TextDisabled("%s", connLabel(connState));
+    endPane();
+    ImGui::Spacing();
+
+    const float gap = 12.0f;
+    const float rightW = std::min(370.0f, std::max(290.0f, avail.x * 0.34f));
+    const float leftW = std::max(280.0f, avail.x - rightW - gap);
+
+    beginPane("##conndevices", ImVec2(leftW, avail.y - 76.0f), true);
+    paneTitle("DEVICES", "local network");
+    ImGui::Spacing();
+    scanProgress();
+    if (manager.scanning()) {
+      if (theme::secondaryButton("Cancel scan", ImVec2(150, 0))) {
+        manager.cancelDiscovery();
+        scanRequested = false;
+        notify("Scan cancelled");
+      }
+    }
+    if (!savedUrl.empty()) {
+      ImGui::Spacing();
+      theme::sectionLabel("LAST DEVICE");
+      ImGui::TextWrapped("%s", savedUrl.c_str());
+      if (savedUser[0]) ImGui::TextDisabled("User: %s", savedUser.c_str());
+      if (theme::secondaryButton("Use last device", ImVec2(150, 0))) {
+        snprintf(deviceUrl, sizeof(deviceUrl), "%s", savedUrl.c_str());
+        snprintf(authUser, sizeof(authUser), "%s", savedUser.c_str());
+      }
+      ImGui::SameLine();
+      if (theme::secondaryButton("Forget", ImVec2(100, 0))) forgetConnectionProfile();
+      ImGui::Separator();
+    }
+    ImGui::BeginChild("##conndevicelist", ImVec2(0, -44), true);
+    if (devices.empty()) {
+      if (manager.scanning()) ImGui::TextDisabled("Scanning the local network...");
+      else {
+        const ScanState state = manager.scanState();
+        if (!state.error.empty()) ImGui::TextWrapped("Scan failed: %s", state.error.c_str());
+        else ImGui::TextDisabled("No devices found yet.");
+      }
+    } else {
+      for (int i = 0; i < (int)devices.size(); i++) deviceRow(i);
+    }
+    ImGui::EndChild();
+    scanButton("Scan network", ImVec2(-1, 0));
+    endPane();
+
+    ImGui::SameLine(0, gap);
+    beginPane("##connform", ImVec2(rightW, avail.y - 76.0f), true);
+    paneTitle("CONNECTION", connLabel(connState));
+    ImGui::Spacing();
+    if (connState == ConnState::Connecting) {
+      ImGui::TextDisabled("Trying to reach the device...");
+      ImGui::ProgressBar(-1.0f * (float)ImGui::GetTime(), ImVec2(-1, 4), "");
+      if (theme::secondaryButton("Cancel", ImVec2(-1, 0))) disconnect();
+    } else {
+      if (!connError.empty()) ImGui::TextWrapped("%s", connError.c_str());
+      if (connState == ConnState::AuthRequired) {
+        ImGui::TextWrapped("The device requires web-UI credentials.");
+      } else if (connState == ConnState::Offline) {
+        ImGui::TextWrapped("The device is unreachable. Check the address and network.");
+      }
+    }
+    if (!deviceSecretError.empty())
+      ImGui::TextWrapped("Credential store: %s", deviceSecretError.c_str());
+    ImGui::Separator();
+    ImGui::TextDisabled("ADDRESS");
+    ImGui::SetNextItemWidth(-1);
+    ImGui::InputTextWithHint("##connurl", "http://smalltv.local", deviceUrl, sizeof(deviceUrl));
+    ImGui::TextDisabled("WEB UI CREDENTIALS");
+    ImGui::SetNextItemWidth(-1);
+    ImGui::InputTextWithHint("##connuser", "user", authUser, sizeof(authUser));
+    ImGui::SetNextItemWidth(-1);
+    ImGui::InputTextWithHint("##connpass", "password", authPass, sizeof(authPass),
+                             ImGuiInputTextFlags_Password);
+    ImGui::Checkbox("Remember password", &rememberPassword);
+    ImGui::SameLine();
+    ImGui::Checkbox("Connect on launch", &autoConnect);
+    ImGui::Spacing();
+    if (connState == ConnState::Connecting) ImGui::BeginDisabled();
+    if (theme::primaryButton("Connect", ImVec2(-1, 0))) {
+      profileDirty = true;
+      connect();
+    }
+    if (connState == ConnState::Connecting) ImGui::EndDisabled();
+    if (!savedUrl.empty() && connState != ConnState::Connecting) {
+      if (theme::secondaryButton("Forget saved device", ImVec2(-1, 0))) forgetConnectionProfile();
+    }
+    if (strstr(deviceUrl, "192.168.4.1")) {
+      ImGui::Spacing();
+      ImGui::TextWrapped("192.168.4.1 is the device setup AP. Join SmallTV-Setup first, then configure home WiFi.");
+    }
+    ImGui::Spacing();
+    ImGui::Separator();
+    if (theme::secondaryButton("Continue offline", ImVec2(-1, 0))) {
+      disconnect();
+      appMode = AppMode::Offline;
+      tab = 1;
+        disconnectPrompt = false;
+    }
+    ImGui::TextDisabled("Design and Usage work offline; Device and Settings require a connection.");
+    endPane();
+  }
+
+  void disconnectModal() {
+    if (disconnectPrompt) {
+      ImGui::OpenPopup("Leave device");
+      disconnectPrompt = false;
+    }
+    if (ImGui::BeginPopupModal("Leave device", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+      ImGui::TextWrapped("Leave this device? Unsaved dashboard changes will be kept in the editor.");
+      if (ImGui::Button("Leave")) {
+        ImGui::CloseCurrentPopup();
+        disconnect();
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Cancel")) {
+        ImGui::CloseCurrentPopup();
+      }
+      ImGui::EndPopup();
+    }
+  }
+
   // ---- root --------------------------------------------------------------
   void deviceRow(int i) {
     const EmuDevice& d = devices[i];
@@ -4877,6 +5149,7 @@ struct App {
       }
     }
     if (forceTab >= 0) { tab = forceTab; forceTab = -1; }
+    if (appMode == AppMode::Offline && (tab == 0 || tab == 3)) tab = 1;
     if (hasImageRefs() && SDL_GetTicks() - lastPreviewTick >= 100) {
       lastPreviewTick = SDL_GetTicks();
       previewDirty = true;
@@ -4895,11 +5168,36 @@ struct App {
     const float margin = 12.0f;
     const float topbarH = 56.0f;
     ImGui::SetCursorPos(ImVec2(margin, margin));
+    if (appMode == AppMode::Connection) {
+      connectionScreen();
+      ImGui::End();
+      ImGui::PopStyleVar();
+      toastWindow();
+      appUpdateModal();
+      disconnectModal();
+      return;
+    }
+
     beginPane("##topbar", ImVec2(ImGui::GetContentRegionAvail().x - margin, topbarH), false);
     topbar();
     endPane();
 
-    ImGui::SetCursorPos(ImVec2(margin, margin + topbarH + 12.0f));
+    float pageY = margin + topbarH + 12.0f;
+    if (appMode == AppMode::Online && !online() && !updateWatch) {
+      ImGui::SetCursorPos(ImVec2(margin, pageY));
+      beginPane("##offlinebanner", ImVec2(ImGui::GetContentRegionAvail().x - margin, 38), false);
+      ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(theme::warning()),
+                         "Device offline%s%s", connError.empty() ? "" : " · ",
+                         connError.empty() ? "" : connError.c_str());
+      ImGui::SameLine(ImGui::GetContentRegionMax().x - 260.0f);
+      if (theme::secondaryButton("Reconnect", ImVec2(110, 0))) connect(true);
+      ImGui::SameLine();
+      if (theme::secondaryButton("Switch device", ImVec2(130, 0))) requestConnectionScreen();
+      endPane();
+      pageY += 48.0f;
+    }
+
+    ImGui::SetCursorPos(ImVec2(margin, pageY));
     const ImVec2 pageAvail = ImGui::GetContentRegionAvail();
     const float pageH = std::max(120.0f, pageAvail.y - margin);
     ImGui::BeginChild("##page", ImVec2(pageAvail.x - margin, pageH), false);
@@ -4912,6 +5210,7 @@ struct App {
     ImGui::PopStyleVar();
     toastWindow();
     appUpdateModal();
+    disconnectModal();
     dialog.draw();
     if (imageManagerOpen) {
       if (!ImGui::IsPopupOpen("Device images")) ImGui::OpenPopup("Device images");
@@ -4930,6 +5229,7 @@ int main(int argc, char** argv) {
   const char* connectUrl = nullptr;
   const char* connectUser = nullptr;
   const char* connectPass = nullptr;
+  bool startOffline = false;
   bool usageWorker = false;
   bool usageOnce = false;
   bool usageProxy = true;
@@ -4946,6 +5246,7 @@ int main(int argc, char** argv) {
     else if (!strcmp(argv[i], "--url") && i + 1 < argc) connectUrl = argv[++i];
     else if (!strcmp(argv[i], "--user") && i + 1 < argc) connectUser = argv[++i];
     else if (!strcmp(argv[i], "--pass") && i + 1 < argc) connectPass = argv[++i];
+    else if (!strcmp(argv[i], "--offline")) startOffline = true;
     else if (!strcmp(argv[i], "--usage-worker")) usageWorker = true;
     else if (!strcmp(argv[i], "--usage-once")) usageOnce = true;
     else if (!strcmp(argv[i], "--no-usage-proxy")) usageProxy = false;
@@ -5056,11 +5357,17 @@ int main(int argc, char** argv) {
     else app.settingsTab = 0;
   }
   app.manager.discover();
+  app.loadConnectionProfile();
   app.initView();
-  if (connectUrl) {
+  if (startOffline) {
+    app.appMode = App::AppMode::Offline;
+    app.tab = 1;
+  } else if (connectUrl) {
     snprintf(app.deviceUrl, sizeof(app.deviceUrl), "%s", connectUrl);
     if (connectUser) snprintf(app.authUser, sizeof(app.authUser), "%s", connectUser);
     if (connectPass) snprintf(app.authPass, sizeof(app.authPass), "%s", connectPass);
+    app.connect();
+  } else if (!startOffline && app.shouldAutoConnect()) {
     app.connect();
   }
 

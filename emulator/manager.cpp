@@ -199,6 +199,7 @@ void DeviceManager::stop() {
 
 std::vector<EmuDevice> DeviceManager::discover() {
   if (!scanning_.exchange(true)) {
+    scanCancel_ = false;
     if (scanThread_.joinable()) scanThread_.join();
     scanDone_ = 0;
     scanTotal_ = 0;
@@ -219,6 +220,10 @@ std::vector<EmuDevice> DeviceManager::discover() {
   }
   std::lock_guard<std::mutex> lock(scanMutex_);
   return found_;
+}
+
+void DeviceManager::cancelDiscovery() {
+  if (scanning_.load()) scanCancel_ = true;
 }
 
 std::vector<EmuDevice> DeviceManager::knownDevices() const {
@@ -270,6 +275,7 @@ std::vector<EmuDevice> DeviceManager::scan() {
   std::atomic<int> next{0};
   auto worker = [&] {
     while (true) {
+      if (scanCancel_.load()) break;
       int index = next.fetch_add(1);
       if (index >= (int)targets.size()) break;
       const std::string& ip = targets[index];

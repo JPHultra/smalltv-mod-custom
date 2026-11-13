@@ -48,6 +48,7 @@ SRCS := $(ROOT)/emulator/main.cpp \
         $(ROOT)/emulator/usage/UsageCore.cpp \
         $(ROOT)/emulator/usage/DeepSeekProxy.cpp \
         $(ROOT)/emulator/usage/Worker.cpp \
+        $(ROOT)/emulator/device/DeviceStore.cpp \
         $(ROOT)/emulator/update/GitHubRelease.cpp \
         $(ROOT)/emulator/image/GifDecoder.cpp \
         $(ROOT)/emulator/image/ImageCodec.cpp \
